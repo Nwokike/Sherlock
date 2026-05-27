@@ -1,0 +1,59 @@
+[project]
+name = "sherlock"
+version = "1.0.0"
+description = "Sherlock: Hunt down social media accounts by username across 400+ networks."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "flet==0.85.0",
+    "flet-ads==0.85.0",
+    "httpx>=0.28.1",
+    "sherlock-project>=0.16.0",
+]
+
+[tool.flet]
+org = "ng.kiri"
+product = "Sherlock"
+build_number = 1
+
+[tool.flet.app]
+path = "src"
+
+[tool.flet.splash]
+color = "#0A0A0A"
+dark_color = "#0A0A0A"
+
+[tool.flet.app.boot_screen]
+show = true
+message = "Initializing Sherlock..."
+
+[tool.flet.app.startup_screen]
+show = true
+message = "Hunt down social media accounts"
+
+[tool.flet.android]
+bundle_id = "ng.kiri.sherlock"
+
+[tool.flet.android.manifest_application]
+usesCleartextTraffic = "true"
+requestLegacyExternalStorage = "true"
+
+[tool.flet.android.meta_data]
+"com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~8438792639"
+
+[tool.flet.android.permission]
+"android.permission.INTERNET" = true
+"android.permission.ACCESS_NETWORK_STATE" = true
+"android.permission.WAKE_LOCK" = true
+
+[tool.flet.android.feature]
+"android.software.leanback" = false
+"android.hardware.touchscreen" = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.uv.workspace]
+members = [
+    "sherlock-app",
+]

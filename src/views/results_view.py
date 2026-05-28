@@ -267,7 +267,9 @@ def build_results_view(
 
     async def _copy_all_urls(e):
         if not progress or not progress.found:
-            page.snack_bar = ft.SnackBar(ft.Text("No profiles found."), bgcolor=ft.Colors.RED)
+            page.snack_bar = ft.SnackBar(
+                ft.Text("No profiles found."), bgcolor=ft.Colors.RED
+            )
             page.snack_bar.open = True
             page.update()
             return
@@ -278,7 +280,10 @@ def build_results_view(
             cb = ft.Clipboard()
             await cb.set(text)
             page.snack_bar = ft.SnackBar(
-                ft.Text(f"Copied {len(urls)} profile URLs to clipboard", color=ft.Colors.WHITE),
+                ft.Text(
+                    f"Copied {len(urls)} profile URLs to clipboard",
+                    color=ft.Colors.WHITE,
+                ),
                 bgcolor=ft.Colors.GREEN,
             )
         except Exception:

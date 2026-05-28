@@ -65,6 +65,7 @@ class _CollectorQueryNotify(QueryNotify):
         self.progress = progress
         self.on_progress = on_progress
         import time
+
         self.last_update_time = time.monotonic()
 
     def start(self, message):
@@ -95,9 +96,12 @@ class _CollectorQueryNotify(QueryNotify):
 
             if self.on_progress:
                 import time
+
                 now = time.monotonic()
                 # Smoothly update at most 4 times a second (250ms), but always update on the final site
-                if (now - self.last_update_time >= 0.25) or (self.progress.checked_sites == self.total):
+                if (now - self.last_update_time >= 0.25) or (
+                    self.progress.checked_sites == self.total
+                ):
                     self.last_update_time = now
                     try:
                         self.on_progress(self.progress)

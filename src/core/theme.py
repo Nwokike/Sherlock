@@ -9,10 +9,10 @@ class AppColors:
     # Logo Color B (Caramel-Gold / Ochre-Tan): #CD995F
 
     # ─── SOLARIZED LIGHT PALETTE (Overhauled to Pure White Background) ────────
-    LIGHT_BG = "#FFFFFF"           # Pure White Background (100% clean & glare-free)
-    LIGHT_SURFACE = "#F3F4F6"      # Soft Slate-Grey (Clean sand surface container)
-    LIGHT_TEXT = "#1E293B"         # Deep Slate-Black (Crisp high-contrast body text)
-    LIGHT_TEXT_DIM = "#64748B"     # Slate-Grey (Muted label text)
+    LIGHT_BG = "#FFFFFF"  # Pure White Background (100% clean & glare-free)
+    LIGHT_SURFACE = "#F3F4F6"  # Soft Slate-Grey (Clean sand surface container)
+    LIGHT_TEXT = "#1E293B"  # Deep Slate-Black (Crisp high-contrast body text)
+    LIGHT_TEXT_DIM = "#64748B"  # Slate-Grey (Muted label text)
     # Bluish primary/variant replaced by Caramel-Gold (Color B) variations:
     LIGHT_PRIMARY = "#CD995F"  # Caramel-Gold (Logo Color B)
     LIGHT_PRIMARY_VARIANT = "#B58248"  # Darker Caramel-Gold (Logo Color B variation)

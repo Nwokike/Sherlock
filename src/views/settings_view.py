@@ -139,7 +139,9 @@ def build_settings_view(
         await page.push_route(page.views[-1].route if page.views else "/home")
 
     async def _launch_sherlock_project(e):
-        await ft.UrlLauncher().launch_url("https://github.com/sherlock-project/sherlock")
+        await ft.UrlLauncher().launch_url(
+            "https://github.com/sherlock-project/sherlock"
+        )
 
     appbar = ft.AppBar(
         leading=ft.IconButton(

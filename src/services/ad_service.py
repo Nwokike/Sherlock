@@ -119,6 +119,7 @@ class AdService:
             return True
 
         try:
+
             async def _show(e):
                 await e.control.show()
 

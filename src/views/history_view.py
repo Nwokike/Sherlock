@@ -184,7 +184,11 @@ def build_history_view(
         controls=[
             ft.SafeArea(
                 ft.Container(
-                    content=ft.Column([list_view, empty, build_banner_ad(page)], expand=True, spacing=0),
+                    content=ft.Column(
+                        [list_view, empty, build_banner_ad(page)],
+                        expand=True,
+                        spacing=0,
+                    ),
                     gradient=ft.LinearGradient(
                         begin=ft.Alignment.TOP_LEFT,
                         end=ft.Alignment.BOTTOM_RIGHT,

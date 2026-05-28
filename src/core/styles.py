@@ -105,7 +105,9 @@ def solid_card(content: ft.Control, **kwargs) -> ft.Container:
     )
 
 
-def build_banner_ad(page: ft.Page, unit_id: str = "ca-app-pub-5679949845754640/5131365762") -> ft.Control:
+def build_banner_ad(
+    page: ft.Page, unit_id: str = "ca-app-pub-5679949845754640/5131365762"
+) -> ft.Control:
     """Build a glass-container-wrapped banner ad (mobile only).
 
     Exact pattern from SpanInsight: "SPONSORED" label + BannerAd
@@ -146,8 +148,8 @@ def build_banner_ad(page: ft.Page, unit_id: str = "ca-app-pub-5679949845754640/5
         padding=8,
         border_radius=tokens.RADIUS_LG,
         bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
-        border=ft.Border.all(
-            1, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)
+        border=ft.Border.all(1, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)),
+        margin=ft.Margin(
+            tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
         ),
-        margin=ft.Margin(tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS),
     )

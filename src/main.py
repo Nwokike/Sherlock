@@ -34,7 +34,7 @@ logger = logging.getLogger("sherlock")
 
 async def main(page: ft.Page):
     page.title = "Sherlock"
-    page.favicon = "logo.png"
+    page.favicon = "icon.png"
 
     page.fonts = {
         "Outfit": "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap"

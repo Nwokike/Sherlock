@@ -34,7 +34,7 @@ jobs:
       - name: Generate Icon for Installer
         run: |
           uv pip install pillow
-          uv run python -c "from PIL import Image; Image.open('src/assets/logo.png').save('src/assets/logo.ico', format='ICO', sizes=[(256, 256)])"
+          uv run python -c "from PIL import Image; Image.open('src/assets/icon.png').save('src/assets/icon.ico', format='ICO', sizes=[(256, 256)])"
 
       - name: Build Windows Installer (Inno Setup)
         run: |
@@ -58,7 +58,7 @@ jobs:
           ArchitecturesAllowed=x64
           ArchitecturesInstallIn64BitMode=x64
           PrivilegesRequired=lowest
-          SetupIconFile=.\src\assets\logo.ico
+          SetupIconFile=.\src\assets\icon.ico
           UninstallDisplayIcon={app}\sherlock.exe
           CloseApplications=yes
           AppMutex=Sherlock_Mutex
@@ -80,45 +80,6 @@ jobs:
         with:
           name: Sherlock_Setup.exe
           path: build/installer/Sherlock_Setup.exe
-
-  # ─── Android APK (universal) ───────────────────────────
-  build-apk:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - name: Decode Keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 --decode > upload-key.jks
-      - name: Pre-compile missing wheels (stem has no binary wheel on PyPI)
-        run: |
-          mkdir -p ${{ github.workspace }}/wheels
-          pip install wheel
-          pip wheel stem==1.8.1 --no-deps -w ${{ github.workspace }}/wheels
-      - name: Build APK (universal)
-        env:
-          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/upload-key.jks
-          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          PIP_FIND_LINKS: ${{ github.workspace }}/wheels
-        run: uv run flet build apk --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
-      - name: Rename APK
-        run: |
-          cd build/apk/
-          mv *.apk sherlock.apk 2>/dev/null || true
-      - uses: actions/upload-artifact@v5.0.0
-        with:
-          name: sherlock.apk
-          path: build/apk/sherlock.apk
 
   # ─── Android APK (split per ABI) ───────────────────────
   build-apk-split:
@@ -150,18 +111,6 @@ jobs:
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           PIP_FIND_LINKS: ${{ github.workspace }}/wheels
         run: uv run flet build apk --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
-      - name: Rename APKs (if needed)
-        run: |
-          cd build/apk/
-          for f in *.apk; do
-            case "$f" in
-              *arm64*) target="sherlock-arm64-v8a.apk" ;;
-              *armeabi*) target="sherlock-armeabi-v7a.apk" ;;
-              *x86_64*) target="sherlock-x86_64.apk" ;;
-              *) continue ;;
-            esac
-            [ "$f" != "$target" ] && mv "$f" "$target" || true
-          done
       - uses: actions/upload-artifact@v5.0.0
         with:
           name: sherlock-split-apk

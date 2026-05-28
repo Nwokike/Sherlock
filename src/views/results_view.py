@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Callable, Optional
 
@@ -294,83 +295,71 @@ def build_results_view(
         page.snack_bar.open = True
         page.update()
 
+    async def _write_export(path: str, fmt: str, progress_obj: SearchProgress):
+        username = progress_obj.username
+        loop = asyncio.get_event_loop()
+
+        def _write():
+            if fmt == "txt":
+                with open(path, "w", encoding="utf-8") as f:
+                    for r in progress_obj.found:
+                        f.write(f"{r.url_user}\n")
+                    f.write(f"Total Detected : {len(progress_obj.found)}\n")
+
+            elif fmt == "csv":
+                import csv
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["Username", "Site", "Home URL", "Profile URL", "Exists", "Time (s)"])
+                    for r in progress_obj.found + progress_obj.not_found + progress_obj.errors:
+                        writer.writerow([
+                            username, r.site_name, r.url_main, r.url_user,
+                            r.status, f"{r.query_time:.2f}" if r.query_time else "",
+                        ])
+
+            elif fmt == "xlsx":
+                import pandas as pd
+                rows = []
+                for r in progress_obj.found + progress_obj.not_found + progress_obj.errors:
+                    rows.append({
+                        "Username": username, "Site": r.site_name,
+                        "Home URL": r.url_main, "Profile URL": r.url_user,
+                        "Exists": r.status, "Response Time (s)": r.query_time,
+                    })
+                df = pd.DataFrame(rows)
+                df.to_excel(path, index=False, sheet_name="Sherlock Report")
+
+        await loop.run_in_executor(None, _write)
+
     async def _export_results(format_type: str):
         if not progress:
             return
 
-        import csv
-        import pandas as pd
-        from pathlib import Path
-
         username = progress.username
-        downloads_dir = Path.home() / "Downloads"
-        if not downloads_dir.exists():
-            downloads_dir = Path.home()
+        ext = format_type.lower()
+        filename = f"sherlock_{username}.{ext}"
 
-        ext = f".{format_type.lower()}"
-        filename = f"sherlock_{username}{ext}"
-        export_path = downloads_dir / filename
+        picker = ft.FilePicker()
+        ext_map = {"txt": ["txt"], "csv": ["csv"], "xlsx": ["xlsx"]}
+        result = await picker.save_file(
+            file_name=filename,
+            allowed_extensions=ext_map.get(ext, [ext]),
+        )
+
+        if not result:
+            return
 
         try:
-            if format_type.lower() == "txt":
-                with open(export_path, "w", encoding="utf-8") as f:
-                    for r in progress.found:
-                        f.write(f"{r.url_user}\n")
-                    f.write(f"Total Detected : {len(progress.found)}\n")
-
-            elif format_type.lower() == "csv":
-                with open(export_path, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(
-                        [
-                            "Username",
-                            "Site",
-                            "Home URL",
-                            "Profile URL",
-                            "Exists",
-                            "Time (s)",
-                        ]
-                    )
-                    for r in progress.found + progress.not_found + progress.errors:
-                        writer.writerow(
-                            [
-                                username,
-                                r.site_name,
-                                r.url_main,
-                                r.url_user,
-                                r.status,
-                                f"{r.query_time:.2f}" if r.query_time else "",
-                            ]
-                        )
-
-            elif format_type.lower() == "xlsx":
-                rows = []
-                for r in progress.found + progress.not_found + progress.errors:
-                    rows.append(
-                        {
-                            "Username": username,
-                            "Site": r.site_name,
-                            "Home URL": r.url_main,
-                            "Profile URL": r.url_user,
-                            "Exists": r.status,
-                            "Response Time (s)": r.query_time,
-                        }
-                    )
-                df = pd.DataFrame(rows)
-                df.to_excel(export_path, index=False, sheet_name="Sherlock Report")
-
+            await _write_export(result, ext, progress)
             page.snack_bar = ft.SnackBar(
-                content=ft.Text(
-                    f"Exported successfully to Downloads/{filename}!",
-                    color=ft.Colors.WHITE,
-                ),
+                content=ft.Text(f"Exported successfully!", color=ft.Colors.WHITE),
                 bgcolor=ft.Colors.GREEN_600,
             )
         except Exception as e:
             logger.error("Export failed: %s", e)
             page.snack_bar = ft.SnackBar(
                 content=ft.Text(f"Failed to export: {str(e)}", color=ft.Colors.WHITE),
-                bgcolor=AppColors.ERROR,
+                bgcolor=ft.Colors.ERROR,
             )
         page.snack_bar.open = True
         page.update()
@@ -475,7 +464,7 @@ def build_results_view(
         ),
         title=ft.Row(
             [
-                ft.Image(src="logo.png", width=24, height=24, border_radius=4),
+                ft.Image(src="icon.png", width=24, height=24, border_radius=4),
                 ft.Text(username, size=tokens.FONT_LG, weight=ft.FontWeight.W_600),
             ],
             spacing=8,

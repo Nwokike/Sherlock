@@ -299,7 +299,7 @@ def build_sites_view(
         ),
         title=ft.Row(
             [
-                ft.Image(src="logo.png", width=24, height=24, border_radius=4),
+                ft.Image(src="icon.png", width=24, height=24, border_radius=4),
                 ft.Text(
                     "Social Networks", size=tokens.FONT_LG, weight=ft.FontWeight.W_600
                 ),

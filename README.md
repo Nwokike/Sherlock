@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/logo.png" alt="Sherlock" width="140" />
+  <img src="src/assets/icon.png" alt="Sherlock" width="140" />
 </p>
 
 <h1 align="center">Sherlock</h1>
@@ -21,11 +21,40 @@
 
 | Platform | Download | Notes |
 |:--------:|:--------:|:------|
-| 🤖 **Android (Universal)** | [**sherlock.apk**](https://github.com/Nwokike/Sherlock/releases/latest/download/sherlock.apk) | Works on all Android devices (ARM64, ARMv7, x86_64) |
-| 🤖 **Android (ARM64)** | [**sherlock-arm64-v8a.apk**](https://github.com/Nwokike/Sherlock/releases/latest/download/sherlock-arm64-v8a.apk) | For modern 64-bit Android devices |
+| 🤖 **Android (ARM64)** | [**sherlock-arm64-v8a.apk**](https://github.com/Nwokike/Sherlock/releases/latest/download/sherlock-arm64-v8a.apk) | For most modern Android devices |
 | 🤖 **Android (ARM32)** | [**sherlock-armeabi-v7a.apk**](https://github.com/Nwokike/Sherlock/releases/latest/download/sherlock-armeabi-v7a.apk) | For older 32-bit Android devices |
 | 🤖 **Android (x86_64)** | [**sherlock-x86_64.apk**](https://github.com/Nwokike/Sherlock/releases/latest/download/sherlock-x86_64.apk) | For Android emulators / ChromeOS |
 | 🪟 **Windows** | [**Sherlock_Setup.exe**](https://github.com/Nwokike/Sherlock/releases/latest/download/Sherlock_Setup.exe) | Windows 10/11 Installer (64-bit) |
+
+---
+
+## Screenshots
+
+> 🖼️ Place screenshots in the `screenshots/` directory and reference them below.
+
+### Mobile Experience
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/home_dark.png" width="100%" alt="Home Screen" /></td>
+    <td width="50%"><img src="screenshots/results_light.png" width="100%" alt="Search Results" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Home screen — enter a username to search across 400+ networks</em></td>
+    <td align="center"><em>Live search results with Found/Not Found/Error tabs</em></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/export_menu.png" width="100%" alt="Export Menu" /></td>
+    <td width="50%"><img src="screenshots/settings_dark.png" width="100%" alt="Settings" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Export report to TXT, CSV, or XLSX</em></td>
+    <td align="center"><em>Settings — dark mode, export preferences, and more</em></td>
+  </tr>
+</table>
 
 ---
 

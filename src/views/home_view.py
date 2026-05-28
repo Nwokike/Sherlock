@@ -233,7 +233,7 @@ def build_home_view(
             controls=[
                 ft.Container(height=40),
                 ft.Image(
-                    src="logo.png",
+src="icon.png",
                     width=80,
                     height=80,
                     border_radius=16,
@@ -378,7 +378,7 @@ def build_home_view(
     appbar = ft.AppBar(
         title=ft.Row(
             [
-                ft.Image(src="logo.png", width=28, height=28, border_radius=6),
+                ft.Image(src="icon.png", width=28, height=28, border_radius=6),
                 ft.Text("Sherlock", size=tokens.FONT_MD, weight=ft.FontWeight.BOLD),
             ],
             spacing=8,

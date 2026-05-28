@@ -296,6 +296,154 @@ def build_results_view(
 
     username = progress.username if progress else state.last_results_username
 
+    export_loading = ft.Ref[ft.Container]()
+    file_picker = ft.FilePicker()
+
+    async def _on_export_click(format_type: str):
+        format_dialog.open = False
+        page.update()
+
+        if export_loading.current:
+            export_loading.current.visible = True
+        page.update()
+
+        try:
+            # Generate report bytes using standard libraries
+            if format_type == "csv":
+                import io
+                import csv
+
+                output = io.StringIO()
+                writer = csv.writer(output)
+                writer.writerow(
+                    ["Username", "Site Name", "Profile URL", "Status", "Query Time (s)"]
+                )
+                if progress:
+                    for r in progress.found:
+                        writer.writerow(
+                            [
+                                progress.username,
+                                r.site_name,
+                                r.url_user,
+                                r.status,
+                                f"{r.query_time:.2f}" if r.query_time else "",
+                            ]
+                        )
+                    for r in progress.not_found:
+                        writer.writerow(
+                            [
+                                progress.username,
+                                r.site_name,
+                                r.url_user or r.url_main,
+                                r.status,
+                                f"{r.query_time:.2f}" if r.query_time else "",
+                            ]
+                        )
+                    for r in progress.errors:
+                        writer.writerow(
+                            [
+                                progress.username,
+                                r.site_name,
+                                r.url_user or r.url_main,
+                                r.status,
+                                f"{r.query_time:.2f}" if r.query_time else "",
+                            ]
+                        )
+                report_bytes = output.getvalue().encode("utf-8")
+            else:
+                output = []
+                if progress:
+                    for r in progress.found:
+                        if r.url_user:
+                            output.append(f"{r.url_user}\n")
+                    output.append(f"Total Detected : {len(progress.found)}\n")
+                report_bytes = "".join(output).encode("utf-8")
+
+            ext = format_type.lower()
+            logger.info(f"Opening save file dialog for {format_type.upper()} format...")
+
+            if file_picker not in page.services:
+                page.services.append(file_picker)
+
+            path = await file_picker.save_file(
+                file_name=f"sherlock_{username}.{ext}",
+                allowed_extensions=[ext],
+                dialog_title=f"Save scan report as {format_type.upper()}",
+                src_bytes=report_bytes,
+            )
+
+            if not path:
+                logger.info("File save cancelled by user.")
+                return
+
+            logger.info(
+                f"Saving scan report in {format_type.upper()} format to: {path}"
+            )
+
+            # On desktop, write the file ourselves
+            # On Android/iOS/Web, Flet automatically saves the file using src_bytes
+            is_mobile_or_web = page.web or (page.platform in ["android", "ios"])
+            if not is_mobile_or_web:
+                with open(path, "wb") as f:
+                    f.write(report_bytes)
+                logger.info(
+                    f"Successfully saved scan report manually on desktop to {path}"
+                )
+            else:
+                logger.info(
+                    f"Successfully saved scan report natively via Flet sandbox to {path}"
+                )
+
+            page.snack_bar = ft.SnackBar(
+                ft.Text("Saved successfully!", color=ft.Colors.WHITE),
+                bgcolor=ft.Colors.GREEN,
+            )
+        except Exception as ex:
+            logger.exception("Failed to write scan report:")
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Failed to save file: {str(ex)}", color=ft.Colors.WHITE),
+                bgcolor=AppColors.ERROR,
+            )
+        finally:
+            if export_loading.current:
+                export_loading.current.visible = False
+            page.snack_bar.open = True
+            page.update()
+
+    def _close_dialog(e=None):
+        logger.info(
+            "Cancel button clicked. Closing export dialog via page.pop_dialog()."
+        )
+        page.pop_dialog()
+
+    format_dialog = ft.AlertDialog(
+        title=ft.Text("Export Scan Report"),
+        content=ft.Text("Select your preferred file format to save the results:"),
+        actions=[
+            ft.TextButton(
+                "CSV Spreadsheet (.csv)",
+                on_click=lambda e: page.run_task(_on_export_click, "csv"),
+            ),
+            ft.TextButton(
+                "Plain Text List (.txt)",
+                on_click=lambda e: page.run_task(_on_export_click, "txt"),
+            ),
+            ft.TextButton(
+                "Cancel",
+                on_click=_close_dialog,
+            ),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+
+    def _show_format_dialog(e):
+        logger.info("Download/Export button clicked. Preparing dialog...")
+        if not progress:
+            logger.warning("No progress object found. Cannot export.")
+            return
+        logger.info("Showing Export dialog via page.show_dialog().")
+        page.show_dialog(format_dialog)
+
     appbar = ft.AppBar(
         leading=ft.IconButton(
             icon=ft.Icons.ARROW_BACK_ROUNDED,
@@ -312,6 +460,16 @@ def build_results_view(
         center_title=False,
         bgcolor=ft.Colors.TRANSPARENT,
         actions=[
+            ft.IconButton(
+                icon=ft.Icons.DOWNLOAD_ROUNDED,
+                tooltip="Export search report",
+                on_click=_show_format_dialog,
+                disabled=(progress.is_running if progress else False)
+                or not (
+                    progress
+                    and (len(progress.found) > 0 or len(progress.not_found) > 0)
+                ),
+            ),
             ft.IconButton(
                 icon=ft.Icons.CONTENT_COPY_ROUNDED,
                 tooltip="Copy all profile URLs to clipboard",
@@ -462,9 +620,33 @@ def build_results_view(
             )
         )
 
+    loading_overlay = ft.Container(
+        ref=export_loading,
+        visible=False,
+        content=ft.Row(
+            [
+                ft.ProgressRing(
+                    width=20, height=20, stroke_width=2.5, color=ft.Colors.PRIMARY
+                ),
+                ft.Text(
+                    "Saving report, please wait...",
+                    size=tokens.FONT_SM,
+                    weight=ft.FontWeight.W_500,
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.CENTER,
+            spacing=10,
+        ),
+        padding=10,
+        bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.PRIMARY),
+        border_radius=tokens.RADIUS_SM,
+        margin=ft.Margin(tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_SM),
+    )
+
     controls.extend(
         [
             _build_stats(),
+            loading_overlay,
             filter_box,
             tabs,
         ]

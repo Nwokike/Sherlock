@@ -18,7 +18,7 @@ class AppColors:
     LIGHT_PRIMARY_VARIANT = "#B58248"  # Darker Caramel-Gold (Logo Color B variation)
     LIGHT_HIGHLIGHT = "#A68E59"  # Khaki-Gold (Logo Color A)
 
-    # ─── MONOKAI PALETTE (Pinkish/Bluish colors replaced by Logo colors) ─────
+    # ─── MONOKAI PALETTE  ─────
     DARK_BG = "#272822"  # Classic Monokai Dark Charcoal Background
     DARK_SURFACE = "#1E1F1C"  # Monokai Dark Slate (Deeper Card Background)
     DARK_TEXT = "#F8F8F2"  # Monokai Chalk White (Body Text)

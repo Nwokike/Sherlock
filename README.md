@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/logo.png" alt="Sherlock" width="320" />
+  <img src="src/assets/icon.png" alt="Sherlock" width="320" />
 </p>
 
 <p align="center">

@@ -370,6 +370,10 @@ def build_results_view(
         page.snack_bar.open = True
         page.update()
 
+    def _close_sheet(e=None):
+        page.bottom_sheet.open = False
+        page.update()
+
     def _show_export_menu(e):
         bs = ft.BottomSheet(
             ft.Container(
@@ -402,7 +406,7 @@ def build_results_view(
                             ),
                             on_click=lambda e: (
                                 page.run_task(_export_results, "txt"),
-                                page.close(bs),
+                                _close_sheet(),
                             ),
                         ),
                         ft.ListTile(
@@ -420,7 +424,7 @@ def build_results_view(
                             ),
                             on_click=lambda e: (
                                 page.run_task(_export_results, "csv"),
-                                page.close(bs),
+                                _close_sheet(),
                             ),
                         ),
                         ft.ListTile(
@@ -438,7 +442,7 @@ def build_results_view(
                             ),
                             on_click=lambda e: (
                                 page.run_task(_export_results, "xlsx"),
-                                page.close(bs),
+                                _close_sheet(),
                             ),
                         ),
                         ft.Container(height=tokens.SPACE_SM),
@@ -452,8 +456,10 @@ def build_results_view(
                 ),
                 bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
             ),
+            open=True,
         )
-        page.open(bs)
+        page.bottom_sheet = bs
+        page.update()
 
     username = progress.username if progress else state.last_results_username
 

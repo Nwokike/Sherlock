@@ -233,7 +233,7 @@ def build_home_view(
             controls=[
                 ft.Container(height=40),
                 ft.Image(
-src="icon.png",
+                    src="icon.png",
                     width=80,
                     height=80,
                     border_radius=16,

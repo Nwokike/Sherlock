@@ -306,26 +306,54 @@ def build_results_view(
                 return "".join(lines).encode("utf-8")
 
             elif fmt == "csv":
-                import csv, io
+                import csv
+                import io
+
                 buf = io.StringIO()
                 writer = csv.writer(buf)
-                writer.writerow(["Username", "Site", "Home URL", "Profile URL", "Exists", "Time (s)"])
-                for r in progress_obj.found + progress_obj.not_found + progress_obj.errors:
-                    writer.writerow([
-                        username, r.site_name, r.url_main, r.url_user,
-                        r.status, f"{r.query_time:.2f}" if r.query_time else "",
-                    ])
+                writer.writerow(
+                    [
+                        "Username",
+                        "Site",
+                        "Home URL",
+                        "Profile URL",
+                        "Exists",
+                        "Time (s)",
+                    ]
+                )
+                for r in (
+                    progress_obj.found + progress_obj.not_found + progress_obj.errors
+                ):
+                    writer.writerow(
+                        [
+                            username,
+                            r.site_name,
+                            r.url_main,
+                            r.url_user,
+                            r.status,
+                            f"{r.query_time:.2f}" if r.query_time else "",
+                        ]
+                    )
                 return buf.getvalue().encode("utf-8")
 
             elif fmt == "xlsx":
-                import pandas as pd, io
+                import pandas as pd
+                import io
+
                 rows = []
-                for r in progress_obj.found + progress_obj.not_found + progress_obj.errors:
-                    rows.append({
-                        "Username": username, "Site": r.site_name,
-                        "Home URL": r.url_main, "Profile URL": r.url_user,
-                        "Exists": r.status, "Response Time (s)": r.query_time,
-                    })
+                for r in (
+                    progress_obj.found + progress_obj.not_found + progress_obj.errors
+                ):
+                    rows.append(
+                        {
+                            "Username": username,
+                            "Site": r.site_name,
+                            "Home URL": r.url_main,
+                            "Profile URL": r.url_user,
+                            "Exists": r.status,
+                            "Response Time (s)": r.query_time,
+                        }
+                    )
                 df = pd.DataFrame(rows)
                 buf = io.BytesIO()
                 df.to_excel(buf, index=False, sheet_name="Sherlock Report")
@@ -346,7 +374,9 @@ def build_results_view(
         except Exception as e:
             logger.error("Export generation failed: %s", e)
             page.snack_bar = ft.SnackBar(
-                content=ft.Text(f"Failed to generate export: {str(e)}", color=ft.Colors.WHITE),
+                content=ft.Text(
+                    f"Failed to generate export: {str(e)}", color=ft.Colors.WHITE
+                ),
                 bgcolor=ft.Colors.ERROR,
             )
             page.snack_bar.open = True
@@ -365,7 +395,7 @@ def build_results_view(
             return
 
         page.snack_bar = ft.SnackBar(
-            content=ft.Text(f"Exported successfully!", color=ft.Colors.WHITE),
+            content=ft.Text("Exported successfully!", color=ft.Colors.WHITE),
             bgcolor=ft.Colors.GREEN_600,
         )
         page.snack_bar.open = True

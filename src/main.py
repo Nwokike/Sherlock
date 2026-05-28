@@ -92,7 +92,7 @@ async def main(page: ft.Page):
         if excl_raw is not None:
             state.ignore_exclusions = excl_raw == "true"
         else:
-            state.ignore_exclusions = True
+            state.ignore_exclusions = False
 
         timeout_raw = await storage.get(STORAGE_TIMEOUT)
         if timeout_raw:

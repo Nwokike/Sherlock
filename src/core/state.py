@@ -19,7 +19,7 @@ class AppState:
 
     # Settings states
     nsfw_enabled: bool = True
-    ignore_exclusions: bool = True
+    ignore_exclusions: bool = False
     timeout: int = 30
     selected_sites: list[str] = []
     use_local_db: bool = True

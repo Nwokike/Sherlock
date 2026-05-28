@@ -102,7 +102,7 @@ jobs:
         run: |
           mkdir -p ${{ github.workspace }}/wheels
           pip install wheel
-          pip wheel stem==1.8.1 -w ${{ github.workspace }}/wheels
+          pip wheel stem==1.8.1 --no-deps -w ${{ github.workspace }}/wheels
       - name: Build APK (universal)
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/upload-key.jks
@@ -141,7 +141,7 @@ jobs:
         run: |
           mkdir -p ${{ github.workspace }}/wheels
           pip install wheel
-          pip wheel stem==1.8.1 -w ${{ github.workspace }}/wheels
+          pip wheel stem==1.8.1 --no-deps -w ${{ github.workspace }}/wheels
       - name: Build APK (split per ABI)
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/upload-key.jks
@@ -186,7 +186,7 @@ jobs:
         run: |
           mkdir -p ${{ github.workspace }}/wheels
           pip install wheel
-          pip wheel stem==1.8.1 -w ${{ github.workspace }}/wheels
+          pip wheel stem==1.8.1 --no-deps -w ${{ github.workspace }}/wheels
       - name: Build AAB
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/upload-key.jks

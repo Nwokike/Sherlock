@@ -150,15 +150,17 @@ jobs:
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           PIP_FIND_LINKS: ${{ github.workspace }}/wheels
         run: uv run flet build apk --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
-      - name: Rename APKs
+      - name: Rename APKs (if needed)
         run: |
           cd build/apk/
           for f in *.apk; do
             case "$f" in
-              *arm64*) mv "$f" "sherlock-arm64-v8a.apk" ;;
-              *armeabi*) mv "$f" "sherlock-armeabi-v7a.apk" ;;
-              *x86_64*) mv "$f" "sherlock-x86_64.apk" ;;
+              *arm64*) target="sherlock-arm64-v8a.apk" ;;
+              *armeabi*) target="sherlock-armeabi-v7a.apk" ;;
+              *x86_64*) target="sherlock-x86_64.apk" ;;
+              *) continue ;;
             esac
+            [ "$f" != "$target" ] && mv "$f" "$target" || true
           done
       - uses: actions/upload-artifact@v5.0.0
         with:

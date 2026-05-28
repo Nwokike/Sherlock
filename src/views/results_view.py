@@ -295,30 +295,30 @@ def build_results_view(
         page.snack_bar.open = True
         page.update()
 
-    async def _write_export(path: str, fmt: str, progress_obj: SearchProgress):
+    async def _generate_export_bytes(fmt: str, progress_obj: SearchProgress) -> bytes:
         username = progress_obj.username
         loop = asyncio.get_event_loop()
 
-        def _write():
+        def _generate():
             if fmt == "txt":
-                with open(path, "w", encoding="utf-8") as f:
-                    for r in progress_obj.found:
-                        f.write(f"{r.url_user}\n")
-                    f.write(f"Total Detected : {len(progress_obj.found)}\n")
+                lines = [f"{r.url_user}\n" for r in progress_obj.found]
+                lines.append(f"Total Detected : {len(progress_obj.found)}\n")
+                return "".join(lines).encode("utf-8")
 
             elif fmt == "csv":
-                import csv
-                with open(path, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["Username", "Site", "Home URL", "Profile URL", "Exists", "Time (s)"])
-                    for r in progress_obj.found + progress_obj.not_found + progress_obj.errors:
-                        writer.writerow([
-                            username, r.site_name, r.url_main, r.url_user,
-                            r.status, f"{r.query_time:.2f}" if r.query_time else "",
-                        ])
+                import csv, io
+                buf = io.StringIO()
+                writer = csv.writer(buf)
+                writer.writerow(["Username", "Site", "Home URL", "Profile URL", "Exists", "Time (s)"])
+                for r in progress_obj.found + progress_obj.not_found + progress_obj.errors:
+                    writer.writerow([
+                        username, r.site_name, r.url_main, r.url_user,
+                        r.status, f"{r.query_time:.2f}" if r.query_time else "",
+                    ])
+                return buf.getvalue().encode("utf-8")
 
             elif fmt == "xlsx":
-                import pandas as pd
+                import pandas as pd, io
                 rows = []
                 for r in progress_obj.found + progress_obj.not_found + progress_obj.errors:
                     rows.append({
@@ -327,9 +327,11 @@ def build_results_view(
                         "Exists": r.status, "Response Time (s)": r.query_time,
                     })
                 df = pd.DataFrame(rows)
-                df.to_excel(path, index=False, sheet_name="Sherlock Report")
+                buf = io.BytesIO()
+                df.to_excel(buf, index=False, sheet_name="Sherlock Report")
+                return buf.getvalue()
 
-        await loop.run_in_executor(None, _write)
+        return await loop.run_in_executor(None, _generate)
 
     async def _export_results(format_type: str):
         if not progress:
@@ -339,28 +341,33 @@ def build_results_view(
         ext = format_type.lower()
         filename = f"sherlock_{username}.{ext}"
 
+        try:
+            data = await _generate_export_bytes(ext, progress)
+        except Exception as e:
+            logger.error("Export generation failed: %s", e)
+            page.snack_bar = ft.SnackBar(
+                content=ft.Text(f"Failed to generate export: {str(e)}", color=ft.Colors.WHITE),
+                bgcolor=ft.Colors.ERROR,
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
+
         picker = ft.FilePicker()
         ext_map = {"txt": ["txt"], "csv": ["csv"], "xlsx": ["xlsx"]}
         result = await picker.save_file(
             file_name=filename,
             allowed_extensions=ext_map.get(ext, [ext]),
+            src_bytes=data,
         )
 
         if not result:
             return
 
-        try:
-            await _write_export(result, ext, progress)
-            page.snack_bar = ft.SnackBar(
-                content=ft.Text(f"Exported successfully!", color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.GREEN_600,
-            )
-        except Exception as e:
-            logger.error("Export failed: %s", e)
-            page.snack_bar = ft.SnackBar(
-                content=ft.Text(f"Failed to export: {str(e)}", color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.ERROR,
-            )
+        page.snack_bar = ft.SnackBar(
+            content=ft.Text(f"Exported successfully!", color=ft.Colors.WHITE),
+            bgcolor=ft.Colors.GREEN_600,
+        )
         page.snack_bar.open = True
         page.update()
 

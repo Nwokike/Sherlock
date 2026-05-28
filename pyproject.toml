@@ -9,6 +9,8 @@ dependencies = [
     "flet-ads==0.85.0",
     "httpx>=0.28.1",
     "sherlock-project>=0.16.0",
+    "pandas>=2.0",
+    "openpyxl>=3.1.5",
 ]
 
 [tool.flet]
@@ -56,4 +58,9 @@ pythonpath = ["src"]
 [tool.uv.workspace]
 members = [
     "sherlock-app",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.14",
 ]

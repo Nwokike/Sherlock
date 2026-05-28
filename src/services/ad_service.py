@@ -12,13 +12,13 @@ logger = logging.getLogger(__name__)
 
 try:
     import flet_ads as fta
+
     _HAS_ADS = True
 except ImportError:
     _HAS_ADS = False
 
 
 class AdService:
-
     USE_TEST_IDS = True
 
     BANNER_ID_ANDROID_TEST = "ca-app-pub-3940256099942544/9214589741"

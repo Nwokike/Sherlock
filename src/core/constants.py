@@ -7,6 +7,13 @@ STORAGE_SETTINGS = "sherlock_settings"
 STORAGE_HISTORY = "sherlock_history"
 STORAGE_THEME = "sherlock_theme"
 STORAGE_CACHED_SITES = "sherlock_cached_sites"
+STORAGE_NSFW = "sherlock_nsfw"
+STORAGE_EXCLUSIONS = "sherlock_exclusions"
+STORAGE_TIMEOUT = "sherlock_timeout"
+STORAGE_LOCAL_DB = "sherlock_local_db"
+STORAGE_SELECTED_SITES = "sherlock_selected_sites"
+STORAGE_SYNCED_DB = "sherlock_synced_db"
+STORAGE_ONBOARDING_DONE = "sherlock_onboarding_done"
 
 HTTP_TIMEOUT = 30.0
 MAX_RETRIES = 3

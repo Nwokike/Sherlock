@@ -82,10 +82,7 @@ class StorageService:
             logger.warning("StorageService._save_now_web failed: %s", e)
 
     def _schedule_write(self) -> None:
-        now = time.monotonic()
-        if now - self._last_write < _WRITE_DEBOUNCE_SEC:
-            return
-        if self._pending_write_task and not self._pending_write_task.done():
+        if self._pending_write_task:
             return
         self._pending_write_task = asyncio.get_event_loop().call_later(
             _WRITE_DEBOUNCE_SEC,
@@ -93,8 +90,10 @@ class StorageService:
         )
 
     async def _flush_task(self) -> None:
-        await asyncio.sleep(_WRITE_DEBOUNCE_SEC)
-        await self.flush()
+        try:
+            await self.flush()
+        finally:
+            self._pending_write_task = None
 
     async def get(self, key: str) -> str | None:
         async with self._lock:

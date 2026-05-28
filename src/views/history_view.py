@@ -10,7 +10,6 @@ import flet as ft
 
 from core import tokens
 from core.constants import LBL_NO_HISTORY, LBL_HISTORY
-from core.state import state
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +60,7 @@ def build_history_view(
                                     ft.Row(
                                         controls=[
                                             ft.Text(
-                                                f"{found}/{total} found",
+                                                f"{found}/{total} matches",
                                                 size=tokens.FONT_SM,
                                                 color=ft.Colors.with_opacity(
                                                     0.5, ft.Colors.ON_SURFACE
@@ -97,29 +96,39 @@ def build_history_view(
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     padding=ft.Padding(
-                        left=tokens.SPACE_LG, right=tokens.SPACE_LG,
-                        top=12, bottom=12,
+                        left=tokens.SPACE_LG,
+                        right=tokens.SPACE_LG,
+                        top=14,
+                        bottom=14,
                     ),
-                    border=ft.border.only(
-                        bottom=ft.BorderSide(
-                            0.5, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)
-                        )
+                    border_radius=tokens.RADIUS_MD,
+                    bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                    border=ft.Border.all(
+                        width=1, color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE)
                     ),
+                    margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
                 )
                 history_list.current.controls.append(tile)
 
             if entries:
                 empty_state.current.visible = False
             page.update()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Failed to load history: %s", e)
 
     appbar = ft.AppBar(
         leading=ft.IconButton(
             icon=ft.Icons.ARROW_BACK_ROUNDED,
             on_click=lambda e: on_navigate("/home"),
         ),
-        title=ft.Text(LBL_HISTORY, size=tokens.FONT_LG, weight=ft.FontWeight.W_600),
+        title=ft.Row(
+            [
+                ft.Image(src="logo.png", width=24, height=24, border_radius=4),
+                ft.Text(LBL_HISTORY, size=tokens.FONT_LG, weight=ft.FontWeight.W_600),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
         center_title=False,
         bgcolor=ft.Colors.TRANSPARENT,
         actions=[
@@ -160,11 +169,34 @@ def build_history_view(
         expand=True,
     )
 
-    list_view = ft.Column(ref=history_list, spacing=0, expand=True)
+    list_view = ft.ListView(
+        controls=[ft.Column(ref=history_list, spacing=0, expand=True)],
+        spacing=0,
+        expand=True,
+        padding=ft.Padding(
+            tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD
+        ),
+    )
 
     view = ft.View(
         route="/history",
-        controls=[list_view, empty],
+        controls=[
+            ft.SafeArea(
+                ft.Container(
+                    content=ft.Column([list_view, empty], expand=True, spacing=0),
+                    gradient=ft.LinearGradient(
+                        begin=ft.Alignment.TOP_LEFT,
+                        end=ft.Alignment.BOTTOM_RIGHT,
+                        colors=[
+                            ft.Colors.SURFACE,
+                            ft.Colors.with_opacity(0.08, ft.Colors.PRIMARY),
+                        ],
+                    ),
+                    expand=True,
+                ),
+                expand=True,
+            )
+        ],
         appbar=appbar,
         padding=0,
         spacing=0,

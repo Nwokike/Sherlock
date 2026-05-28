@@ -1,21 +1,17 @@
-"""Home view — search input and quick actions."""
+"""Home view — search input, configuration status, and recent searches."""
 
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import Callable
 
 import flet as ft
 
 from core import tokens
-from core.constants import APP_NAME, LBL_PASTE_CLIPBOARD, LBL_NO_RESULTS, LBL_HISTORY
+from core.constants import APP_NAME, LBL_PASTE_CLIPBOARD, STORAGE_THEME
 from core.state import state
-from core.theme import AppColors
-from core.styles import glass_card
 
 logger = logging.getLogger(__name__)
-
-_USERNAME_RE = None
 
 
 def _is_valid_username(text: str) -> bool:
@@ -32,6 +28,33 @@ def build_home_view(
     username_ref = ft.Ref[ft.TextField]()
     recent_list = ft.Ref[ft.Column]()
     progress_bar = ft.Ref[ft.ProgressBar]()
+    theme_btn_ref = ft.Ref[ft.IconButton]()
+
+    async def _toggle_quick_theme(e=None):
+        is_dark = page.theme_mode == ft.ThemeMode.DARK or (
+            page.theme_mode == ft.ThemeMode.SYSTEM
+            and page.platform_brightness == ft.Brightness.DARK
+        )
+        new_mode = ft.ThemeMode.LIGHT if is_dark else ft.ThemeMode.DARK
+        page.theme_mode = new_mode
+        state.theme_mode = new_mode
+        if storage:
+            await storage.set(
+                STORAGE_THEME,
+                "light" if new_mode == ft.ThemeMode.LIGHT else "dark",
+            )
+        if theme_btn_ref.current:
+            theme_btn_ref.current.icon = (
+                ft.Icons.WB_SUNNY_ROUNDED
+                if new_mode == ft.ThemeMode.DARK
+                else ft.Icons.NIGHTLIGHT_ROUNDED
+            )
+            theme_btn_ref.current.tooltip = (
+                "Switch to Light Theme"
+                if new_mode == ft.ThemeMode.DARK
+                else "Switch to Dark Theme"
+            )
+        page.update()
 
     def _perform_search(username: str):
         if not _is_valid_username(username):
@@ -66,13 +89,13 @@ def build_home_view(
             raw = await storage.get("sherlock_history")
             if raw:
                 import json
+
                 entries = json.loads(raw)
                 recent_list.current.controls.clear()
                 for entry in entries[-5:]:
                     username = entry.get("username", "")
                     found = entry.get("found", 0)
                     total = entry.get("total", 0)
-                    ts = entry.get("timestamp", "")
 
                     tile = ft.Container(
                         content=ft.Row(
@@ -90,7 +113,7 @@ def build_home_view(
                                             weight=ft.FontWeight.W_500,
                                         ),
                                         ft.Text(
-                                            f"{found}/{total} found",
+                                            f"{found}/{total} matches found",
                                             size=tokens.FONT_XS,
                                             color=ft.Colors.with_opacity(
                                                 0.5, ft.Colors.ON_SURFACE
@@ -101,7 +124,7 @@ def build_home_view(
                                     expand=True,
                                 ),
                                 ft.Icon(
-                                    ft.Icons.CHEVRON_RIGHT,
+                                    ft.Icons.CHEVRON_RIGHT_ROUNDED,
                                     size=tokens.ICON_SM,
                                     color=ft.Colors.with_opacity(
                                         0.3, ft.Colors.ON_SURFACE
@@ -117,7 +140,7 @@ def build_home_view(
                             bottom=12,
                         ),
                         on_click=lambda e, u=username: _perform_search(u),
-                        border=ft.border.only(
+                        border=ft.Border.only(
                             bottom=ft.BorderSide(
                                 0.5, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)
                             )
@@ -125,8 +148,8 @@ def build_home_view(
                     )
                     recent_list.current.controls.append(tile)
                 page.update()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Failed to load history on home view: %s", e)
 
     def _build_progress_section():
         progress = ft.Container(
@@ -158,18 +181,64 @@ def build_home_view(
         )
         return progress
 
+    # Premium targets config card showing selected sites scan scope
+    def _build_targets_card():
+        selected_count = len(state.selected_sites)
+        if selected_count == 0:
+            label = "Scanning all social networks (400+)"
+            icon = ft.Icons.ALL_INCLUSIVE_ROUNDED
+        else:
+            label = f"Scanning {selected_count} selected target networks"
+            icon = ft.Icons.CHECKLIST_RTL_ROUNDED
+
+        return ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(icon, size=18, color=ft.Colors.PRIMARY),
+                    ft.Text(
+                        label,
+                        size=tokens.FONT_XS,
+                        weight=ft.FontWeight.W_500,
+                        color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
+                        expand=True,
+                    ),
+                    ft.TextButton(
+                        content=ft.Text(
+                            "Customize",
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.PRIMARY,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        on_click=lambda e: on_navigate("/sites"),
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(tokens.SPACE_LG, 2, tokens.SPACE_MD, 2),
+            border_radius=tokens.RADIUS_MD,
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+            border=ft.Border.all(
+                width=1, color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE)
+            ),
+            margin=ft.Margin(tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_MD),
+        )
+
     progress_section = _build_progress_section()
+    targets_card = _build_targets_card()
 
     header = ft.Container(
         content=ft.Column(
             controls=[
                 ft.Container(height=40),
-                ft.Icon(
-                    ft.Icons.PERSON_SEARCH_ROUNDED,
-                    size=64,
-                    color=ft.Colors.PRIMARY,
+                ft.Image(
+                    src="logo.png",
+                    width=80,
+                    height=80,
+                    border_radius=16,
+                    fit=ft.BoxFit.CONTAIN,
                 ),
-                ft.Container(height=8),
+                ft.Container(height=12),
                 ft.Text(
                     APP_NAME,
                     size=28,
@@ -191,8 +260,8 @@ def build_home_view(
         padding=ft.Padding(
             left=tokens.SPACE_LG,
             right=tokens.SPACE_LG,
-            top=tokens.SPACE_XXL,
-            bottom=tokens.SPACE_XL,
+            top=tokens.SPACE_XL,
+            bottom=tokens.SPACE_LG,
         ),
     )
 
@@ -207,9 +276,8 @@ def build_home_view(
                     border_width=1.5,
                     border_color=ft.Colors.with_opacity(0.2, ft.Colors.ON_SURFACE),
                     focused_border_color=ft.Colors.PRIMARY,
-                    bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
+                    bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
                     filled=True,
-                    fill_color=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
                     text_style=ft.TextStyle(
                         size=tokens.FONT_LG,
                     ),
@@ -229,7 +297,9 @@ def build_home_view(
                     ),
                     on_click=_on_search_click,
                     style=ft.ButtonStyle(
-                        shape=ft.RoundedRectangleBorder(tokens.RADIUS_LG),
+                        shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_LG),
+                        bgcolor=ft.Colors.PRIMARY,
+                        color=ft.Colors.WHITE,
                         padding=ft.Padding(
                             left=tokens.SPACE_XL * 2,
                             right=tokens.SPACE_XL * 2,
@@ -247,7 +317,7 @@ def build_home_view(
             left=tokens.SPACE_LG,
             right=tokens.SPACE_LG,
             top=0,
-            bottom=tokens.SPACE_LG,
+            bottom=tokens.SPACE_MD,
         ),
         alignment=ft.Alignment.CENTER,
     )
@@ -259,12 +329,10 @@ def build_home_view(
                     content=ft.Row(
                         controls=[
                             ft.Text(
-                                "Recent",
+                                "Recent Searches",
                                 size=tokens.FONT_SM,
                                 weight=ft.FontWeight.W_700,
-                                color=ft.Colors.with_opacity(
-                                    0.5, ft.Colors.ON_SURFACE
-                                ),
+                                color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
                                 style=ft.TextStyle(letter_spacing=1),
                             ),
                             ft.Container(expand=True),
@@ -292,7 +360,7 @@ def build_home_view(
     )
 
     main_content = ft.ListView(
-        controls=[header, search_box, progress_section, recent_section],
+        controls=[header, search_box, targets_card, progress_section, recent_section],
         spacing=0,
         expand=True,
     )
@@ -303,9 +371,53 @@ def build_home_view(
     if ad_banner:
         controls.append(ad_banner)
 
+    is_dark = page.theme_mode == ft.ThemeMode.DARK or (
+        page.theme_mode == ft.ThemeMode.SYSTEM
+        and page.platform_brightness == ft.Brightness.DARK
+    )
+    appbar = ft.AppBar(
+        title=ft.Row(
+            [
+                ft.Image(src="logo.png", width=28, height=28, border_radius=6),
+                ft.Text("Sherlock", size=tokens.FONT_MD, weight=ft.FontWeight.BOLD),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        actions=[
+            ft.IconButton(
+                ref=theme_btn_ref,
+                icon=ft.Icons.WB_SUNNY_ROUNDED
+                if is_dark
+                else ft.Icons.NIGHTLIGHT_ROUNDED,
+                tooltip="Switch to Light Theme" if is_dark else "Switch to Dark Theme",
+                on_click=lambda e: page.run_task(_toggle_quick_theme, e),
+            ),
+        ],
+        bgcolor=ft.Colors.TRANSPARENT,
+        center_title=False,
+    )
+
     view = ft.View(
         route="/home",
-        controls=controls,
+        controls=[
+            ft.SafeArea(
+                ft.Container(
+                    content=ft.Column(controls, expand=True, spacing=0),
+                    gradient=ft.LinearGradient(
+                        begin=ft.Alignment.TOP_LEFT,
+                        end=ft.Alignment.BOTTOM_RIGHT,
+                        colors=[
+                            ft.Colors.SURFACE,
+                            ft.Colors.with_opacity(0.08, ft.Colors.PRIMARY),
+                        ],
+                    ),
+                    expand=True,
+                ),
+                expand=True,
+            )
+        ],
+        appbar=appbar,
         padding=0,
         spacing=0,
     )

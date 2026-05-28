@@ -36,7 +36,9 @@ def setting_tile(
                     icon,
                     size=tokens.ICON_LG,
                     color=ft.Colors.ON_SURFACE_VARIANT,
-                ) if icon else ft.Container(width=0),
+                )
+                if icon
+                else ft.Container(width=0),
                 ft.Column(
                     controls=[
                         ft.Text(
@@ -78,7 +80,9 @@ def glass_card(content: ft.Control, **kwargs) -> ft.Container:
         ),
         border_radius=tokens.RADIUS_LG,
         bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
-        border=ft.border.all(1, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)),
+        border=ft.Border.all(
+            width=1, color=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)
+        ),
         **kwargs,
     )
 

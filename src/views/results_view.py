@@ -1,4 +1,4 @@
-"""Results view — live search results with found/not-found/error tabs."""
+"""Results view — live search results with live filtering and premium exports."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
     if result.status == "Claimed":
         icon = ft.Icons.CHECK_CIRCLE_ROUNDED
         icon_color = ft.Colors.GREEN
-    elif result.status == "Available":
+    elif result.status == "Available" or result.status == "Illegal":
         icon = ft.Icons.CANCEL_ROUNDED
         icon_color = ft.Colors.with_opacity(0.3, ft.Colors.ON_SURFACE)
     else:
@@ -32,10 +32,25 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
                 ft.Icon(icon, size=tokens.ICON_SM, color=icon_color),
                 ft.Column(
                     controls=[
-                        ft.Text(
-                            result.site_name,
-                            size=tokens.FONT_MD,
-                            weight=ft.FontWeight.W_500,
+                        ft.Row(
+                            controls=[
+                                ft.Text(
+                                    result.site_name,
+                                    size=tokens.FONT_MD,
+                                    weight=ft.FontWeight.W_500,
+                                ),
+                                ft.Text(
+                                    f"({result.query_time:.2f}s)"
+                                    if result.query_time
+                                    else "",
+                                    size=tokens.FONT_XS,
+                                    color=ft.Colors.with_opacity(
+                                        0.4, ft.Colors.ON_SURFACE
+                                    ),
+                                ),
+                            ],
+                            spacing=tokens.SPACE_XS,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
                         ft.Text(
                             result.url_user or result.url_main or result.site_name,
@@ -55,13 +70,16 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
                         size=tokens.FONT_XXS,
                         weight=ft.FontWeight.W_700,
                         color=(
-                            ft.Colors.GREEN if result.status == "Claimed"
+                            ft.Colors.GREEN
+                            if result.status == "Claimed"
                             else ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)
                         ),
                     ),
                     padding=ft.Padding(
-                        tokens.SPACE_SM, tokens.SPACE_XS,
-                        tokens.SPACE_SM, tokens.SPACE_XS,
+                        tokens.SPACE_SM,
+                        tokens.SPACE_XS,
+                        tokens.SPACE_SM,
+                        tokens.SPACE_XS,
                     ),
                     border_radius=tokens.RADIUS_SM,
                     bgcolor=(
@@ -80,12 +98,12 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
             top=12,
             bottom=12,
         ),
-        border=ft.border.only(
-            bottom=ft.BorderSide(0.5, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE))
+        border=ft.Border.only(
+            bottom=ft.BorderSide(
+                width=0.5, color=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)
+            )
         ),
-        on_click=lambda e, u=result.url_user: (
-            e.page.launch_url(u) if u else None
-        ),
+        on_click=lambda e, u=result.url_user: e.page.launch_url(u) if u else None,
         ink=True,
     )
 
@@ -95,21 +113,24 @@ def build_results_view(
     progress: Optional[SearchProgress],
     on_navigate: Callable,
     on_restart: Callable,
+    on_cancel: Callable,
     ad_service,
 ) -> ft.View:
     found_list = ft.Ref[ft.Column]()
     notfound_list = ft.Ref[ft.Column]()
     error_list = ft.Ref[ft.Column]()
-    stats_text = ft.Ref[ft.Text]()
     progress_bar = ft.Ref[ft.ProgressBar]()
     progress_row = ft.Ref[ft.Row]()
     tab_container = ft.Ref[ft.Tabs]()
+    search_field = ft.Ref[ft.TextField]()
+
+    # Filter query
+    filter_query = ""
 
     def _build_stats():
         if not progress:
             return ft.Container()
         total = progress.total_sites
-        checked = progress.checked_sites
         found = len(progress.found)
         not_found = len(progress.not_found)
         errors = len(progress.errors)
@@ -118,16 +139,25 @@ def build_results_view(
             content=ft.Row(
                 controls=[
                     _stat_card("Found", str(found), AppColors.SUCCESS),
-                    _stat_card("Not Found", str(not_found), ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)),
+                    _stat_card(
+                        "Not Found",
+                        str(not_found),
+                        ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
+                    ),
                     _stat_card("Errors", str(errors), AppColors.WARNING),
                     _stat_card("Total", str(total), ft.Colors.PRIMARY),
                 ],
                 spacing=tokens.SPACE_SM,
                 alignment=ft.MainAxisAlignment.SPACE_EVENLY,
             ),
-            padding=ft.Padding(
-                left=tokens.SPACE_LG, right=tokens.SPACE_LG,
-                top=tokens.SPACE_MD, bottom=tokens.SPACE_SM,
+            padding=tokens.SPACE_LG,
+            border_radius=tokens.RADIUS_MD,
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+            border=ft.Border.all(
+                width=1, color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE)
+            ),
+            margin=ft.Margin(
+                tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_SM
             ),
         )
 
@@ -159,14 +189,20 @@ def build_results_view(
         if not progress:
             return
 
+        query = filter_query.strip().lower()
+
+        # Update Found tab
         found_list.current.controls.clear()
-        for r in progress.found:
+        found_items = [
+            r for r in progress.found if not query or query in r.site_name.lower()
+        ]
+        for r in found_items:
             found_list.current.controls.append(_build_result_tile(r))
-        if not progress.found:
+        if not found_items:
             found_list.current.controls.append(
                 ft.Container(
                     content=ft.Text(
-                        "No accounts found",
+                        "No matches" if query else "No accounts found",
                         color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
                         text_align=ft.TextAlign.CENTER,
                     ),
@@ -175,14 +211,18 @@ def build_results_view(
                 )
             )
 
+        # Update Not Found tab
         notfound_list.current.controls.clear()
-        for r in progress.not_found:
+        notfound_items = [
+            r for r in progress.not_found if not query or query in r.site_name.lower()
+        ]
+        for r in notfound_items:
             notfound_list.current.controls.append(_build_result_tile(r))
-        if not progress.not_found:
+        if not notfound_items:
             notfound_list.current.controls.append(
                 ft.Container(
                     content=ft.Text(
-                        "All sites returned results",
+                        "No matches" if query else "All sites returned results",
                         color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
                         text_align=ft.TextAlign.CENTER,
                     ),
@@ -191,14 +231,18 @@ def build_results_view(
                 )
             )
 
+        # Update Errors tab
         error_list.current.controls.clear()
-        for r in progress.errors:
+        error_items = [
+            r for r in progress.errors if not query or query in r.site_name.lower()
+        ]
+        for r in error_items:
             error_list.current.controls.append(_build_result_tile(r))
-        if not progress.errors:
+        if not error_items:
             error_list.current.controls.append(
                 ft.Container(
                     content=ft.Text(
-                        "No errors",
+                        "No matches" if query else "No errors",
                         color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
                         text_align=ft.TextAlign.CENTER,
                     ),
@@ -206,6 +250,202 @@ def build_results_view(
                     alignment=ft.Alignment.CENTER,
                 )
             )
+
+    def _on_filter_change(e):
+        nonlocal filter_query
+        filter_query = e.control.value
+        _update_lists()
+        page.update()
+
+    def _cancel_search():
+        if on_cancel:
+            on_cancel()
+
+    def _open_all_matches(e):
+        if not progress or not progress.found:
+            page.show_snack_bar(ft.SnackBar(ft.Text("No profiles found to open.")))
+            return
+
+        opened = 0
+        for r in progress.found:
+            if r.url_user:
+                page.launch_url(r.url_user)
+                opened += 1
+        page.show_snack_bar(
+            ft.SnackBar(
+                ft.Text(
+                    f"Opening {opened} profile links in browser...",
+                    color=ft.Colors.WHITE,
+                ),
+                bgcolor=ft.Colors.GREEN,
+            )
+        )
+
+    async def _export_results(format_type: str):
+        if not progress:
+            return
+
+        import csv
+        import pandas as pd
+        from pathlib import Path
+
+        username = progress.username
+        downloads_dir = Path.home() / "Downloads"
+        if not downloads_dir.exists():
+            downloads_dir = Path.home()
+
+        ext = f".{format_type.lower()}"
+        filename = f"sherlock_{username}{ext}"
+        export_path = downloads_dir / filename
+
+        try:
+            if format_type.lower() == "txt":
+                with open(export_path, "w", encoding="utf-8") as f:
+                    for r in progress.found:
+                        f.write(f"{r.url_user}\n")
+                    f.write(f"Total Detected : {len(progress.found)}\n")
+
+            elif format_type.lower() == "csv":
+                with open(export_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(
+                        [
+                            "Username",
+                            "Site",
+                            "Home URL",
+                            "Profile URL",
+                            "Exists",
+                            "Time (s)",
+                        ]
+                    )
+                    for r in progress.found + progress.not_found + progress.errors:
+                        writer.writerow(
+                            [
+                                username,
+                                r.site_name,
+                                r.url_main,
+                                r.url_user,
+                                r.status,
+                                f"{r.query_time:.2f}" if r.query_time else "",
+                            ]
+                        )
+
+            elif format_type.lower() == "xlsx":
+                rows = []
+                for r in progress.found + progress.not_found + progress.errors:
+                    rows.append(
+                        {
+                            "Username": username,
+                            "Site": r.site_name,
+                            "Home URL": r.url_main,
+                            "Profile URL": r.url_user,
+                            "Exists": r.status,
+                            "Response Time (s)": r.query_time,
+                        }
+                    )
+                df = pd.DataFrame(rows)
+                df.to_excel(export_path, index=False, sheet_name="Sherlock Report")
+
+            page.snack_bar = ft.SnackBar(
+                content=ft.Text(
+                    f"Exported successfully to Downloads/{filename}!",
+                    color=ft.Colors.WHITE,
+                ),
+                bgcolor=ft.Colors.GREEN_600,
+            )
+        except Exception as e:
+            logger.error("Export failed: %s", e)
+            page.snack_bar = ft.SnackBar(
+                content=ft.Text(f"Failed to export: {str(e)}", color=ft.Colors.WHITE),
+                bgcolor=AppColors.ERROR,
+            )
+        page.snack_bar.open = True
+        page.update()
+
+    def _show_export_menu(e):
+        bs = ft.BottomSheet(
+            ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Text(
+                            "Export Report",
+                            size=tokens.FONT_LG,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Text(
+                            "Select your preferred format to export the scan results. Reports are stored in your system Downloads folder.",
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
+                        ),
+                        ft.Container(height=tokens.SPACE_XS),
+                        ft.ListTile(
+                            leading=ft.Icon(
+                                ft.Icons.TEXT_SNIPPET_ROUNDED,
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                            title=ft.Text(
+                                "Text List (.txt)",
+                                size=tokens.FONT_MD,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            subtitle=ft.Text(
+                                "Simple list containing only claimed URLs",
+                                size=tokens.FONT_XS,
+                            ),
+                            on_click=lambda e: (
+                                page.run_task(_export_results, "txt"),
+                                page.close(bs),
+                            ),
+                        ),
+                        ft.ListTile(
+                            leading=ft.Icon(
+                                ft.Icons.GRID_ON_ROUNDED, color=ft.Colors.GREEN_600
+                            ),
+                            title=ft.Text(
+                                "CSV Spreadsheet (.csv)",
+                                size=tokens.FONT_MD,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            subtitle=ft.Text(
+                                "Comma-separated spreadsheet containing all entries",
+                                size=tokens.FONT_XS,
+                            ),
+                            on_click=lambda e: (
+                                page.run_task(_export_results, "csv"),
+                                page.close(bs),
+                            ),
+                        ),
+                        ft.ListTile(
+                            leading=ft.Icon(
+                                ft.Icons.TABLE_CHART_ROUNDED, color=ft.Colors.BLUE_600
+                            ),
+                            title=ft.Text(
+                                "Excel Spreadsheet (.xlsx)",
+                                size=tokens.FONT_MD,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            subtitle=ft.Text(
+                                "Professional Excel sheet with formatting",
+                                size=tokens.FONT_XS,
+                            ),
+                            on_click=lambda e: (
+                                page.run_task(_export_results, "xlsx"),
+                                page.close(bs),
+                            ),
+                        ),
+                        ft.Container(height=tokens.SPACE_SM),
+                    ],
+                    spacing=tokens.SPACE_XS,
+                    tight=True,
+                ),
+                padding=tokens.SPACE_LG,
+                border_radius=ft.BorderRadius.only(
+                    top_left=tokens.RADIUS_MD, top_right=tokens.RADIUS_MD
+                ),
+                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+            ),
+        )
+        page.open(bs)
 
     username = progress.username if progress else state.last_results_username
 
@@ -214,31 +454,60 @@ def build_results_view(
             icon=ft.Icons.ARROW_BACK_ROUNDED,
             on_click=lambda e: on_navigate("/home"),
         ),
-        title=ft.Text(username, size=tokens.FONT_LG, weight=ft.FontWeight.W_600),
+        title=ft.Row(
+            [
+                ft.Image(src="logo.png", width=24, height=24, border_radius=4),
+                ft.Text(username, size=tokens.FONT_LG, weight=ft.FontWeight.W_600),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
         center_title=False,
         bgcolor=ft.Colors.TRANSPARENT,
         actions=[
             ft.IconButton(
+                icon=ft.Icons.OPEN_IN_BROWSER_ROUNDED,
+                tooltip="Open all matches in browser",
+                on_click=_open_all_matches,
+                disabled=not (progress and len(progress.found) > 0),
+            ),
+            ft.IconButton(
+                icon=ft.Icons.DOWNLOAD_ROUNDED,
+                tooltip="Export report",
+                on_click=_show_export_menu,
+                disabled=progress.is_running if progress else False,
+            ),
+            ft.IconButton(
                 icon=ft.Icons.REFRESH_ROUNDED,
                 tooltip="Search again",
                 on_click=lambda e: on_restart(username),
+                disabled=progress.is_running if progress else False,
             ),
         ],
     )
 
-    def _build_tab(label: str, count: int, ref: ft.Ref) -> ft.Tab:
-        return ft.Tab(
-            text=f"{label} ({count})",
-            content=ft.Container(
-                content=ft.Column(
-                    ref=ref,
-                    spacing=0,
-                    scroll=ft.ScrollMode.AUTO,
-                    expand=True,
-                ),
-                expand=True,
-            ),
-        )
+    filter_box = ft.Container(
+        content=ft.TextField(
+            ref=search_field,
+            hint_text="Filter matches by name or domain...",
+            prefix_icon=ft.Icons.FILTER_LIST_ROUNDED,
+            border_radius=tokens.RADIUS_SM,
+            border_width=1,
+            border_color=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
+            focused_border_color=ft.Colors.PRIMARY,
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+            filled=True,
+            on_change=_on_filter_change,
+            text_size=tokens.FONT_SM,
+            content_padding=8,
+        ),
+        padding=ft.Padding(
+            left=tokens.SPACE_LG,
+            right=tokens.SPACE_LG,
+            top=tokens.SPACE_XS,
+            bottom=tokens.SPACE_SM,
+        ),
+    )
 
     found_count = len(progress.found) if progress else 0
     notfound_count = len(progress.not_found) if progress else 0
@@ -247,15 +516,61 @@ def build_results_view(
     tabs = ft.Tabs(
         ref=tab_container,
         selected_index=0,
-        tabs=[
-            _build_tab("Found", found_count, found_list),
-            _build_tab("Not Found", notfound_count, notfound_list),
-            _build_tab("Errors", error_count, error_list),
-        ],
-        scrollable=False,
-        indicator_color=ft.Colors.PRIMARY,
-        label_color=ft.Colors.PRIMARY,
-        unselected_label_color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
+        length=3,
+        content=ft.Column(
+            [
+                ft.TabBar(
+                    tabs=[
+                        ft.Tab(label=f"Found ({found_count})"),
+                        ft.Tab(label=f"Not Found ({notfound_count})"),
+                        ft.Tab(label=f"Errors ({error_count})"),
+                    ],
+                    scrollable=False,
+                    indicator_color=ft.Colors.PRIMARY,
+                    label_color=ft.Colors.PRIMARY,
+                    unselected_label_color=ft.Colors.with_opacity(
+                        0.5, ft.Colors.ON_SURFACE
+                    ),
+                ),
+                ft.TabBarView(
+                    controls=[
+                        # Panel 1
+                        ft.Container(
+                            content=ft.Column(
+                                ref=found_list,
+                                spacing=0,
+                                scroll=ft.ScrollMode.AUTO,
+                                expand=True,
+                            ),
+                            expand=True,
+                        ),
+                        # Panel 2
+                        ft.Container(
+                            content=ft.Column(
+                                ref=notfound_list,
+                                spacing=0,
+                                scroll=ft.ScrollMode.AUTO,
+                                expand=True,
+                            ),
+                            expand=True,
+                        ),
+                        # Panel 3
+                        ft.Container(
+                            content=ft.Column(
+                                ref=error_list,
+                                spacing=0,
+                                scroll=ft.ScrollMode.AUTO,
+                                expand=True,
+                            ),
+                            expand=True,
+                        ),
+                    ],
+                    expand=True,
+                ),
+            ],
+            expand=True,
+            spacing=0,
+        ),
         expand=True,
     )
 
@@ -279,7 +594,9 @@ def build_results_view(
                                 ft.Text(
                                     f"Checking {progress.checked_sites}/{progress.total_sites} sites...",
                                     size=tokens.FONT_SM,
-                                    color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
+                                    color=ft.Colors.with_opacity(
+                                        0.5, ft.Colors.ON_SURFACE
+                                    ),
                                 ),
                                 ft.Container(expand=True),
                                 ft.TextButton(
@@ -296,16 +613,21 @@ def build_results_view(
                     spacing=2,
                 ),
                 padding=ft.Padding(
-                    left=tokens.SPACE_LG, right=tokens.SPACE_LG,
-                    top=tokens.SPACE_SM, bottom=0,
+                    left=tokens.SPACE_LG,
+                    right=tokens.SPACE_LG,
+                    top=tokens.SPACE_SM,
+                    bottom=0,
                 ),
             )
         )
 
-    controls.extend([
-        _build_stats(),
-        tabs,
-    ])
+    controls.extend(
+        [
+            _build_stats(),
+            filter_box,
+            tabs,
+        ]
+    )
 
     ad_banner = ad_service.get_banner_ad()
     if ad_banner:
@@ -313,7 +635,23 @@ def build_results_view(
 
     view = ft.View(
         route="/results",
-        controls=controls,
+        controls=[
+            ft.SafeArea(
+                ft.Container(
+                    content=ft.Column(controls, expand=True, spacing=0),
+                    gradient=ft.LinearGradient(
+                        begin=ft.Alignment.TOP_LEFT,
+                        end=ft.Alignment.BOTTOM_RIGHT,
+                        colors=[
+                            ft.Colors.SURFACE,
+                            ft.Colors.with_opacity(0.08, ft.Colors.PRIMARY),
+                        ],
+                    ),
+                    expand=True,
+                ),
+                expand=True,
+            )
+        ],
         appbar=appbar,
         padding=0,
         spacing=0,

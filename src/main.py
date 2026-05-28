@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -11,7 +10,16 @@ import flet as ft
 
 from core.theme import AppTheme
 from core.state import state
-from core.constants import STORAGE_THEME, STORAGE_HISTORY
+from core.constants import (
+    STORAGE_THEME,
+    STORAGE_HISTORY,
+    STORAGE_NSFW,
+    STORAGE_EXCLUSIONS,
+    STORAGE_TIMEOUT,
+    STORAGE_LOCAL_DB,
+    STORAGE_SELECTED_SITES,
+    STORAGE_ONBOARDING_DONE,
+)
 from services.storage_service import StorageService
 from services.ad_service import AdService
 from services.sherlock_service import SherlockService
@@ -68,12 +76,39 @@ async def main(page: ft.Page):
         saved_theme = await storage.get(STORAGE_THEME)
         if saved_theme == "dark":
             page.theme_mode = ft.ThemeMode.DARK
-        elif saved_theme == "light":
-            page.theme_mode = ft.ThemeMode.LIGHT
-        else:
+        elif saved_theme == "system":
             page.theme_mode = ft.ThemeMode.SYSTEM
+        else:
+            page.theme_mode = ft.ThemeMode.LIGHT
+
+        # Load advanced settings
+        nsfw_raw = await storage.get(STORAGE_NSFW)
+        if nsfw_raw is not None:
+            state.nsfw_enabled = nsfw_raw == "true"
+        else:
+            state.nsfw_enabled = True
+
+        excl_raw = await storage.get(STORAGE_EXCLUSIONS)
+        if excl_raw is not None:
+            state.ignore_exclusions = excl_raw == "true"
+        else:
+            state.ignore_exclusions = True
+
+        timeout_raw = await storage.get(STORAGE_TIMEOUT)
+        if timeout_raw:
+            state.timeout = int(timeout_raw)
+
+        local_db_raw = await storage.get(STORAGE_LOCAL_DB)
+        if local_db_raw:
+            state.use_local_db = local_db_raw == "true"
+
+        selected_raw = await storage.get(STORAGE_SELECTED_SITES)
+        if selected_raw:
+            state.selected_sites = selected_raw.split(",")
+        else:
+            state.selected_sites = []
     except Exception as e:
-        logger.warning("Theme load failed: %s", e)
+        logger.warning("Settings load failed: %s", e)
 
     page.run_task(ad_service.preload_interstitial)
 
@@ -94,6 +129,9 @@ async def main(page: ft.Page):
     async def navigate(route: str):
         page.route = route
         await route_change()
+
+    def navigate_sync(route: str):
+        page.run_task(navigate, route)
 
     def _build_nav_bar(active_route: str) -> ft.NavigationBar | None:
         routes = ["/home", "/history", "/settings"]
@@ -138,12 +176,14 @@ async def main(page: ft.Page):
         try:
             raw = await storage.get(STORAGE_HISTORY)
             entries = json.loads(raw) if raw else []
-            entries.append({
-                "username": username,
-                "found": found,
-                "total": total,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M"),
-            })
+            entries.append(
+                {
+                    "username": username,
+                    "found": found,
+                    "total": total,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                }
+            )
             entries = entries[-50:]
             await storage.set(STORAGE_HISTORY, json.dumps(entries))
         except Exception as e:
@@ -168,16 +208,13 @@ async def main(page: ft.Page):
 
         from views.results_view import build_results_view
 
-        progress = type('obj', (object,), {
-            'username': username,
-            'total_sites': 0,
-            'checked_sites': 0,
-            'found': [],
-            'not_found': [],
-            'errors': [],
-            'is_running': True,
-            'is_cancelled': False,
-        })()
+        async def _cancel_search():
+            nonlocal current_search_task
+            if current_search_task and not current_search_task.done():
+                sherlock_service.cancel()
+                current_search_task = None
+            state.is_searching = False
+            await navigate("/home")
 
         async def _run_search():
             nonlocal current_results_view
@@ -185,6 +222,7 @@ async def main(page: ft.Page):
                 result = await sherlock_service.search(
                     username=username,
                     on_progress=lambda p: page.run_task(_refresh_view, p),
+                    timeout=state.timeout,
                 )
                 state.is_searching = False
 
@@ -195,7 +233,8 @@ async def main(page: ft.Page):
                 )
 
                 state.last_results = {
-                    r.site_name: r for r in result.found + result.not_found + result.errors
+                    r.site_name: r
+                    for r in result.found + result.not_found + result.errors
                 }
                 state.last_results_username = username
 
@@ -214,8 +253,9 @@ async def main(page: ft.Page):
             view = build_results_view(
                 page=page,
                 progress=progress_data,
-                on_navigate=navigate,
-                on_restart=start_search,
+                on_navigate=navigate_sync,
+                on_restart=start_search_sync,
+                on_cancel=lambda: page.run_task(_cancel_search),
                 ad_service=ad_service,
             )
             current_results_view = view
@@ -230,27 +270,35 @@ async def main(page: ft.Page):
 
         current_search_task = page.run_task(_run_search)
 
-        preview = type('obj', (object,), {
-            'username': username,
-            'total_sites': 0,
-            'checked_sites': 0,
-            'found': [],
-            'not_found': [],
-            'errors': [],
-            'is_running': True,
-            'is_cancelled': False,
-        })()
+        preview = type(
+            "obj",
+            (object,),
+            {
+                "username": username,
+                "total_sites": 0,
+                "checked_sites": 0,
+                "found": [],
+                "not_found": [],
+                "errors": [],
+                "is_running": True,
+                "is_cancelled": False,
+            },
+        )()
 
         page.views.clear()
         view = build_results_view(
             page=page,
             progress=preview,
-            on_navigate=navigate,
-            on_restart=start_search,
+            on_navigate=navigate_sync,
+            on_restart=start_search_sync,
+            on_cancel=lambda: page.run_task(_cancel_search),
             ad_service=ad_service,
         )
         page.views.append(view)
         page.update()
+
+    def start_search_sync(username: str):
+        page.run_task(start_search, username)
 
     async def route_change(e=None):
         nonlocal current_search_task, current_results_view
@@ -261,20 +309,35 @@ async def main(page: ft.Page):
         if current_search_task and current_search_task.done():
             current_search_task = None
 
+        onboarding_done = await storage.get(STORAGE_ONBOARDING_DONE)
+        if onboarding_done != "true" and route != "/onboarding":
+            await navigate("/onboarding")
+            return
+
         if route == "/results" and state.is_searching:
             return
 
         page.views.clear()
 
-        if route == "/home" or route == "/":
+        if route == "/onboarding":
+            from views.onboarding_view import build_onboarding_view
+
+            view = build_onboarding_view(
+                page=page,
+                on_done=lambda: navigate_sync("/home"),
+                storage=storage,
+            )
+            page.views.append(view)
+
+        elif route == "/home" or route == "/":
             from views.home_view import build_home_view
 
             view = build_home_view(
                 page=page,
-                on_navigate=navigate,
+                on_navigate=navigate_sync,
                 storage=storage,
                 ad_service=ad_service,
-                on_search=start_search,
+                on_search=start_search_sync,
             )
             page.views.append(view)
 
@@ -283,8 +346,8 @@ async def main(page: ft.Page):
 
             view = build_history_view(
                 page=page,
-                on_navigate=navigate,
-                on_search=start_search,
+                on_navigate=navigate_sync,
+                on_search=start_search_sync,
                 storage=storage,
             )
             page.views.append(view)
@@ -294,7 +357,19 @@ async def main(page: ft.Page):
 
             view = build_settings_view(
                 page=page,
+                sherlock_service=sherlock_service,
                 storage=storage,
+            )
+            page.views.append(view)
+
+        elif route == "/sites":
+            from views.sites_view import build_sites_view
+
+            view = build_sites_view(
+                page=page,
+                sherlock_service=sherlock_service,
+                storage=storage,
+                on_navigate=navigate_sync,
             )
             page.views.append(view)
 
@@ -303,10 +378,10 @@ async def main(page: ft.Page):
 
             view = build_home_view(
                 page=page,
-                on_navigate=navigate,
+                on_navigate=navigate_sync,
                 storage=storage,
                 ad_service=ad_service,
-                on_search=start_search,
+                on_search=start_search_sync,
             )
             page.views.append(view)
 

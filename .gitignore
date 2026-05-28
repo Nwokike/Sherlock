@@ -1,0 +1,19 @@
+# Virtual environment
+.venv/
+
+# Caching & Linters
+.ruff_cache/
+__pycache__/
+*.pyc
+
+# Local application storage database
+storage/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# OS files
+.DS_Store
+Thumbs.db

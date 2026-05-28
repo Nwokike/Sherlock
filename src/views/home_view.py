@@ -75,7 +75,8 @@ def build_home_view(
 
     async def _paste_clipboard(e):
         try:
-            text = await page.get_clipboard()
+            clipboard = ft.Clipboard()
+            text = await clipboard.get()
             if text and username_ref.current:
                 username_ref.current.value = text.strip()
                 username_ref.current.error_text = None

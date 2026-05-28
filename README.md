@@ -38,7 +38,6 @@
 - **Search History** — Every search is saved locally. Re-run any previous search with one tap.
 - **Privacy-First** — All searches run directly from your device. No servers, no tracking, no accounts.
 - **Dark/Light Mode** — System-aware theme with premium color palette.
-- **NSFW Filtering** — NSFW sites are excluded by default for safe searching.
 
 ## Architecture
 
@@ -48,11 +47,6 @@
 | Search Engine | `sherlock-project` — 400+ site username detection engine |
 | Network | `httpx` (async, connection pooling, limits) |
 | Storage | JSON files (persistent settings and search history) |
-| Ads | `flet-ads` (AdMob banner + interstitial) |
-
-## Credits
-
-Powered by the [Sherlock Project](https://github.com/sherlock-project/sherlock) — an open-source tool for finding social media accounts by username across social networks.
 
 ## Legal Disclaimer
 

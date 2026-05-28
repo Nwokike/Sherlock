@@ -483,17 +483,36 @@ def build_settings_view(
                 content=ft.Column(
                     controls=[
                         ft.Text(
-                            f"{APP_NAME} Premium v{APP_VERSION}",
-                            size=tokens.FONT_SM,
+                            f"{APP_NAME} v{APP_VERSION}",
+                            size=tokens.FONT_MD,
                             weight=ft.FontWeight.W_600,
+                            color=ft.Colors.ON_SURFACE,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.Text(
+                            "Making the Sherlock Project accessible to everyone.",
+                            size=tokens.FONT_XS,
                             color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.Container(height=4),
+                        ft.Text(
+                            "A user-friendly interface for the open-source Sherlock engine. "
+                            "No terminal required.",
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
                             text_align=ft.TextAlign.CENTER,
                         ),
                     ],
                     spacing=2,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=tokens.SPACE_LG,
+                padding=ft.Padding(
+                    left=tokens.SPACE_LG,
+                    right=tokens.SPACE_LG,
+                    top=tokens.SPACE_LG,
+                    bottom=tokens.SPACE_LG,
+                ),
             ),
         ],
         spacing=0,

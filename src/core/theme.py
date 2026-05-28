@@ -14,9 +14,9 @@ class AppColors:
     LIGHT_TEXT = "#1E293B"  # Deep Slate-Black (Crisp high-contrast body text)
     LIGHT_TEXT_DIM = "#64748B"  # Slate-Grey (Muted label text)
     # Bluish primary/variant replaced by Caramel-Gold (Color B) variations:
-    LIGHT_PRIMARY = "#CD995F"  # Caramel-Gold (Logo Color B)
+    LIGHT_HIGHLIGHT = "#CD995F"  # Caramel-Gold (Logo Color B)
     LIGHT_PRIMARY_VARIANT = "#B58248"  # Darker Caramel-Gold (Logo Color B variation)
-    LIGHT_HIGHLIGHT = "#A68E59"  # Khaki-Gold (Logo Color A)
+    LIGHT_PRIMARY = "#A68E59"  # Khaki-Gold (Logo Color A)
 
     # ─── MONOKAI PALETTE  ─────
     DARK_BG = "#272822"  # Classic Monokai Dark Charcoal Background

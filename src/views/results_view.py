@@ -265,25 +265,29 @@ def build_results_view(
         if on_cancel:
             on_cancel()
 
-    async def _open_all_matches(e):
+    async def _copy_all_urls(e):
         if not progress or not progress.found:
-            page.show_snack_bar(ft.SnackBar(ft.Text("No profiles found to open.")))
+            page.snack_bar = ft.SnackBar(ft.Text("No profiles found."), bgcolor=ft.Colors.RED)
+            page.snack_bar.open = True
+            page.update()
             return
 
-        opened = 0
-        for r in progress.found:
-            if r.url_user:
-                await ft.UrlLauncher().launch_url(r.url_user)
-                opened += 1
-        page.show_snack_bar(
-            ft.SnackBar(
-                ft.Text(
-                    f"Opening {opened} profile links in browser...",
-                    color=ft.Colors.WHITE,
-                ),
+        urls = [r.url_user for r in progress.found if r.url_user]
+        text = "\n".join(urls)
+        try:
+            cb = ft.Clipboard()
+            await cb.set(text)
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Copied {len(urls)} profile URLs to clipboard", color=ft.Colors.WHITE),
                 bgcolor=ft.Colors.GREEN,
             )
-        )
+        except Exception:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("Failed to copy URLs", color=ft.Colors.WHITE),
+                bgcolor=ft.Colors.RED,
+            )
+        page.snack_bar.open = True
+        page.update()
 
     async def _export_results(format_type: str):
         if not progress:
@@ -470,9 +474,9 @@ def build_results_view(
         bgcolor=ft.Colors.TRANSPARENT,
         actions=[
             ft.IconButton(
-                icon=ft.Icons.OPEN_IN_BROWSER_ROUNDED,
-                tooltip="Open all matches in browser",
-                on_click=_open_all_matches,
+                icon=ft.Icons.CONTENT_COPY_ROUNDED,
+                tooltip="Copy all profile URLs to clipboard",
+                on_click=_copy_all_urls,
                 disabled=not (progress and len(progress.found) > 0),
             ),
             ft.IconButton(

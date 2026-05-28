@@ -10,6 +10,7 @@ import flet as ft
 from core import tokens
 from core.state import state
 from core.constants import STORAGE_SELECTED_SITES
+from core.styles import build_banner_ad
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,11 @@ def build_sites_view(
 
             is_checked = checked_states[name]
 
+            async def _open_site_url(e, url=url_main):
+                e.stop_propagation()
+                if url:
+                    await ft.UrlLauncher().launch_url(url)
+
             tile = ft.Container(
                 content=ft.Row(
                     controls=[
@@ -158,14 +164,17 @@ def build_sites_view(
                                     spacing=tokens.SPACE_SM,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                 ),
-                                ft.Text(
-                                    url_main,
-                                    size=tokens.FONT_XS,
-                                    color=ft.Colors.with_opacity(
-                                        0.5, ft.Colors.ON_SURFACE
+                                ft.Container(
+                                    content=ft.Text(
+                                        url_main,
+                                        size=tokens.FONT_XS,
+                                        color=ft.Colors.with_opacity(
+                                            0.5, ft.Colors.ON_SURFACE
+                                        ),
+                                        max_lines=1,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
                                     ),
-                                    max_lines=1,
-                                    overflow=ft.TextOverflow.ELLIPSIS,
+                                    on_click=_open_site_url if url_main else None,
                                 ),
                             ],
                             spacing=2,
@@ -317,6 +326,7 @@ def build_sites_view(
                             bulk_actions,
                             stats_header,
                             scroller,
+                            build_banner_ad(page),
                         ],
                         expand=True,
                         spacing=0,

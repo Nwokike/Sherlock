@@ -10,6 +10,7 @@ import flet as ft
 
 from core import tokens
 from core.constants import LBL_NO_HISTORY, LBL_HISTORY
+from core.styles import build_banner_ad
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +184,7 @@ def build_history_view(
         controls=[
             ft.SafeArea(
                 ft.Container(
-                    content=ft.Column([list_view, empty], expand=True, spacing=0),
+                    content=ft.Column([list_view, empty, build_banner_ad(page)], expand=True, spacing=0),
                     gradient=ft.LinearGradient(
                         begin=ft.Alignment.TOP_LEFT,
                         end=ft.Alignment.BOTTOM_RIGHT,

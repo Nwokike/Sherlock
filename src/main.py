@@ -196,6 +196,8 @@ async def main(page: ft.Page):
             sherlock_service.cancel()
             current_search_task = None
 
+        await ad_service.show_interstitial()
+
         try:
             await sherlock_service.load_sites()
         except Exception:
@@ -256,7 +258,6 @@ async def main(page: ft.Page):
                 on_navigate=navigate_sync,
                 on_restart=start_search_sync,
                 on_cancel=lambda: page.run_task(_cancel_search),
-                ad_service=ad_service,
             )
             current_results_view = view
             page.views.append(view)
@@ -292,7 +293,6 @@ async def main(page: ft.Page):
             on_navigate=navigate_sync,
             on_restart=start_search_sync,
             on_cancel=lambda: page.run_task(_cancel_search),
-            ad_service=ad_service,
         )
         page.views.append(view)
         page.update()
@@ -336,7 +336,6 @@ async def main(page: ft.Page):
                 page=page,
                 on_navigate=navigate_sync,
                 storage=storage,
-                ad_service=ad_service,
                 on_search=start_search_sync,
             )
             page.views.append(view)
@@ -380,7 +379,6 @@ async def main(page: ft.Page):
                 page=page,
                 on_navigate=navigate_sync,
                 storage=storage,
-                ad_service=ad_service,
                 on_search=start_search_sync,
             )
             page.views.append(view)

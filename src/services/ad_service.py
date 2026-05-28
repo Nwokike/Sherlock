@@ -1,4 +1,8 @@
-"""AdMob service — banner and interstitial ads."""
+"""AdMob service — banner and interstitial ads.
+
+Direct port of SpanInsight's production AdService pattern.
+Uses test Ad IDs until Play Store launch.
+"""
 
 from __future__ import annotations
 
@@ -19,13 +23,15 @@ except ImportError:
 
 
 class AdService:
-    USE_TEST_IDS = True
+    """Manages AdMob banner and interstitial ads."""
+
+    USE_TEST_IDS = False
 
     BANNER_ID_ANDROID_TEST = "ca-app-pub-3940256099942544/9214589741"
     INTERSTITIAL_ID_ANDROID_TEST = "ca-app-pub-3940256099942544/1033173712"
 
-    BANNER_ID_ANDROID_PROD = ""
-    INTERSTITIAL_ID_ANDROID_PROD = ""
+    BANNER_ID_ANDROID_PROD = "ca-app-pub-5679949845754640/5131365762"
+    INTERSTITIAL_ID_ANDROID_PROD = "ca-app-pub-5679949845754640/2758003779"
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -51,6 +57,7 @@ class AdService:
             return False
 
     def get_banner_ad(self) -> ft.Control:
+        """Return a banner ad control, or empty container on desktop."""
         if not _HAS_ADS or not self._is_mobile():
             return ft.Container(width=0, height=0)
         try:
@@ -69,38 +76,8 @@ class AdService:
         except Exception:
             return ft.Container(width=0, height=0)
 
-    def get_standard_banner_ad(self) -> ft.Control | None:
-        if not _HAS_ADS or not self._is_mobile():
-            return None
-        try:
-            ad = fta.BannerAd(
-                unit_id=self.banner_id,
-                width=320,
-                height=100,
-                on_error=lambda e: None,
-            )
-            return ft.Container(
-                content=ft.Column(
-                    [
-                        ad,
-                        ft.Text(
-                            "This app is 100% free. Ads help support the developer.",
-                            size=11,
-                            color=ft.Colors.ON_SURFACE_VARIANT,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=5,
-                ),
-                width=320,
-                alignment=ft.Alignment.CENTER,
-                padding=ft.Padding(0, 10, 0, 10),
-            )
-        except Exception:
-            return None
-
     async def preload_interstitial(self, on_close: Optional[Callable] = None):
+        """Pre-load an interstitial ad for later display."""
         self._on_close = on_close
         if not _HAS_ADS or not self._is_mobile():
             return
@@ -123,6 +100,7 @@ class AdService:
         await self.preload_interstitial(on_close=self._on_close)
 
     async def show_interstitial(self) -> bool:
+        """Show a preloaded interstitial. Returns True if shown."""
         if self.interstitial:
             try:
                 await self.interstitial.show()
@@ -130,3 +108,40 @@ class AdService:
             except Exception:
                 return False
         return False
+
+    async def show_rewarded_interstitial(self, on_close: Callable) -> bool:
+        """Show a rewarded interstitial ad, triggering on_close when closed."""
+        if not _HAS_ADS or not self._is_mobile():
+            if asyncio.iscoroutinefunction(on_close):
+                await on_close()
+            else:
+                on_close()
+            return True
+
+        try:
+            async def _show(e):
+                await e.control.show()
+
+            async def _close(e):
+                self._active_rewarded_ad = None
+                if asyncio.iscoroutinefunction(on_close):
+                    await on_close()
+                else:
+                    on_close()
+
+            self._active_rewarded_ad = fta.InterstitialAd(
+                unit_id=self.interstitial_id,
+                on_load=lambda e: self.page.run_task(_show, e),
+                on_close=lambda e: self.page.run_task(_close, e),
+                on_error=lambda e: logger.error(
+                    "Rewarded Interstitial error: %s", e.data
+                ),
+            )
+            return True
+        except Exception as err:
+            logger.error("Failed to trigger rewarded interstitial: %s", err)
+            if asyncio.iscoroutinefunction(on_close):
+                await on_close()
+            else:
+                on_close()
+            return False

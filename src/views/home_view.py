@@ -10,6 +10,7 @@ import flet as ft
 from core import tokens
 from core.constants import APP_NAME, LBL_PASTE_CLIPBOARD, STORAGE_THEME
 from core.state import state
+from core.styles import build_banner_ad
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,6 @@ def build_home_view(
     page: ft.Page,
     on_navigate: Callable,
     storage,
-    ad_service,
     on_search: Callable,
 ) -> ft.View:
     username_ref = ft.Ref[ft.TextField]()
@@ -365,11 +365,10 @@ def build_home_view(
         expand=True,
     )
 
-    ad_banner = ad_service.get_banner_ad()
+    ad_banner = build_banner_ad(page)
 
     controls = [main_content]
-    if ad_banner:
-        controls.append(ad_banner)
+    controls.append(ad_banner)
 
     is_dark = page.theme_mode == ft.ThemeMode.DARK or (
         page.theme_mode == ft.ThemeMode.SYSTEM

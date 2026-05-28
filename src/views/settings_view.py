@@ -17,7 +17,7 @@ from core.constants import (
 )
 from core.state import state
 from core.theme import AppColors
-from core.styles import section_header
+from core.styles import section_header, build_banner_ad
 
 logger = logging.getLogger(__name__)
 
@@ -464,17 +464,21 @@ def build_settings_view(
             ft.Container(height=tokens.SPACE_SM),
             section_header("PREFERENCES"),
             theme_card,
+            build_banner_ad(page),
             ft.Container(height=tokens.SPACE_SM),
             section_header("SCAN PARAMETERS"),
             scanning_card,
+            build_banner_ad(page),
             ft.Container(height=tokens.SPACE_SM),
             section_header("CONNECTION & SPEED"),
             performance_card,
+            build_banner_ad(page),
             ft.Container(height=tokens.SPACE_SM),
             section_header("DATABASE UPDATE"),
             sync_card,
-            ft.Container(height=tokens.SPACE_LG),
-            # About block
+            build_banner_ad(page),
+            ft.Container(height=tokens.SPACE_SM),
+            section_header("ABOUT"),
             ft.Container(
                 content=ft.Column(
                     controls=[

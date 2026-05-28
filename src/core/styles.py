@@ -1,8 +1,12 @@
 """Reusable widget factories."""
 
+import logging
+
 import flet as ft
 
 from core import tokens
+
+logger = logging.getLogger(__name__)
 
 
 def section_header(text: str) -> ft.Container:
@@ -98,4 +102,52 @@ def solid_card(content: ft.Control, **kwargs) -> ft.Container:
         ),
         border_radius=tokens.RADIUS_LG,
         **kwargs,
+    )
+
+
+def build_banner_ad(page: ft.Page, unit_id: str = "ca-app-pub-5679949845754640/5131365762") -> ft.Control:
+    """Build a glass-container-wrapped banner ad (mobile only).
+
+    Exact pattern from SpanInsight: "SPONSORED" label + BannerAd
+    inside a frosted glass container. Returns empty Container on desktop.
+    """
+    if page.platform not in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS):
+        return ft.Container(width=0, height=0)
+
+    try:
+        import flet_ads as fta
+
+        ad = fta.BannerAd(
+            unit_id=unit_id,
+            width=320,
+            height=50,
+            on_error=lambda e: None,
+        )
+    except Exception as e:
+        logger.warning("Failed to load BannerAd: %s", e)
+        return ft.Container(width=0, height=0)
+
+    return ft.Container(
+        content=ft.Column(
+            [
+                ft.Text(
+                    "SPONSORED",
+                    size=8,
+                    weight=ft.FontWeight.W_700,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    style=ft.TextStyle(letter_spacing=1),
+                ),
+                ad,
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=4,
+        ),
+        alignment=ft.Alignment.CENTER,
+        padding=8,
+        border_radius=tokens.RADIUS_LG,
+        bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
+        border=ft.Border.all(
+            1, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)
+        ),
+        margin=ft.Margin(tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS),
     )

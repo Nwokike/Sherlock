@@ -41,7 +41,7 @@ usesCleartextTraffic = "true"
 requestLegacyExternalStorage = "true"
 
 [tool.flet.android.meta_data]
-"com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~8438792639"
+"com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~1261089274"
 
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true

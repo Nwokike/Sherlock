@@ -10,6 +10,7 @@ import flet as ft
 from core import tokens
 from core.state import state
 from core.theme import AppColors
+from core.styles import build_banner_ad
 from services.sherlock_service import SearchProgress, SiteResult
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,10 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
     else:
         icon = ft.Icons.ERROR_OUTLINE_ROUNDED
         icon_color = ft.Colors.ORANGE
+
+    async def _open_result_url(e, url=result.url_user):
+        if url:
+            await ft.UrlLauncher().launch_url(url)
 
     return ft.Container(
         content=ft.Row(
@@ -103,7 +108,7 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
                 width=0.5, color=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)
             )
         ),
-        on_click=lambda e, u=result.url_user: e.page.launch_url(u) if u else None,
+        on_click=_open_result_url if result.url_user else None,
         ink=True,
     )
 
@@ -114,7 +119,6 @@ def build_results_view(
     on_navigate: Callable,
     on_restart: Callable,
     on_cancel: Callable,
-    ad_service,
 ) -> ft.View:
     found_list = ft.Ref[ft.Column]()
     notfound_list = ft.Ref[ft.Column]()
@@ -261,7 +265,7 @@ def build_results_view(
         if on_cancel:
             on_cancel()
 
-    def _open_all_matches(e):
+    async def _open_all_matches(e):
         if not progress or not progress.found:
             page.show_snack_bar(ft.SnackBar(ft.Text("No profiles found to open.")))
             return
@@ -269,7 +273,7 @@ def build_results_view(
         opened = 0
         for r in progress.found:
             if r.url_user:
-                page.launch_url(r.url_user)
+                await ft.UrlLauncher().launch_url(r.url_user)
                 opened += 1
         page.show_snack_bar(
             ft.SnackBar(
@@ -629,9 +633,7 @@ def build_results_view(
         ]
     )
 
-    ad_banner = ad_service.get_banner_ad()
-    if ad_banner:
-        controls.append(ad_banner)
+    controls.append(build_banner_ad(page))
 
     view = ft.View(
         route="/results",

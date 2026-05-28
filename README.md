@@ -5,7 +5,7 @@
 <h1 align="center">Sherlock</h1>
 
 <p align="center">
-  Hunt down social media accounts by username across 400+ networks. Built with Python and Flet.
+  A user-friendly interface for the <a href="https://github.com/sherlock-project/sherlock">Sherlock Project</a> — making its powerful OSINT engine accessible to everyone. No terminal required.
 </p>
 
 <p align="center">
@@ -43,8 +43,8 @@
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Flet (Python → Flutter) |
-| Search Engine | `sherlock-project` — 400+ site username detection engine |
+| Frontend | Flet (Python → Flutter) — cross-platform UI |
+| Search Engine | [sherlock-project](https://github.com/sherlock-project/sherlock) — 400+ site detection engine |
 | Network | `httpx` (async, connection pooling, limits) |
 | Storage | JSON files (persistent settings and search history) |
 

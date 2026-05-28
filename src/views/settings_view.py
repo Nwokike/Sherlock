@@ -138,6 +138,9 @@ def build_settings_view(
         page.views.pop()
         await page.push_route(page.views[-1].route if page.views else "/home")
 
+    async def _launch_sherlock_project(e):
+        await ft.UrlLauncher().launch_url("https://github.com/sherlock-project/sherlock")
+
     appbar = ft.AppBar(
         leading=ft.IconButton(
             icon=ft.Icons.ARROW_BACK_ROUNDED,
@@ -489,22 +492,30 @@ def build_settings_view(
                             color=ft.Colors.ON_SURFACE,
                             text_align=ft.TextAlign.CENTER,
                         ),
+                        ft.Container(height=2),
                         ft.Text(
-                            "Making the Sherlock Project accessible to everyone.",
+                            "A user-friendly UI for the open-source Sherlock Project.",
                             size=tokens.FONT_XS,
                             color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
                             text_align=ft.TextAlign.CENTER,
                         ),
-                        ft.Container(height=4),
                         ft.Text(
-                            "A user-friendly interface for the open-source Sherlock engine. "
-                            "No terminal required.",
+                            "Making it accessible to everyone — no terminal needed.",
                             size=tokens.FONT_XS,
-                            color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
+                            color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
                             text_align=ft.TextAlign.CENTER,
                         ),
+                        ft.Container(height=6),
+                        ft.TextButton(
+                            "github.com/sherlock-project/sherlock",
+                            style=ft.ButtonStyle(
+                                color=ft.Colors.PRIMARY,
+                                text_style=ft.TextStyle(size=tokens.FONT_XS),
+                            ),
+                            on_click=_launch_sherlock_project,
+                        ),
                     ],
-                    spacing=2,
+                    spacing=0,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 padding=ft.Padding(

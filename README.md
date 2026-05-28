@@ -36,23 +36,45 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/home_dark.png" width="100%" alt="Home Screen" /></td>
-    <td width="50%"><img src="screenshots/results_light.png" width="100%" alt="Search Results" /></td>
+    <td width="50%"><img src="screenshots/homepage_showing_history_dark_mobile.png" width="100%" alt="Home Screen" /></td>
+    <td width="50%"><img src="screenshots/homepage_showing_history_light_mobile.png" width="100%" alt="Home Screen Light" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Home screen — enter a username to search across 400+ networks</em></td>
-    <td align="center"><em>Live search results with Found/Not Found/Error tabs</em></td>
+    <td align="center"><em>Home screen with search history — dark mode</em></td>
+    <td align="center"><em>Home screen with search history — light mode</em></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/export_menu.png" width="100%" alt="Export Menu" /></td>
-    <td width="50%"><img src="screenshots/settings_dark.png" width="100%" alt="Settings" /></td>
+    <td width="50%"><img src="screenshots/search_commence_1_result_yet_light_mobile.png" width="100%" alt="Search in Progress" /></td>
+    <td width="50%"><img src="screenshots/search_done_list_28_found_light_mobile.png" width="100%" alt="Search Results" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Export report to TXT, CSV, or XLSX</em></td>
-    <td align="center"><em>Settings — dark mode, export preferences, and more</em></td>
+    <td align="center"><em>Live search progress — results appear in real time</em></td>
+    <td align="center"><em>Completed search with Found/Not Found/Error breakdown</em></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/select_Nwokike_from_result_dark_mobile.png" width="100%" alt="Result Detail" /></td>
+    <td width="50%"><img src="screenshots/GitHub_Nwokike_selected_from_result.png" width="100%" alt="Profile Opened" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Tap any found account to view details</em></td>
+    <td align="center"><em>Profile page opens in your browser</em></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/customize_view_select_deselect_social_light_mobile.png" width="100%" alt="Site Selection" /></td>
+    <td width="50%"><img src="screenshots/history_dark_mobile.png" width="100%" alt="Search History" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Select/deselect which social networks to search</em></td>
+    <td align="center"><em>Search history — re-run any previous search</em></td>
   </tr>
 </table>
 

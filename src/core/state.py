@@ -25,10 +25,27 @@ class AppState:
     use_local_db: bool = True
     db_sync_status: str = "Idle"
 
+    # Advanced settings
+    tor_enabled: bool = False
+    unique_tor_enabled: bool = False
+    proxy_url: str = ""
+    custom_manifest: str = ""
+
+    # Multi-username State
+    search_targets: list[str] = []
+    active_username: str = ""
+    target_results: dict = {}
+    update_available_version: str | None = None
+    search_error: str | None = None
+
     def __init__(self):
         self.history = []
         self.last_results = {}
         self.selected_sites = []
+        self.update_available_version = None
+        self.search_targets = []
+        self.target_results = {}
+        self.search_error = None
 
 
 state = AppState()

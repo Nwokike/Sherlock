@@ -19,13 +19,16 @@ logger = logging.getLogger(__name__)
 def _build_result_tile(result: SiteResult) -> ft.Container:
     if result.status == "Claimed":
         icon = ft.Icons.CHECK_CIRCLE_ROUNDED
-        icon_color = ft.Colors.GREEN
+        icon_color = AppColors.SUCCESS
     elif result.status == "Available" or result.status == "Illegal":
         icon = ft.Icons.CANCEL_ROUNDED
         icon_color = ft.Colors.with_opacity(0.3, ft.Colors.ON_SURFACE)
+    elif result.status == "WAF":
+        icon = ft.Icons.SHIELD_ROUNDED
+        icon_color = AppColors.WARNING
     else:
         icon = ft.Icons.ERROR_OUTLINE_ROUNDED
-        icon_color = ft.Colors.ORANGE
+        icon_color = AppColors.WARNING
 
     async def _open_result_url(e, url=result.url_user):
         if url:
@@ -71,13 +74,17 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
                 ),
                 ft.Container(
                     content=ft.Text(
-                        result.status,
+                        "WAF BLOCKED" if result.status == "WAF" else result.status,
                         size=tokens.FONT_XXS,
                         weight=ft.FontWeight.W_700,
                         color=(
-                            ft.Colors.GREEN
+                            AppColors.SUCCESS
                             if result.status == "Claimed"
-                            else ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)
+                            else (
+                                AppColors.WARNING
+                                if result.status == "WAF"
+                                else ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)
+                            )
                         ),
                     ),
                     padding=ft.Padding(
@@ -88,9 +95,13 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
                     ),
                     border_radius=tokens.RADIUS_SM,
                     bgcolor=(
-                        ft.Colors.with_opacity(0.1, ft.Colors.GREEN)
+                        ft.Colors.with_opacity(0.1, AppColors.SUCCESS)
                         if result.status == "Claimed"
-                        else ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE)
+                        else (
+                            ft.Colors.with_opacity(0.1, AppColors.WARNING)
+                            if result.status == "WAF"
+                            else ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE)
+                        )
                     ),
                 ),
             ],
@@ -127,33 +138,49 @@ def build_results_view(
     progress_row = ft.Ref[ft.Row]()
     tab_container = ft.Ref[ft.Tabs]()
     search_field = ft.Ref[ft.TextField]()
+    stats_card_ref = ft.Ref[ft.Container]()
 
     # Filter query
     filter_query = ""
 
+    # Resolve active target and its progress dynamically
+    active_target = (
+        state.active_username
+        if state.active_username
+        else (progress.username if progress else state.last_results_username)
+    )
+    active_progress = state.target_results.get(active_target, progress)
+
+    def _build_stats_row():
+        if not active_progress:
+            return ft.Row()
+        total = active_progress.total_sites
+        found = len(active_progress.found)
+        not_found = len(active_progress.not_found)
+        errors = len(active_progress.errors)
+
+        return ft.Row(
+            controls=[
+                _stat_card("Found", str(found), AppColors.SUCCESS),
+                _stat_card(
+                    "Not Found",
+                    str(not_found),
+                    ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
+                ),
+                _stat_card("Errors", str(errors), AppColors.WARNING),
+                _stat_card("Total", str(total), ft.Colors.PRIMARY),
+            ],
+            spacing=tokens.SPACE_SM,
+            alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+        )
+
     def _build_stats():
-        if not progress:
+        if not active_progress:
             return ft.Container()
-        total = progress.total_sites
-        found = len(progress.found)
-        not_found = len(progress.not_found)
-        errors = len(progress.errors)
 
         return ft.Container(
-            content=ft.Row(
-                controls=[
-                    _stat_card("Found", str(found), AppColors.SUCCESS),
-                    _stat_card(
-                        "Not Found",
-                        str(not_found),
-                        ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
-                    ),
-                    _stat_card("Errors", str(errors), AppColors.WARNING),
-                    _stat_card("Total", str(total), ft.Colors.PRIMARY),
-                ],
-                spacing=tokens.SPACE_SM,
-                alignment=ft.MainAxisAlignment.SPACE_EVENLY,
-            ),
+            ref=stats_card_ref,
+            content=_build_stats_row(),
             padding=tokens.SPACE_LG,
             border_radius=tokens.RADIUS_MD,
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
@@ -190,7 +217,7 @@ def build_results_view(
         )
 
     def _update_lists():
-        if not progress:
+        if not active_progress:
             return
 
         query = filter_query.strip().lower()
@@ -198,7 +225,9 @@ def build_results_view(
         # Update Found tab
         found_list.current.controls.clear()
         found_items = [
-            r for r in progress.found if not query or query in r.site_name.lower()
+            r
+            for r in active_progress.found
+            if not query or query in r.site_name.lower()
         ]
         for r in found_items:
             found_list.current.controls.append(_build_result_tile(r))
@@ -218,7 +247,9 @@ def build_results_view(
         # Update Not Found tab
         notfound_list.current.controls.clear()
         notfound_items = [
-            r for r in progress.not_found if not query or query in r.site_name.lower()
+            r
+            for r in active_progress.not_found
+            if not query or query in r.site_name.lower()
         ]
         for r in notfound_items:
             notfound_list.current.controls.append(_build_result_tile(r))
@@ -238,7 +269,9 @@ def build_results_view(
         # Update Errors tab
         error_list.current.controls.clear()
         error_items = [
-            r for r in progress.errors if not query or query in r.site_name.lower()
+            r
+            for r in active_progress.errors
+            if not query or query in r.site_name.lower()
         ]
         for r in error_items:
             error_list.current.controls.append(_build_result_tile(r))
@@ -266,15 +299,15 @@ def build_results_view(
             on_cancel()
 
     async def _copy_all_urls(e):
-        if not progress or not progress.found:
+        if not active_progress or not active_progress.found:
             page.snack_bar = ft.SnackBar(
-                ft.Text("No profiles found."), bgcolor=ft.Colors.RED
+                ft.Text("No profiles found."), bgcolor=AppColors.ERROR
             )
             page.snack_bar.open = True
             page.update()
             return
 
-        urls = [r.url_user for r in progress.found if r.url_user]
+        urls = [r.url_user for r in active_progress.found if r.url_user]
         text = "\n".join(urls)
         try:
             cb = ft.Clipboard()
@@ -284,17 +317,19 @@ def build_results_view(
                     f"Copied {len(urls)} profile URLs to clipboard",
                     color=ft.Colors.WHITE,
                 ),
-                bgcolor=ft.Colors.GREEN,
+                bgcolor=AppColors.SUCCESS,
             )
         except Exception:
             page.snack_bar = ft.SnackBar(
                 ft.Text("Failed to copy URLs", color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.RED,
+                bgcolor=AppColors.ERROR,
             )
         page.snack_bar.open = True
         page.update()
 
-    username = progress.username if progress else state.last_results_username
+    username = (
+        active_progress.username if active_progress else state.last_results_username
+    )
 
     export_loading = ft.Ref[ft.Container]()
     file_picker = ft.FilePicker()
@@ -309,7 +344,54 @@ def build_results_view(
 
         try:
             # Generate report bytes using standard libraries
-            if format_type == "csv":
+            if format_type == "xlsx":
+                import io
+                import pandas as pd
+
+                output = io.BytesIO()
+                usernames = []
+                names = []
+                url_main = []
+                url_user = []
+                exists = []
+                http_status = []
+                response_time_s = []
+
+                if active_progress:
+                    all_results = (
+                        active_progress.found
+                        + active_progress.not_found
+                        + active_progress.errors
+                    )
+                    for r in all_results:
+                        usernames.append(active_progress.username)
+                        names.append(r.site_name)
+                        url_main.append(r.url_main)
+                        url_user.append(r.url_user or r.url_main)
+                        exists.append(r.status)
+                        http_status.append(r.http_status)
+                        response_time_s.append(
+                            f"{r.query_time:.2f}" if r.query_time else ""
+                        )
+
+                df = pd.DataFrame(
+                    {
+                        "username": usernames,
+                        "name": names,
+                        "url_main": url_main,
+                        "url_user": url_user,
+                        "exists": exists,
+                        "http_status": http_status,
+                        "response_time_s": response_time_s,
+                    }
+                )
+
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    df.to_excel(writer, index=False, sheet_name="sheet1")
+
+                report_bytes = output.getvalue()
+
+            elif format_type == "csv":
                 import io
                 import csv
 
@@ -318,31 +400,31 @@ def build_results_view(
                 writer.writerow(
                     ["Username", "Site Name", "Profile URL", "Status", "Query Time (s)"]
                 )
-                if progress:
-                    for r in progress.found:
+                if active_progress:
+                    for r in active_progress.found:
                         writer.writerow(
                             [
-                                progress.username,
+                                active_progress.username,
                                 r.site_name,
                                 r.url_user,
                                 r.status,
                                 f"{r.query_time:.2f}" if r.query_time else "",
                             ]
                         )
-                    for r in progress.not_found:
+                    for r in active_progress.not_found:
                         writer.writerow(
                             [
-                                progress.username,
+                                active_progress.username,
                                 r.site_name,
                                 r.url_user or r.url_main,
                                 r.status,
                                 f"{r.query_time:.2f}" if r.query_time else "",
                             ]
                         )
-                    for r in progress.errors:
+                    for r in active_progress.errors:
                         writer.writerow(
                             [
-                                progress.username,
+                                active_progress.username,
                                 r.site_name,
                                 r.url_user or r.url_main,
                                 r.status,
@@ -352,11 +434,11 @@ def build_results_view(
                 report_bytes = output.getvalue().encode("utf-8")
             else:
                 output = []
-                if progress:
-                    for r in progress.found:
+                if active_progress:
+                    for r in active_progress.found:
                         if r.url_user:
                             output.append(f"{r.url_user}\n")
-                    output.append(f"Total Detected : {len(progress.found)}\n")
+                    output.append(f"Total Detected : {len(active_progress.found)}\n")
                 report_bytes = "".join(output).encode("utf-8")
 
             ext = format_type.lower()
@@ -396,7 +478,7 @@ def build_results_view(
 
             page.snack_bar = ft.SnackBar(
                 ft.Text("Saved successfully!", color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.GREEN,
+                bgcolor=AppColors.SUCCESS,
             )
         except Exception as ex:
             logger.exception("Failed to write scan report:")
@@ -421,6 +503,10 @@ def build_results_view(
         content=ft.Text("Select your preferred file format to save the results:"),
         actions=[
             ft.TextButton(
+                "Excel Spreadsheet (.xlsx)",
+                on_click=lambda e: page.run_task(_on_export_click, "xlsx"),
+            ),
+            ft.TextButton(
                 "CSV Spreadsheet (.csv)",
                 on_click=lambda e: page.run_task(_on_export_click, "csv"),
             ),
@@ -438,7 +524,7 @@ def build_results_view(
 
     def _show_format_dialog(e):
         logger.info("Download/Export button clicked. Preparing dialog...")
-        if not progress:
+        if not active_progress:
             logger.warning("No progress object found. Cannot export.")
             return
         logger.info("Showing Export dialog via page.show_dialog().")
@@ -464,23 +550,26 @@ def build_results_view(
                 icon=ft.Icons.DOWNLOAD_ROUNDED,
                 tooltip="Export search report",
                 on_click=_show_format_dialog,
-                disabled=(progress.is_running if progress else False)
+                disabled=(active_progress.is_running if active_progress else False)
                 or not (
-                    progress
-                    and (len(progress.found) > 0 or len(progress.not_found) > 0)
+                    active_progress
+                    and (
+                        len(active_progress.found) > 0
+                        or len(active_progress.not_found) > 0
+                    )
                 ),
             ),
             ft.IconButton(
                 icon=ft.Icons.CONTENT_COPY_ROUNDED,
                 tooltip="Copy all profile URLs to clipboard",
                 on_click=_copy_all_urls,
-                disabled=not (progress and len(progress.found) > 0),
+                disabled=not (active_progress and len(active_progress.found) > 0),
             ),
             ft.IconButton(
                 icon=ft.Icons.REFRESH_ROUNDED,
                 tooltip="Search again",
                 on_click=lambda e: on_restart(username),
-                disabled=progress.is_running if progress else False,
+                disabled=active_progress.is_running if active_progress else False,
             ),
         ],
     )
@@ -508,9 +597,9 @@ def build_results_view(
         ),
     )
 
-    found_count = len(progress.found) if progress else 0
-    notfound_count = len(progress.not_found) if progress else 0
-    error_count = len(progress.errors) if progress else 0
+    found_count = len(active_progress.found) if active_progress else 0
+    notfound_count = len(active_progress.not_found) if active_progress else 0
+    error_count = len(active_progress.errors) if active_progress else 0
 
     tabs = ft.Tabs(
         ref=tab_container,
@@ -573,10 +662,51 @@ def build_results_view(
         expand=True,
     )
 
+    # Dynamic target username selector dropdown when searching multiple targets
+    target_selector = ft.Container(width=0, height=0)
+
+    async def _on_target_change(e):
+        state.active_username = e.control.value
+        act_prog = state.target_results.get(e.control.value)
+        _update_active_progress(act_prog)
+        page.update()
+
+    def _update_active_progress(new_prog):
+        nonlocal active_progress
+        active_progress = new_prog
+        if stats_card_ref.current:
+            stats_card_ref.current.content = _build_stats_row()
+        _update_lists()
+        if tab_container.current:
+            tab_bar = tab_container.current.content.controls[0]
+            f_cnt = len(active_progress.found) if active_progress else 0
+            nf_cnt = len(active_progress.not_found) if active_progress else 0
+            e_cnt = len(active_progress.errors) if active_progress else 0
+            tab_bar.tabs[0].label = f"Found ({f_cnt})"
+            tab_bar.tabs[1].label = f"Not Found ({nf_cnt})"
+            tab_bar.tabs[2].label = f"Errors ({e_cnt})"
+
+    if len(state.search_targets) > 1:
+        target_selector = ft.Container(
+            content=ft.Dropdown(
+                value=active_target,
+                options=[ft.dropdown.Option(tgt) for tgt in state.search_targets],
+                on_select=lambda e: page.run_task(_on_target_change, e),
+                label="Viewing Results For",
+                label_style=ft.TextStyle(size=tokens.FONT_XS, color=ft.Colors.PRIMARY),
+                border_color=ft.Colors.with_opacity(0.2, ft.Colors.ON_SURFACE),
+                focused_border_color=ft.Colors.PRIMARY,
+                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                border_radius=tokens.RADIUS_SM,
+                height=55,
+            ),
+            padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0),
+        )
+
     _update_lists()
 
     controls = []
-    if progress and progress.is_running:
+    if active_progress and active_progress.is_running:
         controls.append(
             ft.Container(
                 content=ft.Column(
@@ -591,7 +721,7 @@ def build_results_view(
                             ref=progress_row,
                             controls=[
                                 ft.Text(
-                                    f"Checking {progress.checked_sites}/{progress.total_sites} sites...",
+                                    f"Checking {active_progress.checked_sites}/{active_progress.total_sites} sites...",
                                     size=tokens.FONT_SM,
                                     color=ft.Colors.with_opacity(
                                         0.5, ft.Colors.ON_SURFACE
@@ -645,6 +775,7 @@ def build_results_view(
 
     controls.extend(
         [
+            target_selector,
             _build_stats(),
             loading_overlay,
             filter_box,

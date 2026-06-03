@@ -7,11 +7,12 @@
 </p>
 
 <p align="center">
-  <a href="#download"><img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows" /></a>
-  <a href="#android"><img src="https://img.shields.io/badge/Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /></a>
-  <br>
-  <img src="https://img.shields.io/badge/Built%20with-Flet%200.85-00B0FF?style=flat-square" alt="Built with Flet" />
+  <a href="https://play.google.com/store/apps/details?id=ng.kiri.sherlock"><img src="https://img.shields.io/badge/Google_Play-Android-3DDC84?style=for-the-badge&logo=google-play&logoColor=white" alt="Google Play Store" /></a>
+  <a href="https://github.com/Nwokike/Sherlock/releases/latest"><img src="https://img.shields.io/badge/Download-APK-orange?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" /></a>
+  <img src="https://img.shields.io/badge/Built%20with-Flet%200.85-00B0FF?style=for-the-badge&logo=flutter&logoColor=white" alt="Flet" />
+  <img src="https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
+
 
 ---
 
@@ -19,8 +20,7 @@
 
 | Platform | Download | Notes |
 | :---: | :---: | :--- |
-| 🪟 **Windows** | [**Sherlock_Setup.exe**](https://github.com/Nwokike/Sherlock/releases/latest/download/Sherlock_Setup.exe) | Windows 10/11 64-bit Installer |
-| 🤖 **Android** | [![Play Store](https://img.shields.io/badge/Google_Play-414141?style=flat-square&logo=google-play&logoColor=white)](https://play.google.com/store/apps/details?id=ng.kiri.sherlock) | Recommended for most mobile users |
+| 🤖 **Android** | [![Play Store](https://img.shields.io/badge/Google_Play-414141?style=flat-square&logo=google-play&logoColor=white)](https://play.google.com/store/apps/details?id=ng.kiri.sherlock) | Recommended for Android mobile users |
 
 ### Android Architecture Build Splits
 
@@ -41,23 +41,23 @@
 | **Selective Target Scope** | Bulk selection management. Focus your scans by enabling "Select All", "Deselect All", or "Only Popular" (popular platforms finish in under 1.5 seconds). |
 | **Throttled Real-Time Ticking** | Features a thread-safe progress collect-notifier throttled to a smooth 250ms interval, preventing rendering freezes and allowing live counter ticking. |
 | **Premium Data Exports** | Export complete scan results to your system Downloads folder as clean Plain Text, CSV spreadsheets, or beautifully structured Excel (.xlsx) files. |
-| **Local Sandbox Security** | Hardened sandboxed storage framework guaranteeing zero permission conflicts on both Windows and Android environments. |
+| **Local Sandbox Security** | Hardened sandboxed storage framework guaranteeing zero permission conflicts on Android environment. |
 
 ---
 
 ## Screenshots
 
-### Desktop Experience
+### Widescreen & Tablet Experience
 
 <p align="center">
-  <img src="screenshots/Desktop_Light.png" width="90%" alt="Desktop Search Interface — Light Mode" />
+  <img src="screenshots/Desktop_Light.png" width="90%" alt="Widescreen Search Interface — Light Mode" />
 </p>
-<p align="center"><em>Desktop Search Interface (Light Mode) — Pure white parchment background optimized for high contrast, clean typography, and instant clipboard pasting.</em></p>
+<p align="center"><em>Widescreen Search Interface (Light Mode) — Pure white parchment background optimized for high contrast, clean typography, and instant clipboard pasting on tablets or widescreen Android devices.</em></p>
 
 <p align="center">
-  <img src="screenshots/Desktop_Dark.png" width="90%" alt="Desktop Scan Results — Dark Mode" />
+  <img src="screenshots/Desktop_Dark.png" width="90%" alt="Widescreen Scan Results — Dark Mode" />
 </p>
-<p align="center"><em>Desktop Scan Results (Dark Mode) — Classic Monokai earth-charcoal theme featuring active status breakdowns, live filtering, and bulk browser launching.</em></p>
+<p align="center"><em>Widescreen Scan Results (Dark Mode) — Classic Monokai earth-charcoal theme featuring active status breakdowns and live filtering on tablets or widescreen Android devices.</em></p>
 
 ### Mobile Experience
 
@@ -110,7 +110,7 @@
 ## Features
 
 - **Gold-Branded Design System** — Custom Solarized Light (Pure White) and classic Monokai themes aligned perfectly to the bronze-gold detective logo.
-- **Bulk Profile Opener** — Open all discovered social profiles in individual browser tabs in one click.
+- **Real-Time Debug Console Drawer** — Collapsible monospace terminal logs drawer streaming connection status checks, timings, and HTTP responses in real-time.
 - **Live Text-Search Filters** — Instantly filter hundreds of results in real-time as the background scanner is running.
 - **GitHub Database Syncing** — Fetch, validate, and write the latest master database rules from GitHub to guarantee search accuracy.
 - **Preloaded Interstitial Ads** — Intelligent Google AdMob integration that buffers and displays interstitial ads seamlessly on mobile platforms.

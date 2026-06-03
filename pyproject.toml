@@ -20,10 +20,6 @@ build_number = 1
 [tool.flet.app]
 path = "src"
 
-[tool.flet.splash]
-color = "#0A0A0A"
-dark_color = "#0A0A0A"
-
 [tool.flet.app.boot_screen]
 show = true
 message = "Initializing Sherlock..."

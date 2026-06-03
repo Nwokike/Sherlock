@@ -231,28 +231,26 @@ def build_home_view(
     header = ft.Container(
         content=ft.Column(
             controls=[
-                ft.Container(height=40),
                 ft.Image(
                     src="icon.png",
-                    width=80,
-                    height=80,
-                    border_radius=16,
+                    width=72,
+                    height=72,
+                    border_radius=12,
                     fit=ft.BoxFit.CONTAIN,
                 ),
-                ft.Container(height=12),
+                ft.Container(height=8),
                 ft.Text(
                     APP_NAME,
-                    size=28,
+                    size=26,
                     weight=ft.FontWeight.W_700,
                     color=ft.Colors.ON_SURFACE,
                     text_align=ft.TextAlign.CENTER,
                 ),
                 ft.Text(
                     "Hunt down social media accounts\nby username across 400+ networks",
-                    size=tokens.FONT_MD,
+                    size=tokens.FONT_SM,
                     color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE),
                     text_align=ft.TextAlign.CENTER,
-                    height=40,
                 ),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -261,8 +259,8 @@ def build_home_view(
         padding=ft.Padding(
             left=tokens.SPACE_LG,
             right=tokens.SPACE_LG,
-            top=tokens.SPACE_XL,
-            bottom=tokens.SPACE_LG,
+            top=tokens.SPACE_LG,
+            bottom=tokens.SPACE_SM,
         ),
     )
 
@@ -271,20 +269,28 @@ def build_home_view(
             controls=[
                 ft.TextField(
                     ref=username_ref,
-                    hint_text="Enter username...",
+                    hint_text="Enter username(s)... (e.g. user1, user2{?})",
                     prefix_icon=ft.Icons.SEARCH,
-                    border_radius=tokens.RADIUS_LG,
-                    border_width=1.5,
-                    border_color=ft.Colors.with_opacity(0.2, ft.Colors.ON_SURFACE),
+                    border_radius=tokens.RADIUS_MD,
+                    border_width=1.0,
+                    border_color=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
                     focused_border_color=ft.Colors.PRIMARY,
                     bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
                     filled=True,
                     text_style=ft.TextStyle(
-                        size=tokens.FONT_LG,
+                        size=tokens.FONT_MD,
+                    ),
+                    hint_style=ft.TextStyle(
+                        size=tokens.FONT_MD,
+                        color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
                     ),
                     on_submit=_on_submit,
+                    height=50,
+                    content_padding=ft.Padding(left=12, top=10, right=12, bottom=10),
                     suffix=ft.IconButton(
                         icon=ft.Icons.PASTE_ROUNDED,
+                        icon_size=20,
+                        icon_color=ft.Colors.PRIMARY,
                         tooltip=LBL_PASTE_CLIPBOARD,
                         on_click=_paste_clipboard,
                     ),
@@ -293,22 +299,22 @@ def build_home_view(
                 ft.FilledButton(
                     content=ft.Text(
                         "Search",
-                        size=tokens.FONT_LG,
+                        size=tokens.FONT_MD,
                         weight=ft.FontWeight.W_600,
                     ),
                     on_click=_on_search_click,
                     style=ft.ButtonStyle(
-                        shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_LG),
+                        shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_MD),
                         bgcolor=ft.Colors.PRIMARY,
                         color=ft.Colors.WHITE,
                         padding=ft.Padding(
                             left=tokens.SPACE_XL * 2,
                             right=tokens.SPACE_XL * 2,
-                            top=tokens.SPACE_MD,
-                            bottom=tokens.SPACE_MD,
+                            top=12,
+                            bottom=12,
                         ),
                     ),
-                    width=240,
+                    width=200,
                 ),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,

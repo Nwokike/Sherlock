@@ -19,6 +19,10 @@ from core.constants import (
     STORAGE_LOCAL_DB,
     STORAGE_SELECTED_SITES,
     STORAGE_ONBOARDING_DONE,
+    STORAGE_TOR,
+    STORAGE_UNIQUE_TOR,
+    STORAGE_PROXY,
+    STORAGE_MANIFEST,
 )
 from services.storage_service import StorageService
 from services.ad_service import AdService
@@ -107,6 +111,19 @@ async def main(page: ft.Page):
             state.selected_sites = selected_raw.split(",")
         else:
             state.selected_sites = []
+
+        # Load advanced network & logging settings
+        tor_raw = await storage.get(STORAGE_TOR)
+        state.tor_enabled = tor_raw == "true"
+
+        unique_tor_raw = await storage.get(STORAGE_UNIQUE_TOR)
+        state.unique_tor_enabled = unique_tor_raw == "true"
+
+        proxy_raw = await storage.get(STORAGE_PROXY)
+        state.proxy_url = proxy_raw if proxy_raw else ""
+
+        manifest_raw = await storage.get(STORAGE_MANIFEST)
+        state.custom_manifest = manifest_raw if manifest_raw else ""
     except Exception as e:
         logger.warning("Settings load failed: %s", e)
 
@@ -114,6 +131,17 @@ async def main(page: ft.Page):
 
     if sherlock_service.is_available:
         page.run_task(sherlock_service.load_sites)
+
+    async def check_sherlock_updates():
+        try:
+            latest = await sherlock_service.check_updates()
+            if latest:
+                state.update_available_version = latest
+                logger.info("New Sherlock version available: %s", latest)
+        except Exception:
+            pass
+
+    page.run_task(check_sherlock_updates)
 
     async def on_disconnect(e=None):
         try:
@@ -246,7 +274,8 @@ async def main(page: ft.Page):
             except Exception as e:
                 logger.exception("Search failed: %s", e)
                 state.is_searching = False
-                page.update()
+                state.search_error = str(e)
+                await navigate("/home")
 
         async def _refresh_view(progress_data):
             nonlocal current_results_view
@@ -339,6 +368,103 @@ async def main(page: ft.Page):
                 on_search=start_search_sync,
             )
             page.views.append(view)
+
+            if state.search_error:
+                error_msg = state.search_error
+                state.search_error = None
+                from core.theme import AppColors
+                from core import tokens
+
+                # Check if Tor was active during search
+                is_tor_active = state.tor_enabled or state.unique_tor_enabled
+
+                # Context-aware advice details
+                if is_tor_active and any(
+                    k in error_msg.lower() for k in ("tor", "connection", "proxy")
+                ):
+                    title_text = "Tor Connection Failed"
+                    alert_icon = ft.Icons.CELL_TOWER_ROUNDED
+                    icon_color = AppColors.WARNING
+                    description_text = (
+                        "Sherlock failed to establish a connection via Tor.\n\n"
+                        "Since Tor is enabled in settings, you must have an active Tor proxy/daemon "
+                        "like Orbot on Android running on port 9050.\n\n"
+                        "To fix this:\n"
+                        "• Start/restart your Tor/Orbot service, or\n"
+                        "• Go to settings and disable Tor/Unique Tor toggles."
+                    )
+                else:
+                    title_text = "Search Failed"
+                    alert_icon = ft.Icons.ERROR_OUTLINE_ROUNDED
+                    icon_color = AppColors.ERROR
+                    if is_tor_active:
+                        description_text = (
+                            f"{error_msg}\n\n"
+                            "Note: Tor routing is currently active in settings. If you did not mean to "
+                            "use Tor, please go to settings to disable it."
+                        )
+                    else:
+                        description_text = (
+                            f"{error_msg}\n\n"
+                            "Please check your internet connection or proxy settings."
+                        )
+
+                def _close_error_alert(evt):
+                    page.pop_dialog()
+
+                def _go_to_settings(evt):
+                    page.pop_dialog()
+                    navigate_sync("/settings")
+
+                actions = [
+                    ft.TextButton(
+                        "Dismiss",
+                        on_click=_close_error_alert,
+                    )
+                ]
+                if is_tor_active:
+                    actions.insert(
+                        0,
+                        ft.TextButton(
+                            "Go to Settings",
+                            on_click=_go_to_settings,
+                        ),
+                    )
+
+                error_dialog = ft.AlertDialog(
+                    title=ft.Row(
+                        controls=[
+                            ft.Icon(
+                                alert_icon,
+                                color=icon_color,
+                                size=24,
+                            ),
+                            ft.Text(
+                                title_text,
+                                size=tokens.FONT_LG,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                    content=ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Text(
+                                    description_text,
+                                    size=tokens.FONT_SM,
+                                    color=ft.Colors.ON_SURFACE,
+                                ),
+                            ],
+                            tight=True,
+                            spacing=6,
+                        ),
+                        width=320,
+                    ),
+                    actions=actions,
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
+                page.show_dialog(error_dialog)
 
         elif route == "/history":
             from views.history_view import build_history_view

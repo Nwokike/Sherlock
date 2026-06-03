@@ -92,6 +92,7 @@ class _CollectorQueryNotify(QueryNotify):
             elif sr.status == "Available" or sr.status == "Illegal":
                 self.progress.not_found.append(sr)
             else:
+                # Includes "WAF", "Unknown", or other errors
                 self.progress.errors.append(sr)
 
             if self.on_progress:
@@ -110,6 +111,36 @@ class _CollectorQueryNotify(QueryNotify):
 
     def finish(self, message=None):
         pass
+
+
+def parse_usernames(raw: str) -> list[str]:
+    """Parse comma/space separated list of usernames and expand {?} wildcards."""
+    # Split by comma first, then if there's no comma, split by whitespace
+    if "," in raw:
+        items = [i.strip() for i in raw.split(",")]
+    else:
+        items = raw.split()
+
+    resolved = []
+    checksymbols = ["_", "-", "."]
+    for item in items:
+        item = item.strip()
+        if not item:
+            continue
+        if "{?}" in item:
+            for symb in checksymbols:
+                resolved.append(item.replace("{?}", symb))
+        else:
+            resolved.append(item)
+
+    # Keep order but remove duplicates
+    seen = set()
+    unique = []
+    for item in resolved:
+        if item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique
 
 
 class SherlockService:
@@ -138,18 +169,25 @@ class SherlockService:
             import sherlock_project
             from core.state import state
 
-            # Determine local database path
-            synced_path = Path.home() / ".sherlock" / "synced_data.json"
-            if synced_path.exists():
-                db_path = str(synced_path)
-                logger.info("Using synced database: %s", db_path)
+            if state.custom_manifest:
+                path_arg = state.custom_manifest.strip()
+                logger.info("Using custom manifest database: %s", path_arg)
             else:
-                db_path = os.path.join(
-                    os.path.dirname(sherlock_project.__file__), "resources", "data.json"
-                )
-                logger.info("Using local package database: %s", db_path)
+                # Determine local database path
+                synced_path = Path.home() / ".sherlock" / "synced_data.json"
+                if synced_path.exists():
+                    db_path = str(synced_path)
+                    logger.info("Using synced database: %s", db_path)
+                else:
+                    db_path = os.path.join(
+                        os.path.dirname(sherlock_project.__file__),
+                        "resources",
+                        "data.json",
+                    )
+                    logger.info("Using local package database: %s", db_path)
 
-            path_arg = db_path if state.use_local_db else None
+                path_arg = db_path if state.use_local_db else None
+
             sites = await asyncio.to_thread(
                 SitesInformation,
                 data_file_path=path_arg,
@@ -199,31 +237,65 @@ class SherlockService:
             logger.error("Failed to sync database: %s", e)
             return False
 
+    async def check_updates(self) -> str | None:
+        """Checks for updates. Returns latest version tag if new release is available."""
+        try:
+            import httpx
+            import sherlock_project
+
+            current_ver = sherlock_project.__version__
+            url = sherlock_project.forge_api_latest_release
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    latest_tag = data.get("tag_name", "")
+                    if latest_tag.startswith("v"):
+                        latest_ver = latest_tag[1:]
+                    else:
+                        latest_ver = latest_tag
+
+                    if latest_ver != current_ver:
+                        return latest_ver
+            return None
+        except Exception:
+            return None
+
     async def search(
         self,
         username: str,
         on_progress: Callable[[SearchProgress], None],
         timeout: int = 30,
     ) -> SearchProgress:
-        """Run a sherlock search for the given username with current settings filters."""
+        """Run a sherlock search loop over multi-usernames with current settings filters."""
         if not _SHERLOCK_AVAILABLE:
             raise RuntimeError("Sherlock not available")
 
-        # Load fresh SitesInformation based on current settings
+        from core.state import state
+
+        # Parse comma/space list of usernames & wildcards
+        targets = parse_usernames(username)
+        state.search_targets = targets
+        state.target_results = {}
+        if not targets:
+            raise RuntimeError("No valid usernames specified for scanning")
+
+        # Load fresh SitesInformation based on current manifest configuration
         import os
         from pathlib import Path
         import sherlock_project
-        from core.state import state
 
-        synced_path = Path.home() / ".sherlock" / "synced_data.json"
-        if synced_path.exists():
-            db_path = str(synced_path)
+        if state.custom_manifest:
+            path_arg = state.custom_manifest.strip()
         else:
-            db_path = os.path.join(
-                os.path.dirname(sherlock_project.__file__), "resources", "data.json"
-            )
-
-        path_arg = db_path if state.use_local_db else None
+            synced_path = Path.home() / ".sherlock" / "synced_data.json"
+            if synced_path.exists():
+                db_path = str(synced_path)
+            else:
+                db_path = os.path.join(
+                    os.path.dirname(sherlock_project.__file__), "resources", "data.json"
+                )
+            path_arg = db_path if state.use_local_db else None
 
         try:
             sites = await asyncio.to_thread(
@@ -255,45 +327,80 @@ class SherlockService:
             raise RuntimeError("No sites selected or available for scanning")
 
         self._cancel_event.clear()
-        self._collector = []
-        self._progress = SearchProgress(
-            username=username,
-            total_sites=total_sites,
-            is_running=True,
-        )
-        on_progress(self._progress)
 
         from sherlock_project.sherlock import sherlock
 
-        query_notify = _CollectorQueryNotify(
-            self._collector,
-            total_sites,
-            self._cancel_event,
-            progress=self._progress,
-            on_progress=on_progress,
-        )
+        # Run sequential search loops for each username
+        last_prog = None
+        for i, tgt in enumerate(targets):
+            if self._cancel_event.is_set():
+                break
 
-        def _run():
-            try:
-                results = sherlock(
-                    username=username,
-                    site_data=site_data,
-                    query_notify=query_notify,
-                    timeout=timeout,
-                )
-                return results
-            except Exception as e:
-                logger.exception("Sherlock search failed: %s", e)
-
-        await asyncio.to_thread(_run)
-
-        self._progress.is_running = False
-
-        for _ in range(3):
+            state.active_username = tgt
+            self._collector = []
+            self._progress = SearchProgress(
+                username=tgt,
+                total_sites=total_sites,
+                is_running=True,
+            )
+            state.target_results[tgt] = self._progress
             on_progress(self._progress)
-            await asyncio.sleep(0.05)
 
-        return self._progress
+            query_notify = _CollectorQueryNotify(
+                self._collector,
+                total_sites,
+                self._cancel_event,
+                progress=self._progress,
+                on_progress=on_progress,
+            )
+
+            proxy_str = state.proxy_url.strip() if state.proxy_url.strip() else None
+
+            def _run():
+                try:
+                    results = sherlock(
+                        username=tgt,
+                        site_data=site_data,
+                        query_notify=query_notify,
+                        tor=state.tor_enabled,
+                        unique_tor=state.unique_tor_enabled,
+                        dump_response=False,
+                        proxy=proxy_str,
+                        timeout=timeout,
+                    )
+                    return results
+                except SystemExit as se:
+                    logger.warning(
+                        "Sherlock attempted process exit (SystemExit): %s", se
+                    )
+                    raise RuntimeError(
+                        "Tor connection failed. Please ensure Orbot or Tor is running on port 9050."
+                    ) from se
+                except Exception as e:
+                    logger.exception("Sherlock search failed: %s", e)
+                    raise e
+
+            try:
+                await asyncio.to_thread(_run)
+            finally:
+                self._progress.is_running = False
+
+            on_progress(self._progress)
+            last_prog = self._progress
+
+        # Handle remaining cancelled targets if any
+        for tgt in targets:
+            if tgt not in state.target_results:
+                state.target_results[tgt] = SearchProgress(
+                    username=tgt,
+                    total_sites=total_sites,
+                    is_cancelled=True,
+                )
+            elif self._cancel_event.is_set() and state.target_results[tgt].is_running:
+                state.target_results[tgt].is_running = False
+                state.target_results[tgt].is_cancelled = True
+
+        return last_prog or self._progress
 
     def cancel(self):
         """Cancel a running search."""
@@ -301,3 +408,10 @@ class SherlockService:
         if self._progress:
             self._progress.is_cancelled = True
             self._progress.is_running = False
+        from core.state import state
+
+        for tgt in state.target_results:
+            prog = state.target_results[tgt]
+            if prog.is_running:
+                prog.is_running = False
+                prog.is_cancelled = True

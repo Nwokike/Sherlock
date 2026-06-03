@@ -11,6 +11,7 @@ from core import tokens
 from core.state import state
 from core.constants import STORAGE_SELECTED_SITES
 from core.styles import build_banner_ad
+from core.theme import AppColors
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ def build_sites_view(
                                                 weight=ft.FontWeight.W_700,
                                                 color=ft.Colors.WHITE,
                                             ),
-                                            bgcolor=ft.Colors.RED,
+                                            bgcolor=AppColors.ERROR,
                                             padding=ft.Padding(4, 1, 4, 1),
                                             border_radius=tokens.RADIUS_XS,
                                             visible=is_nsfw,

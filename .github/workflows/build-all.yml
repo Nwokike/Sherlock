@@ -21,66 +21,6 @@ env:
   BUILD_NUMBER: ${{ inputs.build_number || '1' }}
 
 jobs:
-  # ─── Windows (.exe Installer) ────────────────────
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-
-      - name: Build Windows Portable
-        run: uv run flet build windows --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
-
-      - name: Generate Icon for Installer
-        run: |
-          uv pip install pillow
-          uv run python -c "from PIL import Image; Image.open('src/assets/icon.png').save('src/assets/icon.ico', format='ICO', sizes=[(256, 256)])"
-
-      - name: Build Windows Installer (Inno Setup)
-        run: |
-          $IssContent = @"
-          [Setup]
-          AppId={{C2D3E4F5-A6B7-8901-2345-67890ABCDEF0}}
-          AppName=Sherlock
-          AppVersion=${{ env.BUILD_VERSION }}
-          AppPublisher=Kiri
-          AppPublisherURL=https://kiri.ng
-          AppSupportURL=https://kiri.ng/support
-          AppUpdatesURL=https://kiri.ng/updates
-          AppCopyright=Copyright (C) 2026 Kiri
-          DefaultDirName={autopf}\Sherlock
-          DefaultGroupName=Sherlock
-          OutputDir=.\build\installer
-          OutputBaseFilename=Sherlock_Setup
-          Compression=lzma2
-          SolidCompression=yes
-          WizardStyle=modern
-          ArchitecturesAllowed=x64
-          ArchitecturesInstallIn64BitMode=x64
-          PrivilegesRequired=lowest
-          SetupIconFile=.\src\assets\icon.ico
-          UninstallDisplayIcon={app}\sherlock.exe
-          CloseApplications=yes
-          AppMutex=Sherlock_Mutex
-
-          [Files]
-          Source: "build\windows\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-          [Icons]
-          Name: "{group}\Sherlock"; Filename: "{app}\sherlock.exe"
-          Name: "{autodesktop}\Sherlock"; Filename: "{app}\sherlock.exe"; Tasks: desktopicon
-
-          [Tasks]
-          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
-          "@
-          Set-Content -Path "installer.iss" -Value $IssContent -Encoding UTF8
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-
-      - uses: actions/upload-artifact@v5.0.0
-        with:
-          name: Sherlock_Setup.exe
-          path: build/installer/Sherlock_Setup.exe
-
   # ─── Android APK (split per ABI) ───────────────────────
   build-apk-split:
     runs-on: ubuntu-latest

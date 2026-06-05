@@ -269,6 +269,101 @@ async def main(page: ft.Page):
                 state.last_results_username = username
 
                 await _refresh_view(result)
+
+                # Check for high error rate (possible misconfigured proxy or network failure)
+                if (
+                    len(result.found) == 0
+                    and len(result.errors) >= 5
+                    and len(result.errors) >= 0.5 * result.total_sites
+                ):
+                    from core.theme import AppColors
+                    from core import tokens
+
+                    def _close_alert(evt):
+                        page.pop_dialog()
+
+                    def _go_to_settings(evt):
+                        page.pop_dialog()
+                        navigate_sync("/settings")
+
+                    is_proxy_configured = bool(state.proxy_url.strip())
+                    is_tor_active = state.tor_enabled or state.unique_tor_enabled
+
+                    if is_proxy_configured:
+                        title_text = "Proxy Connection Issue?"
+                        icon = ft.Icons.CELL_TOWER_ROUNDED
+                        icon_color = AppColors.WARNING
+                        desc = (
+                            "All or most of the checks failed with connection errors.\n\n"
+                            f"Since you have configured a proxy (**{state.proxy_url}**), please check if:\n"
+                            "• The proxy server is active and reachable.\n"
+                            "• The proxy protocol and address are correct.\n\n"
+                            "You can update or disable the proxy in **Settings**."
+                        )
+                    elif is_tor_active:
+                        title_text = "Tor Connection Issue?"
+                        icon = ft.Icons.CELL_TOWER_ROUNDED
+                        icon_color = AppColors.WARNING
+                        desc = (
+                            "All or most of the checks failed with connection errors.\n\n"
+                            "Tor routing is enabled, but the connection might have dropped.\n"
+                            "• Ensure Orbot or your Tor daemon is still running on port 9050.\n"
+                            "• Check your network connection.\n\n"
+                            "You can disable Tor in **Settings**."
+                        )
+                    else:
+                        title_text = "Connection Issue?"
+                        icon = ft.Icons.WIFI_OFF_ROUNDED
+                        icon_color = AppColors.ERROR
+                        desc = (
+                            "All or most of the checks failed with connection errors.\n\n"
+                            "This usually happens when:\n"
+                            "• Your device is not connected to the internet.\n"
+                            "• Your network is blocking outgoing automated requests.\n"
+                            "• A SOCKS/HTTP proxy or VPN is misconfigured.\n\n"
+                            "Please check your network settings."
+                        )
+
+                    actions = [ft.TextButton("Dismiss", on_click=_close_alert)]
+                    if is_proxy_configured or is_tor_active:
+                        actions.insert(
+                            0,
+                            ft.TextButton(
+                                "Go to Settings",
+                                on_click=_go_to_settings,
+                            ),
+                        )
+
+                    alert = ft.AlertDialog(
+                        title=ft.Row(
+                            controls=[
+                                ft.Icon(icon, color=icon_color, size=24),
+                                ft.Text(
+                                    title_text,
+                                    size=tokens.FONT_LG,
+                                    weight=ft.FontWeight.BOLD,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        content=ft.Container(
+                            content=ft.Column(
+                                controls=[
+                                    ft.Text(
+                                        desc,
+                                        size=tokens.FONT_SM,
+                                        color=ft.Colors.ON_SURFACE,
+                                    ),
+                                ],
+                                tight=True,
+                            ),
+                            width=320,
+                        ),
+                        actions=actions,
+                        actions_alignment=ft.MainAxisAlignment.END,
+                    )
+                    page.show_dialog(alert)
+
                 page.update()
 
             except Exception as e:
@@ -371,7 +466,6 @@ async def main(page: ft.Page):
 
             if state.search_error:
                 error_msg = state.search_error
-                state.search_error = None
                 from core.theme import AppColors
                 from core import tokens
 
@@ -410,9 +504,11 @@ async def main(page: ft.Page):
                         )
 
                 def _close_error_alert(evt):
+                    state.search_error = None
                     page.pop_dialog()
 
                 def _go_to_settings(evt):
+                    state.search_error = None
                     page.pop_dialog()
                     navigate_sync("/settings")
 

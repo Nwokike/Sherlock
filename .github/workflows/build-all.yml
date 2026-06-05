@@ -7,18 +7,18 @@ on:
       build_version:
         description: "Build version"
         required: true
-        default: "1.0.0"
+        default: "1.1.0"
       build_number:
         description: "Build number"
         required: true
-        default: "1"
+        default: "2"
 
 env:
   PYTHONUTF8: "1"
   FLET_CLI_NO_RICH_OUTPUT: "1"
   UV_PYTHON: "3.13"
-  BUILD_VERSION: ${{ inputs.build_version || '1.0.0' }}
-  BUILD_NUMBER: ${{ inputs.build_number || '1' }}
+  BUILD_VERSION: ${{ inputs.build_version || '1.1.0' }}
+  BUILD_NUMBER: ${{ inputs.build_number || '2' }}
 
 jobs:
   # ─── Android APK (split per ABI) ───────────────────────

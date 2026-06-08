@@ -1,6 +1,6 @@
 [project]
 name = "sherlock"
-version = "1.1.0"
+version = "1.2.0"
 description = "Sherlock: Hunt down social media accounts by username across 400+ networks."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -15,7 +15,7 @@ dependencies = [
 [tool.flet]
 org = "ng.kiri"
 product = "Sherlock"
-build_number = 2
+build_number = 3
 
 [tool.flet.app]
 path = "src"

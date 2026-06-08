@@ -354,18 +354,13 @@ class SherlockService:
                 on_progress=on_progress,
             )
 
-            proxy_str = state.proxy_url.strip() if state.proxy_url.strip() else None
-
             def _run():
                 try:
                     results = sherlock(
                         username=tgt,
                         site_data=site_data,
                         query_notify=query_notify,
-                        tor=state.tor_enabled,
-                        unique_tor=state.unique_tor_enabled,
                         dump_response=False,
-                        proxy=proxy_str,
                         timeout=timeout,
                     )
                     return results
@@ -374,7 +369,7 @@ class SherlockService:
                         "Sherlock attempted process exit (SystemExit): %s", se
                     )
                     raise RuntimeError(
-                        "Tor connection failed. Please ensure Orbot or Tor is running on port 9050."
+                        "Connection failed. Please check your network settings."
                     ) from se
                 except Exception as e:
                     logger.exception("Sherlock search failed: %s", e)

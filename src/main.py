@@ -19,9 +19,6 @@ from core.constants import (
     STORAGE_LOCAL_DB,
     STORAGE_SELECTED_SITES,
     STORAGE_ONBOARDING_DONE,
-    STORAGE_TOR,
-    STORAGE_UNIQUE_TOR,
-    STORAGE_PROXY,
     STORAGE_MANIFEST,
 )
 from services.storage_service import StorageService
@@ -111,16 +108,6 @@ async def main(page: ft.Page):
             state.selected_sites = selected_raw.split(",")
         else:
             state.selected_sites = []
-
-        # Load advanced network & logging settings
-        tor_raw = await storage.get(STORAGE_TOR)
-        state.tor_enabled = tor_raw == "true"
-
-        unique_tor_raw = await storage.get(STORAGE_UNIQUE_TOR)
-        state.unique_tor_enabled = unique_tor_raw == "true"
-
-        proxy_raw = await storage.get(STORAGE_PROXY)
-        state.proxy_url = proxy_raw if proxy_raw else ""
 
         manifest_raw = await storage.get(STORAGE_MANIFEST)
         state.custom_manifest = manifest_raw if manifest_raw else ""
@@ -282,57 +269,19 @@ async def main(page: ft.Page):
                     def _close_alert(evt):
                         page.pop_dialog()
 
-                    def _go_to_settings(evt):
-                        page.pop_dialog()
-                        navigate_sync("/settings")
-
-                    is_proxy_configured = bool(state.proxy_url.strip())
-                    is_tor_active = state.tor_enabled or state.unique_tor_enabled
-
-                    if is_proxy_configured:
-                        title_text = "Proxy Connection Issue?"
-                        icon = ft.Icons.CELL_TOWER_ROUNDED
-                        icon_color = AppColors.WARNING
-                        desc = (
-                            "All or most of the checks failed with connection errors.\n\n"
-                            f"Since you have configured a proxy (**{state.proxy_url}**), please check if:\n"
-                            "• The proxy server is active and reachable.\n"
-                            "• The proxy protocol and address are correct.\n\n"
-                            "You can update or disable the proxy in **Settings**."
-                        )
-                    elif is_tor_active:
-                        title_text = "Tor Connection Issue?"
-                        icon = ft.Icons.CELL_TOWER_ROUNDED
-                        icon_color = AppColors.WARNING
-                        desc = (
-                            "All or most of the checks failed with connection errors.\n\n"
-                            "Tor routing is enabled, but the connection might have dropped.\n"
-                            "• Ensure Orbot or your Tor daemon is still running on port 9050.\n"
-                            "• Check your network connection.\n\n"
-                            "You can disable Tor in **Settings**."
-                        )
-                    else:
-                        title_text = "Connection Issue?"
-                        icon = ft.Icons.WIFI_OFF_ROUNDED
-                        icon_color = AppColors.ERROR
-                        desc = (
-                            "All or most of the checks failed with connection errors.\n\n"
-                            "This usually happens when:\n"
-                            "• Your device is not connected to the internet.\n"
-                            "• Your network is blocking outgoing automated requests.\n"
-                            "• A SOCKS/HTTP proxy or VPN is misconfigured.\n\n"
-                            "Please check your network settings."
-                        )
+                    title_text = "Connection Issue?"
+                    icon = ft.Icons.WIFI_OFF_ROUNDED
+                    icon_color = AppColors.ERROR
+                    desc = (
+                        "All or most of the checks failed with connection errors.\n\n"
+                        "This usually happens when:\n"
+                        "• Your device is not connected to the internet.\n"
+                        "• Your network is blocking outgoing automated requests.\n"
+                        "• A VPN or proxy is misconfigured.\n\n"
+                        "Please check your network settings."
+                    )
 
                     actions = [ft.TextButton("Dismiss", on_click=_close_alert)]
-                    if is_proxy_configured or is_tor_active:
-                        actions.insert(
-                            0,
-                            ft.TextButton(
-                                "Go to Settings",
-                                on_click=_go_to_settings,
-                            ),
-                        )
 
                     alert = ft.AlertDialog(
                         title=ft.Row(
@@ -469,48 +418,17 @@ async def main(page: ft.Page):
                 from core.theme import AppColors
                 from core import tokens
 
-                # Check if Tor was active during search
-                is_tor_active = state.tor_enabled or state.unique_tor_enabled
-
-                # Context-aware advice details
-                if is_tor_active and any(
-                    k in error_msg.lower() for k in ("tor", "connection", "proxy")
-                ):
-                    title_text = "Tor Connection Failed"
-                    alert_icon = ft.Icons.CELL_TOWER_ROUNDED
-                    icon_color = AppColors.WARNING
-                    description_text = (
-                        "Sherlock failed to establish a connection via Tor.\n\n"
-                        "Since Tor is enabled in settings, you must have an active Tor proxy/daemon "
-                        "like Orbot on Android running on port 9050.\n\n"
-                        "To fix this:\n"
-                        "• Start/restart your Tor/Orbot service, or\n"
-                        "• Go to settings and disable Tor/Unique Tor toggles."
-                    )
-                else:
-                    title_text = "Search Failed"
-                    alert_icon = ft.Icons.ERROR_OUTLINE_ROUNDED
-                    icon_color = AppColors.ERROR
-                    if is_tor_active:
-                        description_text = (
-                            f"{error_msg}\n\n"
-                            "Note: Tor routing is currently active in settings. If you did not mean to "
-                            "use Tor, please go to settings to disable it."
-                        )
-                    else:
-                        description_text = (
-                            f"{error_msg}\n\n"
-                            "Please check your internet connection or proxy settings."
-                        )
+                title_text = "Search Failed"
+                alert_icon = ft.Icons.ERROR_OUTLINE_ROUNDED
+                icon_color = AppColors.ERROR
+                description_text = (
+                    f"{error_msg}\n\n"
+                    "Please check your internet connection or proxy settings."
+                )
 
                 def _close_error_alert(evt):
                     state.search_error = None
                     page.pop_dialog()
-
-                def _go_to_settings(evt):
-                    state.search_error = None
-                    page.pop_dialog()
-                    navigate_sync("/settings")
 
                 actions = [
                     ft.TextButton(
@@ -518,14 +436,6 @@ async def main(page: ft.Page):
                         on_click=_close_error_alert,
                     )
                 ]
-                if is_tor_active:
-                    actions.insert(
-                        0,
-                        ft.TextButton(
-                            "Go to Settings",
-                            on_click=_go_to_settings,
-                        ),
-                    )
 
                 error_dialog = ft.AlertDialog(
                     title=ft.Row(

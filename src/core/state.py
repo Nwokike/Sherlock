@@ -26,9 +26,6 @@ class AppState:
     db_sync_status: str = "Idle"
 
     # Advanced settings
-    tor_enabled: bool = False
-    unique_tor_enabled: bool = False
-    proxy_url: str = ""
     custom_manifest: str = ""
 
     # Multi-username State

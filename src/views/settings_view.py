@@ -14,9 +14,6 @@ from core.constants import (
     STORAGE_EXCLUSIONS,
     STORAGE_TIMEOUT,
     STORAGE_LOCAL_DB,
-    STORAGE_TOR,
-    STORAGE_UNIQUE_TOR,
-    STORAGE_PROXY,
     STORAGE_MANIFEST,
 )
 from core.state import state
@@ -75,45 +72,6 @@ def build_settings_view(
             await storage.set(STORAGE_LOCAL_DB, "true" if e.control.value else "false")
         # Reload sites dynamically
         page.run_task(sherlock_service.load_sites)
-
-    # Toggle Tor helper
-    async def _toggle_tor(e):
-        state.tor_enabled = e.control.value
-        if storage:
-            await storage.set(STORAGE_TOR, "true" if e.control.value else "false")
-        # If Tor is enabled on mobile, show a friendly warning alert
-        if e.control.value:
-
-            def _close_tor_alert(evt):
-                page.pop_dialog()
-
-            tor_alert = ft.AlertDialog(
-                title=ft.Text("Tor Connection Details"),
-                content=ft.Text(
-                    "Using Tor requests on a mobile device requires an external Tor service "
-                    "(like Orbot in VPN/proxy mode) running on port 9050. Scans may fail if "
-                    "no Tor circuit is present.",
-                    size=tokens.FONT_SM,
-                ),
-                actions=[ft.TextButton("I Understand", on_click=_close_tor_alert)],
-            )
-            page.show_dialog(tor_alert)
-        page.update()
-
-    # Toggle Unique Tor helper
-    async def _toggle_unique_tor(e):
-        state.unique_tor_enabled = e.control.value
-        if storage:
-            await storage.set(
-                STORAGE_UNIQUE_TOR, "true" if e.control.value else "false"
-            )
-
-    # Proxy helper
-    async def _on_proxy_change(e):
-        val = e.control.value.strip()
-        state.proxy_url = val
-        if storage:
-            await storage.set(STORAGE_PROXY, val)
 
     # Manifest helper
     async def _on_manifest_change(e):
@@ -389,140 +347,7 @@ def build_settings_view(
         ),
     )
 
-    # 2.5 ADVANCED NETWORKING (PROXY & TOR) CARD
-    proxy_card = ft.Container(
-        content=ft.Column(
-            controls=[
-                # Tor Switch
-                ft.Row(
-                    controls=[
-                        ft.Icon(
-                            ft.Icons.SECURITY_ROUNDED,
-                            color=ft.Colors.ON_SURFACE_VARIANT,
-                            size=tokens.ICON_MD,
-                        ),
-                        ft.Column(
-                            controls=[
-                                ft.Text(
-                                    "Route Scan Over Tor",
-                                    size=tokens.FONT_MD,
-                                    weight=ft.FontWeight.W_500,
-                                ),
-                                ft.Text(
-                                    "Route over Tor network (requires Orbot/Tor on port 9050)",
-                                    size=tokens.FONT_XS,
-                                    color=ft.Colors.with_opacity(
-                                        0.5, ft.Colors.ON_SURFACE
-                                    ),
-                                ),
-                            ],
-                            spacing=2,
-                            expand=True,
-                        ),
-                        ft.Switch(
-                            value=state.tor_enabled,
-                            on_change=lambda e: page.run_task(_toggle_tor, e),
-                            active_color=ft.Colors.PRIMARY,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
-                ft.Divider(
-                    height=1, color=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE)
-                ),
-                # Unique Tor Switch
-                ft.Row(
-                    controls=[
-                        ft.Icon(
-                            ft.Icons.REFRESH_ROUNDED,
-                            color=ft.Colors.ON_SURFACE_VARIANT,
-                            size=tokens.ICON_MD,
-                        ),
-                        ft.Column(
-                            controls=[
-                                ft.Text(
-                                    "Unique Tor Circuits",
-                                    size=tokens.FONT_MD,
-                                    weight=ft.FontWeight.W_500,
-                                ),
-                                ft.Text(
-                                    "Change Tor circuit for each request (slower)",
-                                    size=tokens.FONT_XS,
-                                    color=ft.Colors.with_opacity(
-                                        0.5, ft.Colors.ON_SURFACE
-                                    ),
-                                ),
-                            ],
-                            spacing=2,
-                            expand=True,
-                        ),
-                        ft.Switch(
-                            value=state.unique_tor_enabled,
-                            on_change=lambda e: page.run_task(_toggle_unique_tor, e),
-                            active_color=ft.Colors.PRIMARY,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
-                ft.Divider(
-                    height=1, color=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE)
-                ),
-                # HTTP/SOCKS Proxy Input
-                ft.Column(
-                    controls=[
-                        ft.Row(
-                            controls=[
-                                ft.Icon(
-                                    ft.Icons.SETTINGS_ETHERNET_ROUNDED,
-                                    color=ft.Colors.ON_SURFACE_VARIANT,
-                                    size=tokens.ICON_MD,
-                                ),
-                                ft.Column(
-                                    controls=[
-                                        ft.Text(
-                                            "HTTP / SOCKS Proxy",
-                                            size=tokens.FONT_MD,
-                                            weight=ft.FontWeight.W_500,
-                                        ),
-                                        ft.Text(
-                                            "e.g. socks5://127.0.0.1:1080 or http://proxy:80",
-                                            size=tokens.FONT_XS,
-                                            color=ft.Colors.with_opacity(
-                                                0.5, ft.Colors.ON_SURFACE
-                                            ),
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
-                            ]
-                        ),
-                        ft.TextField(
-                            value=state.proxy_url,
-                            hint_text="socks5://127.0.0.1:1080",
-                            border_radius=tokens.RADIUS_SM,
-                            text_size=tokens.FONT_SM,
-                            content_padding=10,
-                            focused_border_color=ft.Colors.PRIMARY,
-                            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                            filled=True,
-                            on_change=lambda e: page.run_task(_on_proxy_change, e),
-                        ),
-                    ],
-                    spacing=tokens.SPACE_XS,
-                ),
-            ],
-            spacing=tokens.SPACE_MD,
-        ),
-        padding=tokens.SPACE_LG,
-        border_radius=tokens.RADIUS_MD,
-        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-        border=ft.Border.all(
-            width=1, color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE)
-        ),
-    )
-
-    # 2.6 CUSTOM MANIFEST CARD
+    # 2.5 CUSTOM MANIFEST CARD
     manifest_card = ft.Container(
         content=ft.Column(
             controls=[
@@ -752,10 +577,6 @@ def build_settings_view(
             ft.Container(height=tokens.SPACE_SM),
             section_header("CONNECTION & SPEED"),
             performance_card,
-            build_banner_ad(page),
-            ft.Container(height=tokens.SPACE_SM),
-            section_header("ADVANCED PROXY & TOR"),
-            proxy_card,
             build_banner_ad(page),
             ft.Container(height=tokens.SPACE_SM),
             section_header("CUSTOM MANIFEST"),

@@ -1,7 +1,7 @@
 """Application-wide constants."""
 
 APP_NAME = "Sherlock"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 STORAGE_SETTINGS = "sherlock_settings"
 STORAGE_HISTORY = "sherlock_history"
@@ -14,9 +14,6 @@ STORAGE_LOCAL_DB = "sherlock_local_db"
 STORAGE_SELECTED_SITES = "sherlock_selected_sites"
 STORAGE_SYNCED_DB = "sherlock_synced_db"
 STORAGE_ONBOARDING_DONE = "sherlock_onboarding_done"
-STORAGE_TOR = "sherlock_tor"
-STORAGE_UNIQUE_TOR = "sherlock_unique_tor"
-STORAGE_PROXY = "sherlock_proxy"
 STORAGE_MANIFEST = "sherlock_manifest"
 
 

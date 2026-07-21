@@ -15,7 +15,7 @@ dependencies = [
 [tool.flet]
 org = "ng.kiri"
 product = "Sherlock"
-company = "Kiri"
+company = "Kiri Research Labs"
 build_number = 3
 
 [tool.flet.app]

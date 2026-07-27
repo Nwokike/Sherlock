@@ -90,6 +90,15 @@ wheels = [
 ]
 
 [[package]]
+name = "exrex"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/9a/580635ea99178aba728de721e88e5a0d18b528805c58e8b26eab87be2a45/exrex-0.12.0.tar.gz", hash = "sha256:3f582add0700d4141e279625252e7a0655f9ad81feab3b8ab9077966668a2c99", size = 19766, upload-time = "2024-11-13T13:46:36.399Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/90/89fdfc6f426cc6414cc8e1c599c4333d800f8f3ff05cb6ce69c8d0eaa245/exrex-0.12.0-py3-none-any.whl", hash = "sha256:1228f2e3afb008cacf6adc3ec20b098f1303886f4382b57cdf3b7259fb7c0ad3", size = 23590, upload-time = "2024-11-13T13:46:34.647Z" },
+]
+
+[[package]]
 name = "flet"
 version = "0.86.3"
 source = { registry = "https://pypi.org/simple" }
@@ -420,7 +429,7 @@ requires-dist = [
     { name = "flet", specifier = ">=0.86.2" },
     { name = "flet-ads", specifier = ">=0.86.2" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "sherlock-project", specifier = ">=0.16.0" },
+    { name = "sherlock-project", specifier = "==0.14.4" },
     { name = "stem", specifier = "==1.8.1" },
 ]
 
@@ -429,21 +438,23 @@ dev = [{ name = "ruff", specifier = ">=0.15.14" }]
 
 [[package]]
 name = "sherlock-project"
-version = "0.16.0"
+version = "0.14.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "colorama" },
+    { name = "exrex" },
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "pysocks" },
     { name = "requests" },
     { name = "requests-futures" },
     { name = "stem" },
+    { name = "torrequest" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/76/17/d29f35df6ec6424ec15f273a31ad54ad314d1f9056321fb824bed4eda128/sherlock_project-0.16.0.tar.gz", hash = "sha256:fcc8f05fb6f55de30938cce5727249f70917b226918a71f6ed3f50d8a6467610", size = 33892, upload-time = "2025-09-16T02:10:28.69Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/57/0ac8fcde9e2dbdacb20f48e8c20f3049972a59839d8bccbef0799b944140/sherlock_project-0.14.4.tar.gz", hash = "sha256:3c0edc4ebbcdb8eae03d5ce2e377e1c6839d73b8e77388b70125120537917022", size = 37313, upload-time = "2024-05-26T08:55:57.817Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/4e/58d75069c816d0a91edf518a180fa289729cc522706d9e593f231d4e5736/sherlock_project-0.16.0-py3-none-any.whl", hash = "sha256:81bd9eec12ab9d2a476dd03ed853164eccd548260bab90a93a9df7aec5a5be1d", size = 36127, upload-time = "2025-09-16T02:10:27.496Z" },
+    { url = "https://files.pythonhosted.org/packages/32/eb/31ce32efadad34a64089dac969758caf1e5a4b84c2c70ba7eb6367e354c7/sherlock_project-0.14.4-py3-none-any.whl", hash = "sha256:26162c52902b0e3446ddfc15bde8838e0c269fa34ded4391124a2e899c1192b3", size = 38928, upload-time = "2024-05-26T08:55:56.273Z" },
 ]
 
 [[package]]
@@ -460,6 +471,17 @@ name = "stem"
 version = "1.8.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b2/66/c5515de764bffae1347e671819711268da5c02bfab8406223526822fe5f6/stem-1.8.1.tar.gz", hash = "sha256:81d43a7c668ba9d7bc1103b2e7a911e9d148294b373d27a59ae8da79ef7a3e2f", size = 2859634, upload-time = "2022-09-28T20:13:57.217Z" }
+
+[[package]]
+name = "torrequest"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pysocks" },
+    { name = "requests" },
+    { name = "stem" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a3/d2/00538e47a2c80979231313c346a0abc3927c7b230d69eb923bb5b221ec62/torrequest-0.1.0.tar.gz", hash = "sha256:3745d4ea3ffda98d7a034363c787adb37aab77bdab40094a4d937392cd4dae82", size = 1527, upload-time = "2016-08-17T15:00:21.724Z" }
 
 [[package]]
 name = "tzdata"

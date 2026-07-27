@@ -8,7 +8,7 @@ dependencies = [
     "flet>=0.86.2",
     "flet-ads>=0.86.2",
     "httpx>=0.28.1",
-    "sherlock-project>=0.16.0",
+    "sherlock-project==0.14.4",
     "stem==1.8.1",
 ]
 

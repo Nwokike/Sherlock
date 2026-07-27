@@ -1,28 +1,71 @@
-name: Build All Platforms
+name: Build Multi-Platform & Create Release
 
 on:
+  push:
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
     inputs:
       build_version:
         description: "Build version"
         required: true
-        default: "1.2.0"
+        default: "1.2.1"
       build_number:
         description: "Build number"
         required: true
-        default: "3"
+        default: "4"
+
+permissions:
+  contents: write
 
 env:
   PYTHONUTF8: "1"
   FLET_CLI_NO_RICH_OUTPUT: "1"
   UV_PYTHON: "3.13"
-  BUILD_VERSION: ${{ inputs.build_version || '1.2.0' }}
-  BUILD_NUMBER: ${{ inputs.build_number || '3' }}
+  BUILD_VERSION: ${{ inputs.build_version || '1.2.1' }}
+  BUILD_NUMBER: ${{ inputs.build_number || '4' }}
 
 jobs:
+  # ─── 0. Create Release Tag & Placeholder ───────────────
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      TAG_NAME: ${{ steps.tag_info.outputs.TAG_NAME }}
+      RELEASE_NAME: ${{ steps.tag_info.outputs.RELEASE_NAME }}
+      IS_PRERELEASE: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Release Tag & Name
+        id: tag_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "RELEASE_NAME=Sherlock ${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            echo "TAG_NAME=build-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            echo "RELEASE_NAME=Automated Build (${SHORT_SHA})" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+          fi
+      - name: Create GitHub Release Placeholder
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_info.outputs.TAG_NAME }}
+          name: ${{ steps.tag_info.outputs.RELEASE_NAME }}
+          prerelease: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
+          make_latest: true
+          body: |
+            Automated multi-platform build generated from commit `${{ github.sha }}`.
+
+            *This is a pre-release placeholder. Feel free to edit this title and description with your release notes right from the GitHub Releases UI.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ─── Android APK (split per ABI) ───────────────────────
   build-apk-split:
+    needs: [prepare-release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,14 +93,19 @@ jobs:
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           PIP_FIND_LINKS: ${{ github.workspace }}/wheels
-        run: uv run flet build apk --yes --project sherlock --product "Sherlock" --org ng.kiri --company "Kiri" --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
-      - uses: actions/upload-artifact@v5.0.0
+        run: uv run flet build apk --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
         with:
-          name: sherlock-split-apk
-          path: build/apk/*.apk
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/apk/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ─── Android AAB (Play Store) ──────────────────────────
   build-aab:
+    needs: [prepare-release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,8 +133,12 @@ jobs:
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           PIP_FIND_LINKS: ${{ github.workspace }}/wheels
-        run: uv run flet build aab --yes --project sherlock --product "Sherlock" --org ng.kiri --company "Kiri" --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
-      - uses: actions/upload-artifact@v5.0.0
+        run: uv run flet build aab --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
         with:
-          name: sherlock.aab
-          path: build/aab/*.aab
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/aab/*.aab
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

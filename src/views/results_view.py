@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import flet as ft
 
 from core import tokens
 from core.state import state
-from core.theme import AppColors
 from core.styles import build_banner_ad
+from core.theme import AppColors
 from services.sherlock_service import SearchProgress, SiteResult
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def _build_result_tile(result: SiteResult) -> ft.Container:
 
 def build_results_view(
     page: ft.Page,
-    progress: Optional[SearchProgress],
+    progress: SearchProgress | None,
     on_navigate: Callable,
     on_restart: Callable,
     on_cancel: Callable,
@@ -346,6 +347,7 @@ def build_results_view(
             # Generate report bytes using standard libraries
             if format_type == "xlsx":
                 import io
+
                 import pandas as pd
 
                 output = io.BytesIO()
@@ -392,8 +394,8 @@ def build_results_view(
                 report_bytes = output.getvalue()
 
             elif format_type == "csv":
-                import io
                 import csv
+                import io
 
                 output = io.StringIO()
                 writer = csv.writer(output)
@@ -466,8 +468,12 @@ def build_results_view(
             # On Android/iOS/Web, Flet automatically saves the file using src_bytes
             is_mobile_or_web = page.web or (page.platform in ["android", "ios"])
             if not is_mobile_or_web:
-                with open(path, "wb") as f:
-                    f.write(report_bytes)
+
+                def _write_file():
+                    with open(path, "wb") as f:
+                        f.write(report_bytes)
+
+                await asyncio.to_thread(_write_file)
                 logger.info(
                     f"Successfully saved scan report manually on desktop to {path}"
                 )
@@ -483,7 +489,7 @@ def build_results_view(
         except Exception as ex:
             logger.exception("Failed to write scan report:")
             page.snack_bar = ft.SnackBar(
-                ft.Text(f"Failed to save file: {str(ex)}", color=ft.Colors.WHITE),
+                ft.Text(f"Failed to save file: {ex!s}", color=ft.Colors.WHITE),
                 bgcolor=AppColors.ERROR,
             )
         finally:

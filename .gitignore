@@ -17,6 +17,9 @@ dist/
 # Release notes
 release_notes.md
 
+# Keystore
+kiri_keystore.jks
+
 # OS files
 .DS_Store
 Thumbs.db

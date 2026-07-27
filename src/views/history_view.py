@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 import flet as ft
 
 from core import tokens
-from core.constants import LBL_NO_HISTORY, LBL_HISTORY
+from core.constants import LBL_HISTORY, LBL_NO_HISTORY
 from core.styles import build_banner_ad
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,7 @@
 """Application-wide constants."""
 
 APP_NAME = "Sherlock"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 STORAGE_SETTINGS = "sherlock_settings"
 STORAGE_HISTORY = "sherlock_history"

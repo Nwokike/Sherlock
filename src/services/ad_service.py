@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import flet as ft
 
@@ -36,7 +36,7 @@ class AdService:
     def __init__(self, page: ft.Page):
         self.page = page
         self.interstitial = None
-        self._on_close: Optional[Callable] = None
+        self._on_close: Callable | None = None
 
     @property
     def banner_id(self) -> str:
@@ -76,7 +76,7 @@ class AdService:
         except Exception:
             return ft.Container(width=0, height=0)
 
-    async def preload_interstitial(self, on_close: Optional[Callable] = None):
+    async def preload_interstitial(self, on_close: Callable | None = None):
         """Pre-load an interstitial ad for later display."""
         self._on_close = on_close
         if not _HAS_ADS or not self._is_mobile():

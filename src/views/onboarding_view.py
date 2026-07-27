@@ -10,7 +10,8 @@ Saves STORAGE_ONBOARDING_DONE on completion.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
+
 import flet as ft
 
 from core import tokens

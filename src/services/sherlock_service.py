@@ -5,16 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
 _SHERLOCK_AVAILABLE = False
 try:
+    from sherlock_project.notify import QueryNotify
     from sherlock_project.result import QueryResult, QueryStatus
     from sherlock_project.sites import SitesInformation
-    from sherlock_project.notify import QueryNotify
 
     _SHERLOCK_AVAILABLE = True
 except ImportError:
@@ -31,8 +31,8 @@ class SiteResult:
     url_user: str
     status: str
     http_status: str
-    query_time: Optional[float] = None
-    context: Optional[str] = None
+    query_time: float | None = None
+    context: str | None = None
 
 
 @dataclass
@@ -55,8 +55,8 @@ class _CollectorQueryNotify(QueryNotify):
         collector: list,
         total: int,
         cancel_event: threading.Event,
-        progress: SearchProgress = None,
-        on_progress: Callable = None,
+        progress: SearchProgress | None = None,
+        on_progress: Callable | None = None,
     ):
         super().__init__()
         self.collector = collector
@@ -166,6 +166,7 @@ class SherlockService:
             logger.info("Loading site data...")
             import os
             from pathlib import Path
+
             import sherlock_project
             from core.state import state
 
@@ -210,8 +211,9 @@ class SherlockService:
         """Download latest data.json from GitHub and save to local storage."""
         try:
             import json
-            import httpx
             from pathlib import Path
+
+            import httpx
 
             logger.info("Syncing database from GitHub...")
             url = "https://raw.githubusercontent.com/sherlock-project/sherlock/master/sherlock_project/resources/data.json"
@@ -283,6 +285,7 @@ class SherlockService:
         # Load fresh SitesInformation based on current manifest configuration
         import os
         from pathlib import Path
+
         import sherlock_project
 
         if state.custom_manifest:
@@ -354,7 +357,7 @@ class SherlockService:
                 on_progress=on_progress,
             )
 
-            def _run():
+            def _run(tgt=tgt, query_notify=query_notify):
                 try:
                     results = sherlock(
                         username=tgt,
@@ -371,9 +374,9 @@ class SherlockService:
                     raise RuntimeError(
                         "Connection failed. Please check your network settings."
                     ) from se
-                except Exception as e:
-                    logger.exception("Sherlock search failed: %s", e)
-                    raise e
+                except Exception:
+                    logger.exception("Sherlock search failed")
+                    raise
 
             try:
                 await asyncio.to_thread(_run)

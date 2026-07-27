@@ -9,9 +9,9 @@ class AppState:
     is_searching: bool = False
     current_username: str = ""
     theme_mode: ft.ThemeMode = ft.ThemeMode.LIGHT
-    last_results: dict = {}
+    last_results: dict | None = None
     last_results_username: str = ""
-    history: list = []
+    history: list | None = None
     total_sites_checked: int = 0
     found_count: int = 0
     not_found_count: int = 0
@@ -21,7 +21,7 @@ class AppState:
     nsfw_enabled: bool = True
     ignore_exclusions: bool = False
     timeout: int = 30
-    selected_sites: list[str] = []
+    selected_sites: list[str] | None = None
     use_local_db: bool = True
     db_sync_status: str = "Idle"
 
@@ -29,9 +29,9 @@ class AppState:
     custom_manifest: str = ""
 
     # Multi-username State
-    search_targets: list[str] = []
+    search_targets: list[str] | None = None
     active_username: str = ""
-    target_results: dict = {}
+    target_results: dict | None = None
     update_available_version: str | None = None
     search_error: str | None = None
 

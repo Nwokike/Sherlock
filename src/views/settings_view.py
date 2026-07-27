@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+
 import flet as ft
 
 from core import tokens
@@ -17,8 +18,8 @@ from core.constants import (
     STORAGE_MANIFEST,
 )
 from core.state import state
+from core.styles import build_banner_ad, section_header
 from core.theme import AppColors
-from core.styles import section_header, build_banner_ad
 
 logger = logging.getLogger(__name__)
 

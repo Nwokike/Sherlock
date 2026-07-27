@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 import flet as ft
 
 from core import tokens
-from core.state import state
 from core.constants import STORAGE_SELECTED_SITES
+from core.state import state
 from core.styles import build_banner_ad
 from core.theme import AppColors
 
@@ -50,7 +50,7 @@ def build_sites_view(
 
     # Initialize checked states from global state
     selected_set = {s.lower() for s in state.selected_sites}
-    all_sites = sorted(list((sherlock_service._site_data or {}).keys()), key=str.lower)
+    all_sites = sorted((sherlock_service._site_data or {}).keys(), key=str.lower)
 
     for sname in all_sites:
         if not selected_set:

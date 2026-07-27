@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 import logging
+
 import flet as ft
 
 from core import tokens
 from core.constants import (
     APP_NAME,
     APP_VERSION,
-    STORAGE_THEME,
-    STORAGE_NSFW,
     STORAGE_EXCLUSIONS,
-    STORAGE_TIMEOUT,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
+    STORAGE_NSFW,
+    STORAGE_THEME,
+    STORAGE_TIMEOUT,
 )
 from core.state import state
+from core.styles import build_banner_ad, section_header
 from core.theme import AppColors
-from core.styles import section_header, build_banner_ad
 
 logger = logging.getLogger(__name__)
 

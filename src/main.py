@@ -8,22 +8,22 @@ import time
 
 import flet as ft
 
-from core.theme import AppTheme
-from core.state import state
 from core.constants import (
-    STORAGE_THEME,
-    STORAGE_HISTORY,
-    STORAGE_NSFW,
     STORAGE_EXCLUSIONS,
-    STORAGE_TIMEOUT,
+    STORAGE_HISTORY,
     STORAGE_LOCAL_DB,
-    STORAGE_SELECTED_SITES,
-    STORAGE_ONBOARDING_DONE,
     STORAGE_MANIFEST,
+    STORAGE_NSFW,
+    STORAGE_ONBOARDING_DONE,
+    STORAGE_SELECTED_SITES,
+    STORAGE_THEME,
+    STORAGE_TIMEOUT,
 )
-from services.storage_service import StorageService
+from core.state import state
+from core.theme import AppTheme
 from services.ad_service import AdService
 from services.sherlock_service import SherlockService
+from services.storage_service import StorageService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +71,7 @@ async def main(page: ft.Page):
 
     storage = StorageService(page)
     ad_service = AdService(page)
+    await ad_service.gather_consent()
     sherlock_service = SherlockService()
 
     try:
@@ -263,8 +264,8 @@ async def main(page: ft.Page):
                     and len(result.errors) >= 5
                     and len(result.errors) >= 0.5 * result.total_sites
                 ):
-                    from core.theme import AppColors
                     from core import tokens
+                    from core.theme import AppColors
 
                     def _close_alert(evt):
                         page.pop_dialog()
@@ -316,7 +317,7 @@ async def main(page: ft.Page):
                 page.update()
 
             except Exception as e:
-                logger.exception("Search failed: %s", e)
+                logger.exception("Search failed")
                 state.is_searching = False
                 state.search_error = str(e)
                 await navigate("/home")
@@ -415,8 +416,8 @@ async def main(page: ft.Page):
 
             if state.search_error:
                 error_msg = state.search_error
-                from core.theme import AppColors
                 from core import tokens
+                from core.theme import AppColors
 
                 title_text = "Search Failed"
                 alert_icon = ft.Icons.ERROR_OUTLINE_ROUNDED

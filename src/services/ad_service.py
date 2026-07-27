@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import flet as ft
 
@@ -16,7 +16,15 @@ logger = logging.getLogger(__name__)
 
 try:
     import flet_ads as fta
+    from flet_ads import base_ad
 
+    def _patched_init(self):
+        try:
+            super(base_ad.BaseAd, self).init()
+        except Exception:
+            pass
+
+    base_ad.BaseAd.init = _patched_init
     _HAS_ADS = True
 except ImportError:
     _HAS_ADS = False
@@ -36,7 +44,9 @@ class AdService:
     def __init__(self, page: ft.Page):
         self.page = page
         self.interstitial = None
-        self._on_close: Optional[Callable] = None
+        self._on_close: Callable | None = None
+        self._can_request_ads: bool = True
+        self._consent_manager = None
 
     @property
     def banner_id(self) -> str:
@@ -56,9 +66,42 @@ class AdService:
         except Exception:
             return False
 
+    # ── Consent Management (UMP) ──────────────────────────────────────────────
+
+    async def gather_consent(self):
+        """Run UMP consent flow. Only shows UI in regulated regions (EEA/UK)."""
+        if not _HAS_ADS or not self._is_mobile():
+            self._can_request_ads = True
+            return
+        try:
+            self._consent_manager = fta.ConsentManager()
+            self.page.services.append(self._consent_manager)
+            await self._consent_manager.request_consent_info_update()
+            await self._consent_manager.load_and_show_consent_form_if_required()
+            self._can_request_ads = await self._consent_manager.can_request_ads()
+        except Exception as e:
+            logger.warning("UMP consent flow failed, defaulting to allow ads: %s", e)
+            self._can_request_ads = True
+
+    async def show_privacy_options(self):
+        """Show privacy options form if required by regulation (GDPR)."""
+        if not self._consent_manager:
+            return
+        try:
+            status = (
+                await self._consent_manager.get_privacy_options_requirement_status()
+            )
+            if status == fta.PrivacyOptionsRequirementStatus.REQUIRED:
+                await self._consent_manager.show_privacy_options_form()
+                self._can_request_ads = await self._consent_manager.can_request_ads()
+        except Exception:
+            pass
+
+    # ── Ad Controls ───────────────────────────────────────────────────────────
+
     def get_banner_ad(self) -> ft.Control:
         """Return a banner ad control, or empty container on desktop."""
-        if not _HAS_ADS or not self._is_mobile():
+        if not _HAS_ADS or not self._is_mobile() or not self._can_request_ads:
             return ft.Container(width=0, height=0)
         try:
             ad = fta.BannerAd(
@@ -76,10 +119,10 @@ class AdService:
         except Exception:
             return ft.Container(width=0, height=0)
 
-    async def preload_interstitial(self, on_close: Optional[Callable] = None):
+    async def preload_interstitial(self, on_close: Callable | None = None):
         """Pre-load an interstitial ad for later display."""
         self._on_close = on_close
-        if not _HAS_ADS or not self._is_mobile():
+        if not _HAS_ADS or not self._is_mobile() or not self._can_request_ads:
             return
         try:
             self.interstitial = fta.InterstitialAd(

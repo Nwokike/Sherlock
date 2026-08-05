@@ -1,7 +1,19 @@
-"""Sherlock — main entry point."""
+"""Sherlock — main entry point and AppController.
+
+`AppController` owns the long-lived services (storage, ads, sherlock
+search engine) and the AppState observable singleton. It also builds
+the `ControllerMethods` dataclass that bridges the controller layer to
+the React-style component tree (`AppShell` and its descendants).
+
+View navigation is handled inside `AppShell` via `use_state` + injected
+controller methods. `start_search` / `_apply_progress` only mutate the
+observable state; the UI re-renders automatically.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -9,6 +21,8 @@ import time
 import flet as ft
 
 from core.constants import (
+    APP_NAME,
+    APP_VERSION,
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
     STORAGE_LOCAL_DB,
@@ -24,172 +38,223 @@ from core.theme import AppTheme
 from services.ad_service import AdService
 from services.sherlock_service import SherlockService
 from services.storage_service import StorageService
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
+from state.controller_ctx import (
+    ControllerMethods,
+    ControllerMethodsCtx,
 )
+
 logger = logging.getLogger("sherlock")
 
 
-async def main(page: ft.Page):
-    page.title = "Sherlock"
-    page.favicon = "icon.png"
+class AppController:
+    """Top-level controller owning services and reactive state."""
 
-    page.fonts = {
-        "Outfit": "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap"
-    }
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.storage: StorageService | None = None
+        self.ad_service: AdService | None = None
+        self.sherlock_service: SherlockService | None = None
+        # Shared controller-methods instance the component tree reads via
+        # use_context(ControllerMethodsCtx). AppShell mutates the view-
+        # navigation closures in-place; we hand AppShell a reference so
+        # our own methods (start_search, etc.) can invoke them too.
+        self._controller_methods: ControllerMethods | None = None
 
-    page.theme = AppTheme.get_light_theme()
-    page.dark_theme = AppTheme.get_dark_theme()
-    page.theme.font_family = "Outfit"
-    page.dark_theme.font_family = "Outfit"
-    page.theme_mode = ft.ThemeMode.SYSTEM
+    # --- Lifecycle ----------------------------------------------------
 
-    page.window.min_width = 360
-    page.window.min_height = 600
+    async def init(self) -> None:
+        """Configure the page, init services, load state, mount AppShell."""
+        logger.info("Starting %s v%s", APP_NAME, APP_VERSION)
 
-    page.padding = 0
-    page.spacing = 0
-
-    def on_error(e):
-        logger.error("Page error: %s", e.data)
-        try:
-            page.snack_bar = ft.SnackBar(
-                content=ft.Text(
-                    "Something went wrong. Please try again.", color=ft.Colors.WHITE
-                ),
-                bgcolor=ft.Colors.BLACK,
+        self.page.title = APP_NAME
+        self.page.padding = 0
+        self.page.spacing = 0
+        self.page.fonts = {
+            "Outfit": (
+                "https://fonts.googleapis.com/css2?"
+                "family=Outfit:wght@300;400;500;600;700&display=swap"
             )
-            page.snack_bar.open = True
-            page.update()
-        except Exception:
-            pass
+        }
+        self.page.theme = AppTheme.get_light_theme()
+        self.page.dark_theme = AppTheme.get_dark_theme()
+        self.page.theme.font_family = "Outfit"
+        self.page.dark_theme.font_family = "Outfit"
+        self.page.theme_mode = ft.ThemeMode.SYSTEM
+        self.page.window.min_width = 360
+        self.page.window.min_height = 600
 
-    page.on_error = on_error
+        # Register FilePicker singleton. FilePicker extends Service;
+        # self-registers through page._services (see Flet
+        # .venv/controls/services/file_picker.py + service.py:11-19).
+        # Constructing it inline per-call loses the registration on Android.
+        file_picker = ft.FilePicker()
+        self.page.services.append(file_picker)
+        self.page.file_picker = file_picker
 
-    storage = StorageService(page)
-    ad_service = AdService(page)
-    sherlock_service = SherlockService()
+        # Init services
+        self.storage = StorageService(self.page)
+        self.ad_service = AdService(self.page)
+        self.sherlock_service = SherlockService()
 
-    try:
-        saved_theme = await storage.get(STORAGE_THEME)
-        if saved_theme == "dark":
-            page.theme_mode = ft.ThemeMode.DARK
-        elif saved_theme == "system":
-            page.theme_mode = ft.ThemeMode.SYSTEM
-        else:
-            page.theme_mode = ft.ThemeMode.LIGHT
+        # Load saved state
+        await self._load_saved_state()
 
-        # Load advanced settings
-        nsfw_raw = await storage.get(STORAGE_NSFW)
-        if nsfw_raw is not None:
-            state.nsfw_enabled = nsfw_raw == "true"
-        else:
-            state.nsfw_enabled = True
+        # Preload interstitial
+        self.page.run_task(self.ad_service.preload_interstitial)
 
-        excl_raw = await storage.get(STORAGE_EXCLUSIONS)
-        if excl_raw is not None:
-            state.ignore_exclusions = excl_raw == "true"
-        else:
-            state.ignore_exclusions = False
+        # Load sites if sherlock is available
+        if self.sherlock_service.is_available:
+            self.page.run_task(self.sherlock_service.load_sites)
 
-        timeout_raw = await storage.get(STORAGE_TIMEOUT)
-        if timeout_raw:
-            state.timeout = int(timeout_raw)
+        # Check for upstream Sherlock updates
+        self.page.run_task(self._check_updates)
 
-        local_db_raw = await storage.get(STORAGE_LOCAL_DB)
-        if local_db_raw:
-            state.use_local_db = local_db_raw == "true"
+        # Mount the React-style component tree
+        from app_shell import AppShell
 
-        selected_raw = await storage.get(STORAGE_SELECTED_SITES)
-        if selected_raw:
-            state.selected_sites = selected_raw.split(",")
-        else:
-            state.selected_sites = []
+        refresh_sites = (
+            self.sherlock_service.load_sites
+            if self.sherlock_service.is_available
+            else (lambda: asyncio.sleep(0))
+        )
 
-        manifest_raw = await storage.get(STORAGE_MANIFEST)
-        state.custom_manifest = manifest_raw if manifest_raw else ""
-    except Exception as e:
-        logger.warning("Settings load failed: %s", e)
+        methods = ControllerMethods(
+            refresh_sites=refresh_sites,
+            start_search=self.start_search,
+            cancel_search=self.cancel_search,
+        )
+        self._controller_methods = methods
+        self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
+        logger.info("AppShell mounted successfully")
 
-    page.run_task(ad_service.preload_interstitial)
-
-    if sherlock_service.is_available:
-        page.run_task(sherlock_service.load_sites)
-
-    async def check_sherlock_updates():
+    async def _load_saved_state(self) -> None:
+        """Load saved settings from storage into observable state."""
+        if not self.storage:
+            return
         try:
-            latest = await sherlock_service.check_updates()
+            saved_theme = await self.storage.get(STORAGE_THEME)
+            if saved_theme == "dark":
+                self.page.theme_mode = ft.ThemeMode.DARK
+            elif saved_theme == "system":
+                self.page.theme_mode = ft.ThemeMode.SYSTEM
+            else:
+                self.page.theme_mode = ft.ThemeMode.LIGHT
+
+            nsfw_raw = await self.storage.get(STORAGE_NSFW)
+            if nsfw_raw is not None:
+                state.nsfw_enabled = nsfw_raw == "true"
+            else:
+                state.nsfw_enabled = True
+
+            excl_raw = await self.storage.get(STORAGE_EXCLUSIONS)
+            if excl_raw is not None:
+                state.ignore_exclusions = excl_raw == "true"
+            else:
+                state.ignore_exclusions = False
+
+            timeout_raw = await self.storage.get(STORAGE_TIMEOUT)
+            if timeout_raw:
+                state.timeout = int(timeout_raw)
+
+            local_db_raw = await self.storage.get(STORAGE_LOCAL_DB)
+            if local_db_raw:
+                state.use_local_db = local_db_raw == "true"
+
+            selected_raw = await self.storage.get(STORAGE_SELECTED_SITES)
+            if selected_raw:
+                state.selected_sites = selected_raw.split(",")
+            else:
+                state.selected_sites = []
+
+            manifest_raw = await self.storage.get(STORAGE_MANIFEST)
+            state.custom_manifest = manifest_raw if manifest_raw else ""
+
+            onboarding_done = await self.storage.get(STORAGE_ONBOARDING_DONE)
+            if onboarding_done == "true":
+                state.has_accepted_terms = True
+                state.is_first_launch = False
+        except Exception as e:
+            logger.warning("Settings load failed: %s", e)
+
+    async def _check_updates(self) -> None:
+        try:
+            if not self.sherlock_service:
+                return
+            latest = await self.sherlock_service.check_updates()
             if latest:
                 state.update_available_version = latest
                 logger.info("New Sherlock version available: %s", latest)
         except Exception:
             pass
 
-    page.run_task(check_sherlock_updates)
+    # --- Search -------------------------------------------------------
 
-    async def on_disconnect(e=None):
+    async def start_search(self, username: str) -> None:
+        """Run a sherlock search. The UI layer (AppShell/HomeScreen) is
+        responsible for calling `controller.show_results()` separately
+        to switch to the results view — that keeps view navigation in
+        the AppShell layer where it belongs.
+        """
+        if not self.sherlock_service:
+            return
+
+        state.current_username = username
+        state.is_searching = True
+        state.search_error = None
+
+        # Preload interstitial
+        if self.ad_service:
+            with contextlib.suppress(Exception):
+                await self.ad_service.show_interstitial()
+
+        # Make sure sites are loaded before searching
         try:
-            await storage.flush()
+            await self.sherlock_service.load_sites()
         except Exception:
             pass
 
-    page.on_disconnect = on_disconnect
+        # Bridge the thread-shed progress callbacks to the event loop
+        def _thread_progress(progress):
+            self.page.run_task(self._apply_progress, progress)
 
-    current_search_task = None
-    current_results_view = None
-
-    async def navigate(route: str):
-        page.route = route
-        await route_change()
-
-    def navigate_sync(route: str):
-        page.run_task(navigate, route)
-
-    def _build_nav_bar(active_route: str) -> ft.NavigationBar | None:
-        routes = ["/home", "/history", "/settings"]
-        if active_route not in routes:
-            return None
-        nav_bar = ft.NavigationBar(
-            selected_index=routes.index(active_route) if active_route in routes else 0,
-            destinations=[
-                ft.NavigationBarDestination(
-                    icon=ft.Icons.HOME_OUTLINED,
-                    selected_icon=ft.Icons.HOME_ROUNDED,
-                    label="Home",
-                ),
-                ft.NavigationBarDestination(
-                    icon=ft.Icons.HISTORY_OUTLINED,
-                    selected_icon=ft.Icons.HISTORY_ROUNDED,
-                    label="History",
-                ),
-                ft.NavigationBarDestination(
-                    icon=ft.Icons.SETTINGS_OUTLINED,
-                    selected_icon=ft.Icons.SETTINGS_ROUNDED,
-                    label="Settings",
-                ),
-            ],
-            bgcolor=ft.Colors.SURFACE,
-            indicator_color=ft.Colors.with_opacity(0.12, ft.Colors.PRIMARY),
-            label_behavior=ft.NavigationBarLabelBehavior.ALWAYS_SHOW,
-        )
-
-        def on_nav_change(e):
-            nonlocal current_search_task
-            if current_search_task and not current_search_task.done():
-                sherlock_service.cancel()
-                current_search_task = None
-            index = e.control.selected_index
-            page.run_task(navigate, routes[index])
-
-        nav_bar.on_change = on_nav_change
-        return nav_bar
-
-    async def _save_to_history(username: str, found: int, total: int):
         try:
-            raw = await storage.get(STORAGE_HISTORY)
+            result = await self.sherlock_service.search(
+                username=username,
+                on_progress=_thread_progress,
+                timeout=state.timeout,
+            )
+            state.is_searching = False
+            state.last_results = {
+                r.site_name: r
+                for r in (result.found + result.not_found + result.errors)
+            }
+            state.last_results_username = username
+
+            await self._save_to_history(username, len(result.found), result.total_sites)
+
+            # Final progress apply
+            await self._apply_progress(result)
+        except Exception as e:
+            logger.exception("Search failed")
+            state.is_searching = False
+            state.search_error = str(e)
+
+    async def _apply_progress(self, progress) -> None:
+        """Push a search-progress snapshot into observable state."""
+        state.search_progress = progress
+        state.progress_version += 1
+
+    def cancel_search(self) -> None:
+        """Cancel a running search (sync — called from UI)."""
+        if self.sherlock_service:
+            self.sherlock_service.cancel()
+
+    async def _save_to_history(self, username: str, found: int, total: int) -> None:
+        """Append a search entry to persistent history."""
+        if not self.storage:
+            return
+        try:
+            raw = await self.storage.get(STORAGE_HISTORY)
             entries = json.loads(raw) if raw else []
             entries.append(
                 {
@@ -200,343 +265,57 @@ async def main(page: ft.Page):
                 }
             )
             entries = entries[-50:]
-            await storage.set(STORAGE_HISTORY, json.dumps(entries))
+            await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
         except Exception as e:
             logger.warning("Failed to save history: %s", e)
 
-    async def start_search(username: str):
-        nonlocal current_search_task, current_results_view
+    # --- Errors -------------------------------------------------------
 
-        if current_search_task and not current_search_task.done():
-            sherlock_service.cancel()
-            current_search_task = None
-
-        await ad_service.show_interstitial()
-
+    def on_error(self, e) -> None:
+        """Page-level error handler. Best-effort snackbar."""
+        logger.error("Page error: %s", e.data)
         try:
-            await sherlock_service.load_sites()
+            self.page.snack_bar = ft.SnackBar(
+                content=ft.Text(
+                    "Something went wrong. Please try again.",
+                    color=ft.Colors.WHITE,
+                ),
+                bgcolor=ft.Colors.BLACK,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
         except Exception:
             pass
 
-        state.current_username = username
-        state.is_searching = True
 
-        current_results_view = None
+async def main(page: ft.Page) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
-        from views.results_view import build_results_view
+    controller = AppController(page)
+    await controller.init()
 
-        async def _cancel_search():
-            nonlocal current_search_task
-            if current_search_task and not current_search_task.done():
-                sherlock_service.cancel()
-                current_search_task = None
-            state.is_searching = False
-            await navigate("/home")
+    page.on_error = controller.on_error
 
-        async def _run_search():
-            nonlocal current_results_view
-            try:
-                result = await sherlock_service.search(
-                    username=username,
-                    on_progress=lambda p: page.run_task(_refresh_view, p),
-                    timeout=state.timeout,
-                )
-                state.is_searching = False
+    async def _on_disconnect(e=None):
+        with contextlib.suppress(Exception):
+            if controller.storage:
+                await controller.storage.flush()
 
-                await _save_to_history(
-                    username,
-                    len(result.found),
-                    result.total_sites,
-                )
+    page.on_disconnect = _on_disconnect
 
-                state.last_results = {
-                    r.site_name: r
-                    for r in result.found + result.not_found + result.errors
-                }
-                state.last_results_username = username
+    async def _on_close(e=None):
+        with contextlib.suppress(Exception):
+            if controller.storage:
+                await controller.storage.flush()
+        with contextlib.suppress(Exception):
+            if controller.ad_service:
+                await controller.ad_service.close()
 
-                await _refresh_view(result)
-
-                # Check for high error rate (possible misconfigured proxy or network failure)
-                if (
-                    len(result.found) == 0
-                    and len(result.errors) >= 5
-                    and len(result.errors) >= 0.5 * result.total_sites
-                ):
-                    from core import tokens
-                    from core.theme import AppColors
-
-                    def _close_alert(evt):
-                        page.pop_dialog()
-
-                    title_text = "Connection Issue?"
-                    icon = ft.Icons.WIFI_OFF_ROUNDED
-                    icon_color = AppColors.ERROR
-                    desc = (
-                        "All or most of the checks failed with connection errors.\n\n"
-                        "This usually happens when:\n"
-                        "• Your device is not connected to the internet.\n"
-                        "• Your network is blocking outgoing automated requests.\n"
-                        "• A VPN or proxy is misconfigured.\n\n"
-                        "Please check your network settings."
-                    )
-
-                    actions = [ft.TextButton("Dismiss", on_click=_close_alert)]
-
-                    alert = ft.AlertDialog(
-                        title=ft.Row(
-                            controls=[
-                                ft.Icon(icon, color=icon_color, size=24),
-                                ft.Text(
-                                    title_text,
-                                    size=tokens.FONT_LG,
-                                    weight=ft.FontWeight.BOLD,
-                                ),
-                            ],
-                            spacing=8,
-                        ),
-                        content=ft.Container(
-                            content=ft.Column(
-                                controls=[
-                                    ft.Text(
-                                        desc,
-                                        size=tokens.FONT_SM,
-                                        color=ft.Colors.ON_SURFACE,
-                                    ),
-                                ],
-                                tight=True,
-                            ),
-                            width=320,
-                        ),
-                        actions=actions,
-                        actions_alignment=ft.MainAxisAlignment.END,
-                    )
-                    page.show_dialog(alert)
-
-                page.update()
-
-            except Exception as e:
-                logger.exception("Search failed")
-                state.is_searching = False
-                state.search_error = str(e)
-                await navigate("/home")
-
-        async def _refresh_view(progress_data):
-            nonlocal current_results_view
-            page.views.clear()
-
-            view = build_results_view(
-                page=page,
-                progress=progress_data,
-                on_navigate=navigate_sync,
-                on_restart=start_search_sync,
-                on_cancel=lambda: page.run_task(_cancel_search),
-            )
-            current_results_view = view
-            page.views.append(view)
-
-            if progress_data and not progress_data.is_running:
-                nb = _build_nav_bar("/history")
-                if nb:
-                    view.navigation_bar = nb
-
-            page.update()
-
-        current_search_task = page.run_task(_run_search)
-
-        preview = type(
-            "obj",
-            (object,),
-            {
-                "username": username,
-                "total_sites": 0,
-                "checked_sites": 0,
-                "found": [],
-                "not_found": [],
-                "errors": [],
-                "is_running": True,
-                "is_cancelled": False,
-            },
-        )()
-
-        page.views.clear()
-        view = build_results_view(
-            page=page,
-            progress=preview,
-            on_navigate=navigate_sync,
-            on_restart=start_search_sync,
-            on_cancel=lambda: page.run_task(_cancel_search),
-        )
-        page.views.append(view)
-        page.update()
-
-    def start_search_sync(username: str):
-        page.run_task(start_search, username)
-
-    async def route_change(e=None):
-        nonlocal current_search_task, current_results_view
-
-        route = page.route
-        logger.info("Route: %s", route)
-
-        if current_search_task and current_search_task.done():
-            current_search_task = None
-
-        onboarding_done = await storage.get(STORAGE_ONBOARDING_DONE)
-        if onboarding_done != "true" and route != "/onboarding":
-            await navigate("/onboarding")
-            return
-
-        if route == "/results" and state.is_searching:
-            return
-
-        page.views.clear()
-
-        if route == "/onboarding":
-            from views.onboarding_view import build_onboarding_view
-
-            view = build_onboarding_view(
-                page=page,
-                on_done=lambda: navigate_sync("/home"),
-                storage=storage,
-            )
-            page.views.append(view)
-
-        elif route == "/home" or route == "/":
-            from views.home_view import build_home_view
-
-            view = build_home_view(
-                page=page,
-                on_navigate=navigate_sync,
-                storage=storage,
-                on_search=start_search_sync,
-            )
-            page.views.append(view)
-
-            if state.search_error:
-                error_msg = state.search_error
-                from core import tokens
-                from core.theme import AppColors
-
-                title_text = "Search Failed"
-                alert_icon = ft.Icons.ERROR_OUTLINE_ROUNDED
-                icon_color = AppColors.ERROR
-                description_text = (
-                    f"{error_msg}\n\n"
-                    "Please check your internet connection or proxy settings."
-                )
-
-                def _close_error_alert(evt):
-                    state.search_error = None
-                    page.pop_dialog()
-
-                actions = [
-                    ft.TextButton(
-                        "Dismiss",
-                        on_click=_close_error_alert,
-                    )
-                ]
-
-                error_dialog = ft.AlertDialog(
-                    title=ft.Row(
-                        controls=[
-                            ft.Icon(
-                                alert_icon,
-                                color=icon_color,
-                                size=24,
-                            ),
-                            ft.Text(
-                                title_text,
-                                size=tokens.FONT_LG,
-                                weight=ft.FontWeight.BOLD,
-                            ),
-                        ],
-                        spacing=8,
-                    ),
-                    content=ft.Container(
-                        content=ft.Column(
-                            controls=[
-                                ft.Text(
-                                    description_text,
-                                    size=tokens.FONT_SM,
-                                    color=ft.Colors.ON_SURFACE,
-                                ),
-                            ],
-                            tight=True,
-                            spacing=6,
-                        ),
-                        width=320,
-                    ),
-                    actions=actions,
-                    actions_alignment=ft.MainAxisAlignment.END,
-                )
-                page.show_dialog(error_dialog)
-
-        elif route == "/history":
-            from views.history_view import build_history_view
-
-            view = build_history_view(
-                page=page,
-                on_navigate=navigate_sync,
-                on_search=start_search_sync,
-                storage=storage,
-            )
-            page.views.append(view)
-
-        elif route == "/settings":
-            from views.settings_view import build_settings_view
-
-            view = build_settings_view(
-                page=page,
-                sherlock_service=sherlock_service,
-                storage=storage,
-            )
-            page.views.append(view)
-
-        elif route == "/sites":
-            from views.sites_view import build_sites_view
-
-            view = build_sites_view(
-                page=page,
-                sherlock_service=sherlock_service,
-                storage=storage,
-                on_navigate=navigate_sync,
-            )
-            page.views.append(view)
-
-        else:
-            from views.home_view import build_home_view
-
-            view = build_home_view(
-                page=page,
-                on_navigate=navigate_sync,
-                storage=storage,
-                on_search=start_search_sync,
-            )
-            page.views.append(view)
-
-        if page.views:
-            nb = _build_nav_bar(route)
-            if nb:
-                page.views[-1].navigation_bar = nb
-
-        page.update()
-
-    async def view_pop(e):
-        nonlocal current_search_task
-        if current_search_task and not current_search_task.done():
-            sherlock_service.cancel()
-            current_search_task = None
-        page.views.pop()
-        if page.views:
-            top = page.views[-1]
-            page.route = top.route
-        page.update()
-
-    page.on_route_change = route_change
-    page.on_view_pop = view_pop
-
-    await navigate("/home")
+    page.on_close = _on_close
 
 
 if __name__ == "__main__":

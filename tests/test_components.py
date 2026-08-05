@@ -1,0 +1,103 @@
+"""Tests for plain-function components — full tree-walk unit tests.
+
+These components don't use hooks, so they can be instantiated directly
+without a renderer context.
+"""
+
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__), "..", ".venv", "lib", "python3.13", "site-packages"
+    ),
+)
+
+import flet as ft
+from tests.flet_tree import walk_texts, walk_buttons, find_icon
+
+from components.empty_state import EmptyState
+from components.loading_state import LoadingState
+from components.result_card import ResultCard
+from components.stat_card import StatCard
+from components.section_header import SectionHeader
+
+
+class TestEmptyState:
+    def test_basic(self):
+        tree = EmptyState(title="No data")
+        texts = list(walk_texts(tree))
+        assert any("No data" in (t.value or "") for t in texts)
+
+    def test_with_message(self):
+        tree = EmptyState(title="Empty", message="Nothing here")
+        texts = list(walk_texts(tree))
+        assert any("Nothing here" in (t.value or "") for t in texts)
+
+    def test_with_action(self):
+        called = []
+        tree = EmptyState(
+            title="Empty", action_label="Retry", on_action=lambda e: called.append(True)
+        )
+        buttons = list(walk_buttons(tree))
+        assert len(buttons) >= 1
+
+    def test_icon_present(self):
+        tree = EmptyState(title="Empty", icon=ft.Icons.SEARCH)
+        assert find_icon(tree, ft.Icons.SEARCH) is not None
+
+
+class TestLoadingState:
+    def test_default_label(self):
+        tree = LoadingState()
+        texts = list(walk_texts(tree))
+        assert any("Loading" in (t.value or "") for t in texts)
+
+    def test_custom_label(self):
+        tree = LoadingState(label="Searching...")
+        texts = list(walk_texts(tree))
+        assert any("Searching..." in (t.value or "") for t in texts)
+
+
+class TestResultCard:
+    def test_claimed(self):
+        tree = ResultCard(
+            site_name="GitHub", status="Claimed", url_user="https://github.com/test"
+        )
+        texts = list(walk_texts(tree))
+        assert any("GitHub" in (t.value or "") for t in texts)
+        assert find_icon(tree, ft.Icons.CHECK_CIRCLE_ROUNDED) is not None
+
+    def test_available(self):
+        tree = ResultCard(site_name="FakeSite", status="Available")
+        assert find_icon(tree, ft.Icons.CANCEL_ROUNDED) is not None
+
+    def test_waf(self):
+        tree = ResultCard(site_name="Protected", status="WAF")
+        assert find_icon(tree, ft.Icons.SHIELD_ROUNDED) is not None
+
+    def test_error(self):
+        tree = ResultCard(site_name="Timeout", status="Error")
+        assert find_icon(tree, ft.Icons.ERROR_OUTLINE_ROUNDED) is not None
+
+    def test_with_query_time(self):
+        tree = ResultCard(site_name="GitHub", status="Claimed", query_time=0.12)
+        texts = list(walk_texts(tree))
+        assert any("0.12s" in (t.value or "") for t in texts)
+
+
+class TestStatCard:
+    def test_renders_label_and_value(self):
+        tree = StatCard(label="Found", value="5", color=ft.Colors.GREEN)
+        texts = list(walk_texts(tree))
+        assert any("5" in (t.value or "") for t in texts)
+        assert any("Found" in (t.value or "") for t in texts)
+
+
+class TestSectionHeader:
+    def test_renders_text(self):
+        tree = SectionHeader("PREFERENCES")
+        texts = list(walk_texts(tree))
+        assert any("PREFERENCES" in (t.value or "") for t in texts)

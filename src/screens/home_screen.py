@@ -15,7 +15,13 @@ from flet import Control
 
 from core import tokens
 from core.constants import APP_NAME, STORAGE_HISTORY, STORAGE_THEME
-from core.theme import AppColors, AppStyles, adaptive_glass_bg, adaptive_glass_border, is_dark_mode
+from core.theme import (
+    AppColors,
+    AppStyles,
+    adaptive_glass_bg,
+    adaptive_glass_border,
+    is_dark_mode,
+)
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -109,7 +115,9 @@ def _history_row(
     return ft.Container(
         content=ft.Row(
             [
-                ft.Icon(ft.Icons.PERSON_SEARCH_ROUNDED, size=16, color=AppColors.PRIMARY),
+                ft.Icon(
+                    ft.Icons.PERSON_SEARCH_ROUNDED, size=16, color=AppColors.PRIMARY
+                ),
                 ft.Text(
                     username,
                     size=12,
@@ -281,6 +289,7 @@ def _make_compact_dropdown(label, icon, value, options, on_change, width=140):
 
 # ── Main screen ───────────────────────────────────────────────────────
 
+
 @ft.component
 def HomeScreen() -> Control:
     """Compact search-first home dashboard (DDGS style)."""
@@ -309,9 +318,11 @@ def HomeScreen() -> Control:
         query = search_query.strip() if search_query else ""
         if not query:
             return
+
         async def _run():
             controller.show_results()
             await controller.start_search(query)
+
         asyncio.create_task(_run())
 
     def _on_paste(e):
@@ -323,6 +334,7 @@ def HomeScreen() -> Control:
                     set_search_query(text.strip())
             except Exception:
                 pass
+
         asyncio.create_task(_paste())
 
     def _on_history_click(username: str):
@@ -345,14 +357,17 @@ def HomeScreen() -> Control:
         page.theme_mode = new_mode
         state.theme_mode = new_mode
         set_theme_version(theme_version + 1)
+
         # Persist theme preference
         async def _save():
             try:
                 from services.storage_service import StorageService
+
                 storage = StorageService(page)
                 await storage.set(STORAGE_THEME, theme_val)
             except Exception:
                 pass
+
         asyncio.create_task(_save())
 
     def _get_theme_icon():
@@ -368,6 +383,7 @@ def HomeScreen() -> Control:
         async def _fetch():
             try:
                 from services.storage_service import StorageService
+
                 storage = StorageService(_get_page())
                 raw = await storage.get(STORAGE_HISTORY)
                 if raw:
@@ -375,6 +391,7 @@ def HomeScreen() -> Control:
                     set_history_items(entries[-3:])
             except Exception:
                 pass
+
         asyncio.create_task(_fetch())
 
     ft.use_effect(_load_history, [])
@@ -622,7 +639,8 @@ def HomeScreen() -> Control:
                                         0.06, AppColors.PRIMARY
                                     ),
                                     animate=ft.Animation(
-                                        tokens.ANIM_FAST, "easeOut",
+                                        tokens.ANIM_FAST,
+                                        "easeOut",
                                     ),
                                 ),
                             ],
@@ -645,7 +663,8 @@ def HomeScreen() -> Control:
                             ),
                             visible=tools_expanded,
                             animate=ft.Animation(
-                                tokens.ANIM_FAST, "easeOut",
+                                tokens.ANIM_FAST,
+                                "easeOut",
                             ),
                         ),
                         # Search button
@@ -818,6 +837,8 @@ def HomeScreen() -> Control:
             expand=True,
             spacing=0,
         ),
-        gradient=AppStyles.brand_gradient(_get_page()) if hasattr(AppStyles, 'brand_gradient') else None,
+        gradient=AppStyles.brand_gradient(_get_page())
+        if hasattr(AppStyles, "brand_gradient")
+        else None,
         expand=True,
     )

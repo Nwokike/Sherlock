@@ -60,17 +60,27 @@ class AppColors:
     @staticmethod
     def get_surface(page: ft.Page | None = None) -> str:
         resolved = AppColors._resolve_page(page)
-        return AppColors.DARK_SURFACE if is_dark_mode(resolved) else AppColors.LIGHT_SURFACE
+        return (
+            AppColors.DARK_SURFACE
+            if is_dark_mode(resolved)
+            else AppColors.LIGHT_SURFACE
+        )
 
     @staticmethod
     def get_surface_2(page: ft.Page | None = None) -> str:
         resolved = AppColors._resolve_page(page)
-        return AppColors.DARK_SURFACE_2 if is_dark_mode(resolved) else AppColors.LIGHT_SURFACE_2
+        return (
+            AppColors.DARK_SURFACE_2
+            if is_dark_mode(resolved)
+            else AppColors.LIGHT_SURFACE_2
+        )
 
     @staticmethod
     def get_border(page: ft.Page | None = None) -> str:
         resolved = AppColors._resolve_page(page)
-        return AppColors.DARK_BORDER if is_dark_mode(resolved) else AppColors.LIGHT_BORDER
+        return (
+            AppColors.DARK_BORDER if is_dark_mode(resolved) else AppColors.LIGHT_BORDER
+        )
 
     @staticmethod
     def get_text(page: ft.Page | None = None) -> str:
@@ -80,7 +90,11 @@ class AppColors:
     @staticmethod
     def get_text_dim(page: ft.Page | None = None) -> str:
         resolved = AppColors._resolve_page(page)
-        return AppColors.DARK_TEXT_DIM if is_dark_mode(resolved) else AppColors.LIGHT_TEXT_DIM
+        return (
+            AppColors.DARK_TEXT_DIM
+            if is_dark_mode(resolved)
+            else AppColors.LIGHT_TEXT_DIM
+        )
 
     @staticmethod
     def grey_dim(page=None) -> str:
@@ -89,7 +103,11 @@ class AppColors:
                 from flet import context
 
                 page = context.page
-            return AppColors.DARK_TEXT_DIM if is_dark_mode(page) else AppColors.LIGHT_TEXT_DIM
+            return (
+                AppColors.DARK_TEXT_DIM
+                if is_dark_mode(page)
+                else AppColors.LIGHT_TEXT_DIM
+            )
         except Exception:
             return AppColors.LIGHT_TEXT_DIM
 
@@ -146,7 +164,9 @@ class AppStyles:
     PADDING_LARGE = 24
 
     @staticmethod
-    def section_card(title: str, icon: str, content: ft.Control, page: ft.Page | None = None) -> ft.Container:
+    def section_card(
+        title: str, icon: str, content: ft.Control, page: ft.Page | None = None
+    ) -> ft.Container:
         """Frosted card section with icon header."""
         is_dark = is_dark_mode(page)
         border_color = AppColors.DARK_BORDER if is_dark else AppColors.LIGHT_BORDER

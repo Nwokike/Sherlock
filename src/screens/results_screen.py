@@ -73,12 +73,14 @@ def ResultsScreen() -> Control:
                 ),
                 icon=ft.Icons.SEARCH_OFF_ROUNDED,
             )
+
         def _open_url(url):
             async def _launch():
                 try:
                     await ft.UrlLauncher().launch_url(url)
                 except Exception:
                     pass
+
             asyncio.create_task(_launch())
 
         return ft.Column(

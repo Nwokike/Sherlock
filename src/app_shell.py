@@ -39,22 +39,31 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
     from core import tokens
 
     if active_view == "results":
+
         def _copy_urls(e):
             async def _copy():
                 from core.state import state as app_state
+
                 if app_state.search_progress and app_state.search_progress.found:
-                    urls = [r.url_user for r in app_state.search_progress.found if r.url_user]
+                    urls = [
+                        r.url_user
+                        for r in app_state.search_progress.found
+                        if r.url_user
+                    ]
                     try:
                         cb = ft.Clipboard()
                         await cb.set("\n".join(urls))
                     except Exception:
                         pass
+
             asyncio.create_task(_copy())
 
         def _on_export_click(format_type: str):
             """Full export dialog — Excel, CSV, or Text (original Sherlock behavior)."""
+
             async def _do_export():
                 from flet import context
+
                 page = context.page
                 from core.state import state as app_state
                 from core.theme import AppColors
@@ -71,7 +80,9 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         import pandas as pd
 
                         output = io.BytesIO()
-                        all_results = progress.found + progress.not_found + progress.errors
+                        all_results = (
+                            progress.found + progress.not_found + progress.errors
+                        )
                         df_data = {
                             "username": [progress.username] * len(all_results),
                             "name": [r.site_name for r in all_results],
@@ -95,13 +106,45 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
                         output = io.StringIO()
                         writer = csv.writer(output)
-                        writer.writerow(["Username", "Site Name", "Profile URL", "Status", "Query Time (s)"])
+                        writer.writerow(
+                            [
+                                "Username",
+                                "Site Name",
+                                "Profile URL",
+                                "Status",
+                                "Query Time (s)",
+                            ]
+                        )
                         for r in progress.found:
-                            writer.writerow([progress.username, r.site_name, r.url_user, r.status, f"{r.query_time:.2f}" if r.query_time else ""])
+                            writer.writerow(
+                                [
+                                    progress.username,
+                                    r.site_name,
+                                    r.url_user,
+                                    r.status,
+                                    f"{r.query_time:.2f}" if r.query_time else "",
+                                ]
+                            )
                         for r in progress.not_found:
-                            writer.writerow([progress.username, r.site_name, r.url_user or r.url_main, r.status, f"{r.query_time:.2f}" if r.query_time else ""])
+                            writer.writerow(
+                                [
+                                    progress.username,
+                                    r.site_name,
+                                    r.url_user or r.url_main,
+                                    r.status,
+                                    f"{r.query_time:.2f}" if r.query_time else "",
+                                ]
+                            )
                         for r in progress.errors:
-                            writer.writerow([progress.username, r.site_name, r.url_user or r.url_main, r.status, f"{r.query_time:.2f}" if r.query_time else ""])
+                            writer.writerow(
+                                [
+                                    progress.username,
+                                    r.site_name,
+                                    r.url_user or r.url_main,
+                                    r.status,
+                                    f"{r.query_time:.2f}" if r.query_time else "",
+                                ]
+                            )
                         report_bytes = output.getvalue().encode("utf-8")
                     else:
                         output = []
@@ -123,11 +166,17 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     if not path:
                         return
 
-                    is_mobile = page.platform.is_mobile() if hasattr(page.platform, 'is_mobile') else False
+                    is_mobile = (
+                        page.platform.is_mobile()
+                        if hasattr(page.platform, "is_mobile")
+                        else False
+                    )
                     if not is_mobile:
+
                         def _write_file():
                             with open(path, "wb") as f:
                                 f.write(report_bytes)
+
                         await asyncio.to_thread(_write_file)
 
                     page.snack_bar = ft.SnackBar(
@@ -147,17 +196,28 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _show_export_dialog(e):
             from flet import context
+
             page = context.page
             from core.state import state as app_state
+
             if not app_state.search_progress:
                 return
             dialog = ft.AlertDialog(
                 title=ft.Text("Export Scan Report"),
                 content=ft.Text("Select your preferred file format:"),
                 actions=[
-                    ft.TextButton("Excel Spreadsheet (.xlsx)", on_click=lambda e: _on_export_click("xlsx")),
-                    ft.TextButton("CSV Spreadsheet (.csv)", on_click=lambda e: _on_export_click("csv")),
-                    ft.TextButton("Plain Text List (.txt)", on_click=lambda e: _on_export_click("txt")),
+                    ft.TextButton(
+                        "Excel Spreadsheet (.xlsx)",
+                        on_click=lambda e: _on_export_click("xlsx"),
+                    ),
+                    ft.TextButton(
+                        "CSV Spreadsheet (.csv)",
+                        on_click=lambda e: _on_export_click("csv"),
+                    ),
+                    ft.TextButton(
+                        "Plain Text List (.txt)",
+                        on_click=lambda e: _on_export_click("txt"),
+                    ),
                     ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
@@ -166,8 +226,11 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _restart(e):
             from core.state import state as app_state
+
             if app_state.last_results_username:
-                asyncio.create_task(controller.start_search(app_state.last_results_username))
+                asyncio.create_task(
+                    controller.start_search(app_state.last_results_username)
+                )
                 controller.show_results()
 
         return ft.AppBar(

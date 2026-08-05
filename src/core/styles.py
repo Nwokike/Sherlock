@@ -18,6 +18,7 @@ from core.theme import (
 
 # ─── SECTION HEADER ──────────────────────────────────────────────────────────
 
+
 def section_header(text: str) -> ft.Container:
     """Uppercase section label."""
     return ft.Container(
@@ -40,6 +41,7 @@ def section_header(text: str) -> ft.Container:
 
 # ─── GLASS CARD ──────────────────────────────────────────────────────────────
 
+
 def glass_card(content: ft.Control, page: ft.Page | None = None) -> ft.Container:
     """Frosted glass card — adapts to dark/light."""
     return ft.Container(
@@ -58,6 +60,7 @@ def glass_card(content: ft.Control, page: ft.Page | None = None) -> ft.Container
 
 # ─── SOLID CARD ──────────────────────────────────────────────────────────────
 
+
 def solid_card(content: ft.Control, page: ft.Page | None = None) -> ft.Container:
     """Solid surface card."""
     return ft.Container(
@@ -75,6 +78,7 @@ def solid_card(content: ft.Control, page: ft.Page | None = None) -> ft.Container
 
 
 # ─── SETTING TILE ────────────────────────────────────────────────────────────
+
 
 def setting_tile(
     icon: ft.IconData | None = None,
@@ -126,6 +130,7 @@ def setting_tile(
 
 
 # ─── BANNER AD ───────────────────────────────────────────────────────────────
+
 
 def build_banner_ad(page: ft.Page | None = None) -> ft.Control:
     """Glass-container-wrapped banner ad (mobile only)."""

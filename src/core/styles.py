@@ -132,11 +132,16 @@ def setting_tile(
 # ─── BANNER AD ───────────────────────────────────────────────────────────────
 
 
-def build_banner_ad(page: ft.Page) -> ft.Control:
-    """Glass-container-wrapped banner ad (mobile only).
+def build_banner_ad(page: ft.Page | None = None) -> ft.Control:
+    """Glass-container-wrapped banner ad (mobile only)."""
+    if page is None:
+        try:
+            from flet import context
 
-    Requires page parameter. Caller must pass ft.context.page.
-    """
+            page = context.page
+        except Exception:
+            return ft.Container(width=0, height=0)
+
     if not page or not hasattr(page, "platform"):
         return ft.Container(width=0, height=0)
 

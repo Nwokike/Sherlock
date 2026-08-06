@@ -12,7 +12,7 @@ import logging
 import flet as ft
 from flet import Control
 
-from core.styles import build_banner_ad
+from components.banner_ad import build_banner_ad
 from components.result_card import ResultCard
 from components.stat_card import StatCard
 from core import tokens
@@ -26,11 +26,8 @@ logger = logging.getLogger("ResultsScreen")
 
 @ft.component
 def ResultsScreen() -> Control:
-    from flet import context
-
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
-    page = context.page
 
     # Force re-render on each progress_version bump
     _ = state.progress_version
@@ -318,7 +315,7 @@ def ResultsScreen() -> Control:
         stats_card,
         filter_box,
         tabs,
-        build_banner_ad(page),
+        build_banner_ad(),
     ]
 
     return ft.Column(

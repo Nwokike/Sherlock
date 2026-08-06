@@ -12,7 +12,7 @@ import logging
 import flet as ft
 from flet import Control
 
-from core.styles import build_banner_ad
+from components.banner_ad import build_banner_ad
 from core import tokens
 from core.constants import STORAGE_SELECTED_SITES
 from state.app_state import AppStateCtx
@@ -40,10 +40,7 @@ POPULAR_SITES = {
 
 @ft.component
 def SitesScreen() -> Control:
-    from flet import context
-
     state = ft.use_context(AppStateCtx)
-    page = context.page
 
     search_query, set_search_query = ft.use_state("")
     checked_states, set_checked_states = ft.use_state({})
@@ -226,7 +223,7 @@ def SitesScreen() -> Control:
             bulk_actions,
             stats_header,
             ft.ListView(controls=items, spacing=0, expand=True),
-            build_banner_ad(page),
+            build_banner_ad(),
         ],
         expand=True,
         spacing=0,

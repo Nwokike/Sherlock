@@ -11,7 +11,7 @@ import logging
 import flet as ft
 from flet import Control
 
-from core.styles import build_banner_ad
+from components.banner_ad import build_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
 from core.constants import STORAGE_HISTORY
@@ -23,11 +23,8 @@ logger = logging.getLogger("HistoryScreen")
 
 @ft.component
 def HistoryScreen() -> Control:
-    from flet import context
-
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
-    page = context.page
     history = state.history if state.history else []
 
     def _on_clear_all():
@@ -161,7 +158,7 @@ def HistoryScreen() -> Control:
     return ft.Column(
         controls=[
             ft.Container(content=body, expand=True),
-            build_banner_ad(page),
+            build_banner_ad(),
         ],
         expand=True,
         spacing=0,

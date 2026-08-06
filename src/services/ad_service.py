@@ -146,8 +146,3 @@ class AdService:
             else:
                 on_close()
             return False
-
-    async def close(self):
-        """Clean up ad resources on page close."""
-        self.interstitial = None
-        self._on_close = None

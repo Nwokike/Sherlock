@@ -51,6 +51,7 @@ class ControllerMethods:
     show_results: Callable[[], None] = _noop_sync
     show_sites: Callable[[], None] = _noop_sync
     show_settings: Callable[[], None] = _noop_sync
+    show_history: Callable[[], None] = _noop_sync
     go_home: Callable[[], None] = _noop_sync
     back: Callable[[], None] = _noop_sync
     toggle_theme: Callable[[], None] = _noop_sync

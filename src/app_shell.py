@@ -301,6 +301,10 @@ def AppShell() -> Control:
         set_active_view("dashboard"),
         set_active_tab(2),
     )
+    controller.show_history = lambda: (
+        set_active_view("dashboard"),
+        set_active_tab(1),
+    )
 
     from flet import context
 

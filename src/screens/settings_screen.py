@@ -12,7 +12,7 @@ import logging
 import flet as ft
 from flet import Control
 
-from components.banner_ad import build_banner_ad
+from core.styles import build_banner_ad
 from components.section_header import SectionHeader
 from core import tokens
 from core.constants import (
@@ -104,8 +104,11 @@ def _settings_card(controls: list[Control]) -> ft.Container:
 
 @ft.component
 def SettingsScreen() -> Control:
+    from flet import context
+
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
+    page = context.page
 
     async def _on_theme_change(val: str):
         from flet import context
@@ -393,16 +396,16 @@ def SettingsScreen() -> Control:
             ft.Container(height=tokens.SPACE_SM),
             SectionHeader("PREFERENCES"),
             preferences_card,
-            build_banner_ad(),
+            build_banner_ad(page),
             SectionHeader("SCAN PARAMETERS"),
             scan_card,
-            build_banner_ad(),
+            build_banner_ad(page),
             SectionHeader("CONNECTION & SPEED"),
             performance_card,
-            build_banner_ad(),
+            build_banner_ad(page),
             SectionHeader("CUSTOM MANIFEST"),
             manifest_card,
-            build_banner_ad(),
+            build_banner_ad(page),
             SectionHeader("ABOUT"),
             about_card,
             ft.Container(height=tokens.SPACE_XXXL),

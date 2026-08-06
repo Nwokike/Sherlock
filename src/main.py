@@ -250,22 +250,25 @@ class AppController:
             self.sherlock_service.cancel()
 
     async def _save_to_history(self, username: str, found: int, total: int) -> None:
-        """Append a search entry to persistent history."""
+        """Append a search entry to persistent history and observable state."""
         if not self.storage:
             return
         try:
+            entry = {
+                "username": username,
+                "found": found,
+                "total": total,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+            }
             raw = await self.storage.get(STORAGE_HISTORY)
             entries = json.loads(raw) if raw else []
-            entries.append(
-                {
-                    "username": username,
-                    "found": found,
-                    "total": total,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M"),
-                }
-            )
+            entries.append(entry)
             entries = entries[-50:]
             await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
+            # Update observable state so HistoryScreen and home "Recent" reflect it
+            state.history.insert(0, entry)
+            if len(state.history) > 50:
+                state.history[:] = state.history[:50]
         except Exception as e:
             logger.warning("Failed to save history: %s", e)
 

@@ -388,6 +388,10 @@ def HomeScreen() -> Control:
                 raw = await storage.get(STORAGE_HISTORY)
                 if raw:
                     entries = json.loads(raw)
+                    # Update observable state so HistoryScreen sees it
+                    state.history.clear()
+                    for e in entries:
+                        state.history.append(e)
                     set_history_items(entries[-3:])
             except Exception:
                 pass
@@ -715,12 +719,32 @@ def HomeScreen() -> Control:
                     ft.Container(
                         content=ft.Column(
                             [
-                                ft.Text(
-                                    "Recent",
-                                    size=tokens.FONT_SM,
-                                    weight=ft.FontWeight.W_600,
-                                    color=ft.Colors.ON_SURFACE_VARIANT,
-                                    font_family="Outfit",
+                                ft.Row(
+                                    [
+                                        ft.Text(
+                                            "Recent",
+                                            size=tokens.FONT_SM,
+                                            weight=ft.FontWeight.W_600,
+                                            color=ft.Colors.ON_SURFACE_VARIANT,
+                                            font_family="Outfit",
+                                        ),
+                                        ft.Container(expand=True),
+                                        ft.Container(
+                                            content=ft.Icon(
+                                                ft.Icons.ARROW_FORWARD_ROUNDED,
+                                                size=tokens.ICON_SM,
+                                                color=ft.Colors.ON_SURFACE_VARIANT,
+                                            ),
+                                            padding=6,
+                                            border_radius=tokens.RADIUS_SM,
+                                            ink=True,
+                                            tooltip="View all history",
+                                            on_click=lambda _: (
+                                                controller.show_history()
+                                            ),
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                 ),
                                 *recent_rows,
                             ],
@@ -833,7 +857,7 @@ def HomeScreen() -> Control:
 
     return ft.Container(
         content=ft.Column(
-            [content, build_banner_ad()],
+            [content, build_banner_ad(_get_page())],
             expand=True,
             spacing=0,
         ),

@@ -14,7 +14,8 @@ import flet as ft
 from flet import Control
 
 from core import tokens
-from core.constants import APP_NAME, STORAGE_HISTORY, STORAGE_THEME
+from core.constants import MSG_OFFLINE, APP_NAME, STORAGE_HISTORY, STORAGE_THEME
+from core.styles import build_banner_ad
 from core.theme import (
     AppColors,
     AppStyles,
@@ -40,7 +41,7 @@ _FEATURES = [
     {
         "icon": ft.Icons.SPEED_ROUNDED,
         "title": "Ultra-Fast Offline Scans",
-        "desc": "Run high-performance async queries with the local offline database. No internet needed.",
+        "desc": "Scan from the local offline database — no site-list download first. A connection is still needed to reach each site.",
         "color": AppColors.PRIMARY_DARK,
     },
     {
@@ -532,6 +533,31 @@ def HomeScreen() -> Control:
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
             ),
+            # Offline banner — reactively bound to state.is_online
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.WIFI_OFF_ROUNDED,
+                            color=ft.Colors.ON_ERROR_CONTAINER,
+                            size=tokens.ICON_SM,
+                        ),
+                        ft.Text(
+                            MSG_OFFLINE,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_ERROR_CONTAINER,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=tokens.SPACE_SM,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM
+                ),
+                bgcolor=ft.Colors.ERROR_CONTAINER,
+                visible=not state.is_online,
+            ),
             # Search field — modern SearchBar
             ft.Container(
                 alignment=ft.Alignment.CENTER,
@@ -755,6 +781,8 @@ def HomeScreen() -> Control:
                 if recent_rows
                 else []
             ),
+            # Banner ad (after recent searches) — DDGS placement
+            build_banner_ad(),
             # What Sherlock Can Do
             ft.Container(
                 content=ft.Column(
@@ -782,6 +810,8 @@ def HomeScreen() -> Control:
                     tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_LG
                 ),
             ),
+            # Banner ad (after features) — DDGS placement
+            build_banner_ad(),
             # How It Works
             ft.Container(
                 content=ft.Column(
@@ -850,11 +880,9 @@ def HomeScreen() -> Control:
         expand=True,
     )
 
-    from core.styles import build_banner_ad
-
     return ft.Container(
         content=ft.Column(
-            [content, build_banner_ad()],
+            [content],
             expand=True,
             spacing=0,
         ),

@@ -34,9 +34,9 @@ _SLIDES = [
         "color": AppColors.ACCENT,
         "title": "Ultra-Fast\nOffline Scans",
         "body": (
-            "Run high-performance asynchronous queries. Use the local "
-            "offline-first database to scan instantly, and configure custom "
-            "timeouts for your network speed."
+            "Run high-performance asynchronous queries from the local "
+            "offline database — no site-list download first. Configure "
+            "custom timeouts for your network speed."
         ),
     },
     {

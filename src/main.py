@@ -23,6 +23,11 @@ import flet as ft
 from core.constants import (
     APP_NAME,
     APP_VERSION,
+    ERR_GENERIC,
+    ERR_NETWORK,
+    MSG_OFFLINE,
+    MSG_ONLINE,
+    MSG_SEARCH_OFFLINE,
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
     STORAGE_LOCAL_DB,
@@ -54,6 +59,7 @@ class AppController:
         self.storage: StorageService | None = None
         self.ad_service: AdService | None = None
         self.sherlock_service: SherlockService | None = None
+        self.connectivity: ft.Connectivity | None = None
         # Shared controller-methods instance the component tree reads via
         # use_context(ControllerMethodsCtx). AppShell mutates the view-
         # navigation closures in-place; we hand AppShell a reference so
@@ -90,6 +96,16 @@ class AppController:
         file_picker = ft.FilePicker()
         self.page.services.append(file_picker)
         self.page.file_picker = file_picker
+
+        # Connectivity service — native listener for device network state.
+        # Drives state.is_online (offline banner, transition toasts, and
+        # the search gate). page.on_disconnect is NOT a substitute: it is
+        # the Flet web-client session event, not internet availability.
+        self.connectivity = ft.Connectivity()
+        self.connectivity.on_change = self._on_connectivity_change
+        self.page.services.append(self.connectivity)
+        self.page.run_task(self._init_connectivity)
+        self.page.on_app_lifecycle_state_change = self._on_lifecycle_change
 
         # Init services
         self.storage = StorageService(self.page)
@@ -198,6 +214,13 @@ class AppController:
         if not self.sherlock_service:
             return
 
+        # Offline gate — don't launch a 400-site scan that can only
+        # produce timeouts. History/settings still work offline.
+        if not state.is_online:
+            logger.info("Search blocked: device offline")
+            self._show_snack(MSG_SEARCH_OFFLINE, duration=10000)
+            return
+
         state.current_username = username
         state.is_searching = True
         state.search_error = None
@@ -238,6 +261,25 @@ class AppController:
             logger.exception("Search failed")
             state.is_searching = False
             state.search_error = str(e)
+            # Surface the failure — without this a hard crash renders as
+            # silently empty results. Keyword heuristic mirrors DDGS.
+            msg = (
+                ERR_NETWORK
+                if any(
+                    kw in str(e).lower()
+                    for kw in (
+                        "dns",
+                        "connect",
+                        "network",
+                        "offline",
+                        "unreachable",
+                        "timeout",
+                        "timed out",
+                    )
+                )
+                else ERR_GENERIC
+            )
+            self._show_snack(msg, duration=10000)
 
     async def _apply_progress(self, progress) -> None:
         """Push a search-progress snapshot into observable state."""
@@ -273,21 +315,66 @@ class AppController:
 
     # --- Errors -------------------------------------------------------
 
-    def on_error(self, e) -> None:
-        """Page-level error handler. Best-effort snackbar."""
-        logger.error("Page error: %s", e.data)
+    def _show_snack(self, message: str, duration: int = 4000) -> None:
+        """Best-effort snackbar for user-facing messages."""
         try:
             self.page.snack_bar = ft.SnackBar(
-                content=ft.Text(
-                    "Something went wrong. Please try again.",
-                    color=ft.Colors.WHITE,
-                ),
+                content=ft.Text(message, color=ft.Colors.WHITE),
                 bgcolor=ft.Colors.BLACK,
+                duration=duration,
             )
             self.page.snack_bar.open = True
             self.page.update()
         except Exception:
             pass
+
+    def on_error(self, e) -> None:
+        """Page-level error handler. Best-effort snackbar."""
+        logger.error("Page error: %s", e.data)
+        self._show_snack(ERR_GENERIC)
+
+    # --- Connectivity -------------------------------------------------
+
+    async def _init_connectivity(self) -> None:
+        """Initial network probe. Until it lands, is_online stays at its
+        default (True) so the app opens online."""
+        if not self.connectivity:
+            return
+        try:
+            result = await self.connectivity.get_connectivity()
+            state.is_online = ft.ConnectivityType.NONE not in result
+        except Exception:
+            pass
+
+    def _on_connectivity_change(self, e) -> None:
+        """Native listener callback for device connectivity changes."""
+        was_online = state.is_online
+        try:
+            types = getattr(e, "connectivity", None) or [e.data]
+            state.is_online = ft.ConnectivityType.NONE not in types
+        except Exception:
+            return
+        if was_online and not state.is_online:
+            logger.warning("Connectivity lost")
+            self._show_snack(MSG_OFFLINE, duration=10000)
+        elif not was_online and state.is_online:
+            logger.info("Connectivity restored")
+            self._show_snack(MSG_ONLINE)
+
+    async def _on_lifecycle_change(
+        self, e: ft.AppLifecycleStateChangeEvent
+    ) -> None:
+        """Re-probe on resume — the OS can drop the connection while we're
+        backgrounded and the connectivity listener may not fire for it."""
+        if e.state not in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):
+            return
+        if not self.connectivity:
+            return
+        try:
+            result = await self.connectivity.get_connectivity()
+            state.is_online = ft.ConnectivityType.NONE not in result
+        except Exception as exc:
+            logger.warning("Connectivity probe failed: %s", exc)
 
 
 async def main(page: ft.Page) -> None:

@@ -1,7 +1,7 @@
 """Application-wide constants."""
 
 APP_NAME = "Sherlock"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 STORAGE_SETTINGS = "sherlock_settings"
 STORAGE_HISTORY = "sherlock_history"
@@ -40,3 +40,14 @@ ERR_NETWORK = "Network error. Check your connection."
 ERR_GENERIC = "Something went wrong. Please try again."
 ERR_NO_USERNAME = "Please enter a username"
 ERR_INVALID_USERNAME = "Invalid username format"
+
+# Connectivity messages
+MSG_OFFLINE = (
+    "You're offline. Searching needs a connection — "
+    "history and settings still work."
+)
+MSG_ONLINE = "You're back online."
+MSG_SEARCH_OFFLINE = (
+    "You're offline, so scans can't reach sites. "
+    "Check your connection and try again."
+)

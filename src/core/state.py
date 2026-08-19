@@ -12,6 +12,10 @@ class AppState:
     is_searching: bool = False
     is_first_launch: bool = True
     has_accepted_terms: bool = False
+    # Device connectivity (ft.Connectivity service). Only the connectivity
+    # handlers in main.py mutate this — UI gates (offline banner, search
+    # gate) re-render reactively when it flips.
+    is_online: bool = True
 
     # --- Current search ---
     current_username: str = ""
@@ -72,6 +76,7 @@ class AppState:
         self.progress_version = 0
         self.search_error = None
         self.active_username = ""
+        self.is_online = True
         self.search_targets.clear()
         self.target_results.clear()
 

@@ -22,6 +22,7 @@ class TestAppState:
         assert app_state.history == []
         assert app_state.nsfw_enabled is True
         assert app_state.timeout == 30
+        assert app_state.is_online is True
 
     def test_search_fields(self, app_state):
         assert app_state.search_progress is None
@@ -36,6 +37,7 @@ class TestAppState:
         app_state.progress_version = 5
         app_state.target_results["test"] = object()
         app_state.search_targets.append("test")
+        app_state.is_online = False
 
         app_state.reset_search()
 
@@ -45,6 +47,20 @@ class TestAppState:
         assert app_state.progress_version == 0
         assert len(app_state.target_results) == 0
         assert len(app_state.search_targets) == 0
+        assert app_state.is_online is True
+
+    def test_is_online_notifies(self, app_state):
+        """Flipping is_online must notify subscribers (drives the reactive
+        offline banner and search gate). The disposer keeps the listener
+        alive — flet stores listeners in a WeakSet."""
+        notifications = []
+        disposer = app_state.subscribe(
+            lambda sender, field: notifications.append(field)
+        )
+
+        app_state.is_online = False
+        assert notifications == ["is_online"]
+        disposer()
 
     def test_history_observable(self, app_state):
         """history is an ObservableList — mutations should be tracked."""
@@ -70,19 +86,27 @@ class TestAppStateObservable:
     """Verify the @ft.observable mixin works correctly."""
 
     def test_subscribe_and_notify(self, app_state):
+        # Disposer keeps the listener alive — flet stores listeners
+        # in a WeakSet, so a disposable lambda would be GC'd silently.
         notifications = []
-        app_state.subscribe(lambda sender, field: notifications.append(field))
+        disposer = app_state.subscribe(
+            lambda sender, field: notifications.append(field)
+        )
 
         app_state.is_searching = True
         assert len(notifications) == 1
         assert notifications[0] == "is_searching"
+        disposer()
 
     def test_collection_mutation_notifies(self, app_state):
         notifications = []
-        app_state.subscribe(lambda sender, field: notifications.append(field))
+        disposer = app_state.subscribe(
+            lambda sender, field: notifications.append(field)
+        )
 
         app_state.history.append({"username": "test"})
         assert len(notifications) >= 1
+        disposer()
 
     def test_version_counter(self, app_state):
         app_state.progress_version = 1

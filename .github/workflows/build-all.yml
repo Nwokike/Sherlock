@@ -281,23 +281,23 @@ jobs:
           EOF
 
           # Build rich .deb using fpm
-          fpm -s dir -t deb -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \\
-              --architecture amd64 \\
-              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \\
-              --maintainer "Kiri <support@kiri.ng>" \\
-              --url "https://kiri.ng" \\
-              --category "utils" \\
-              -p build/dist/Sherlock_amd64.deb \\
+          fpm -s dir -t deb -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \
+              --architecture amd64 \
+              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \
+              --maintainer "Kiri <support@kiri.ng>" \
+              --url "https://kiri.ng" \
+              --category "utils" \
+              -p build/dist/Sherlock_amd64.deb \
               -C pkg_root .
 
           # Build rich .rpm using fpm
-          fpm -s dir -t rpm -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \\
-              --architecture x86_64 \\
-              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \\
-              --maintainer "Kiri <support@kiri.ng>" \\
-              --url "https://kiri.ng" \\
-              --category "Utility" \\
-              -p build/dist/Sherlock_x86_64.rpm \\
+          fpm -s dir -t rpm -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \
+              --architecture x86_64 \
+              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \
+              --maintainer "Kiri <support@kiri.ng>" \
+              --url "https://kiri.ng" \
+              --category "Utility" \
+              -p build/dist/Sherlock_x86_64.rpm \
               -C pkg_root .
 
       - name: Upload directly to GitHub Release

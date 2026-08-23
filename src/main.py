@@ -61,6 +61,12 @@ class AppController:
         self.ad_service: AdService | None = None
         self.sherlock_service: SherlockService | None = None
         self.connectivity: ft.Connectivity | None = None
+        # Main-thread event loop, captured in init(). Worker threads
+        # (the sherlock scan thread) bridge progress callbacks onto it
+        # via asyncio.run_coroutine_threadsafe — page.run_task cannot be
+        # used off the main loop (it resolves session.connection.loop in
+        # a context with no running loop and drops the coroutine).
+        self._main_loop: asyncio.AbstractEventLoop | None = None
         # Shared controller-methods instance the component tree reads via
         # use_context(ControllerMethodsCtx). AppShell mutates the view-
         # navigation closures in-place; we hand AppShell a reference so
@@ -72,6 +78,7 @@ class AppController:
     async def init(self) -> None:
         """Configure the page, init services, load state, mount AppShell."""
         logger.info("Starting %s v%s", APP_NAME, APP_VERSION)
+        self._main_loop = asyncio.get_running_loop()
 
         self.page.title = APP_NAME
         self.page.padding = 0
@@ -255,14 +262,11 @@ class AppController:
         except Exception:
             pass
 
-        # Bridge the thread-shed progress callbacks to the event loop
-        def _thread_progress(progress):
-            self.page.run_task(self._apply_progress, progress)
-
+        # Bridge the thread-shed progress callbacks onto the main loop
         try:
             result = await self.sherlock_service.search(
                 username=username,
-                on_progress=_thread_progress,
+                on_progress=self._progress_from_thread,
                 timeout=state.timeout,
             )
             state.is_searching = False
@@ -299,6 +303,27 @@ class AppController:
                 else ERR_GENERIC
             )
             self._show_snack(msg, duration=10000)
+
+    def _progress_from_thread(self, progress) -> None:
+        """Bridge a scan-worker progress tick onto the main event loop.
+
+        The sherlock scan runs in a worker thread; its callbacks must be
+        scheduled onto the loop captured at init. page.run_task is NOT
+        usable here: it evaluates `self.session.connection.loop` from the
+        worker thread (no running loop there), raises, and drops the
+        already-created coroutine — surfacing as
+        "coroutine '_apply_progress' was never awaited" and silently
+        killing live result ticking.
+        """
+        if not self._main_loop:
+            logger.warning("No main loop captured; progress tick dropped")
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._apply_progress(progress), self._main_loop
+            )
+        except Exception as e:
+            logger.warning("Progress dispatch failed: %s", e)
 
     async def _apply_progress(self, progress) -> None:
         """Push a search-progress snapshot into observable state."""

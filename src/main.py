@@ -368,6 +368,8 @@ class AppController:
             entries.append(entry)
             entries = entries[-50:]
             await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
+            # Observable mirror is newest-first (display order); the
+            # stored list stays oldest-first. Loaders must reverse.
             state.history.insert(0, entry)
             if len(state.history) > 50:
                 state.history[:] = state.history[:50]

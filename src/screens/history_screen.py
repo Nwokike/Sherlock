@@ -56,7 +56,10 @@ def HistoryScreen() -> Control:
         )
     else:
         items = []
-        for entry in reversed(history):
+        # state.history is newest-first — render it as-is so the most
+        # recent search sits on top regardless of how this session was
+        # started (fresh load vs in-app searches).
+        for entry in history:
             username = entry.get("username", "")
             found = entry.get("found", 0)
             total = entry.get("total", 0)

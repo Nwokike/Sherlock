@@ -302,9 +302,6 @@ def HomeScreen() -> Control:
     active_chip, set_active_chip = ft.use_state("all")
     tools_expanded, set_tools_expanded = ft.use_state(False)
     theme_version, set_theme_version = ft.use_state(0)
-    history_items, set_history_items = ft.use_state(
-        list(state.history) if state.history else []
-    )
 
     from flet import context as flet_context
 
@@ -390,10 +387,10 @@ def HomeScreen() -> Control:
                 raw = await storage.get(STORAGE_HISTORY)
                 if raw:
                     entries = json.loads(raw)
+                    # Contract: storage is oldest-first; observable
+                    # state.history is ALWAYS newest-first (display order).
                     state.history.clear()
-                    for e in entries:
-                        state.history.append(e)
-                    set_history_items(entries[-3:])
+                    state.history.extend(reversed(entries))
             except Exception:
                 pass
 
@@ -437,10 +434,11 @@ def HomeScreen() -> Control:
         ),
     ]
 
-    # Recent searches
+    # Recent searches — read observable state directly (reactive), so
+    # the three most recent sit on top.
     recent_rows = []
-    if history_items:
-        for entry in history_items[-3:]:
+    if state.history:
+        for entry in list(state.history[:3]):
             username = entry.get("username", "")
             found = entry.get("found", 0)
             total = entry.get("total", 0)

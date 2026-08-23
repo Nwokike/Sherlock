@@ -180,6 +180,7 @@ def ResultsScreen() -> Control:
     # Filter bar
     filter_box = ft.Container(
         content=ft.TextField(
+            value=filter_query,
             hint_text="Filter results by site name...",
             prefix_icon=ft.Icons.FILTER_LIST_ROUNDED,
             border_radius=tokens.RADIUS_MD,

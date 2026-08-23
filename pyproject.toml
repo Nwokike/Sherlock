@@ -7,6 +7,10 @@ requires-python = ">=3.13"
 dependencies = [
     "flet==0.85.0",
     "flet-ads==0.85.0",
+    # Pinned on purpose: sherlock-project requires stem (>=1.8.0,<2.0.0)
+    # but PyPI ships no wheel for Android cross-builds — CI precompiles
+    # this exact version and installs it via PIP_FIND_LINKS.
+    "stem==1.8.1",
     "sherlock-project>=0.16.0",
 ]
 

@@ -167,6 +167,7 @@ def SitesScreen() -> Control:
     # Search bar
     search_bar = ft.Container(
         content=ft.TextField(
+            value=search_query,
             hint_text="Search networks...",
             prefix_icon=ft.Icons.SEARCH_ROUNDED,
             border_radius=tokens.RADIUS_MD,

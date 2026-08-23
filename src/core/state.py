@@ -46,11 +46,17 @@ class AppState:
     timeout: int = 30
     selected_sites: list[str] | None = None
     use_local_db: bool = True
-    db_sync_status: str = "Idle"
     custom_manifest: str = ""
 
-    # --- Updates ---
-    update_available_version: str | None = None
+    # --- Site database ---
+    # Total sites in the active site database (0 until first load lands).
+    sites_total: int = 0
+    # Bumped after every successful site-database load so screens
+    # subscribed to it (e.g. SitesScreen) re-render when names arrive.
+    sites_version: int = 0
+    # Warm copy of site names persisted to storage — lets the Sites
+    # screen render before (or if) a fresh load finishes.
+    sites_cache: list | None = None
 
     def __init__(self):
         # Collections must be assigned in __init__ so the Observable
@@ -61,7 +67,7 @@ class AppState:
         self.selected_sites = []
         self.search_targets = []
         self.target_results = {}
-        self.update_available_version = None
+        self.sites_cache = []
         self.search_error = None
 
     def reset_search(self) -> None:

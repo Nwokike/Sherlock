@@ -28,6 +28,7 @@ from core.constants import (
     MSG_OFFLINE,
     MSG_ONLINE,
     MSG_SEARCH_OFFLINE,
+    STORAGE_CACHED_SITES,
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
     STORAGE_LOCAL_DB,
@@ -120,16 +121,13 @@ class AppController:
 
         # Load sites if sherlock is available
         if self.sherlock_service.is_available:
-            self.page.run_task(self.sherlock_service.load_sites)
-
-        # Check for upstream Sherlock updates
-        self.page.run_task(self._check_updates)
+            self.page.run_task(self._load_and_cache_sites)
 
         # Mount the React-style component tree
         from app_shell import AppShell
 
         refresh_sites = (
-            self.sherlock_service.load_sites
+            self._load_and_cache_sites
             if self.sherlock_service.is_available
             else (lambda: asyncio.sleep(0))
         )
@@ -138,6 +136,7 @@ class AppController:
             refresh_sites=refresh_sites,
             start_search=self.start_search,
             cancel_search=self.cancel_search,
+            save_selected_sites=self.save_selected_sites,
         )
         self._controller_methods = methods
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
@@ -182,6 +181,19 @@ class AppController:
             else:
                 state.selected_sites = []
 
+            # Warm site-name cache — lets the Sites screen and the Home
+            # targets card show real names before the first load lands.
+            cache_raw = await self.storage.get(STORAGE_CACHED_SITES)
+            if cache_raw:
+                try:
+                    names = json.loads(cache_raw)
+                    if isinstance(names, list) and names:
+                        state.sites_cache = sorted(names, key=str.lower)
+                        state.sites_total = len(names)
+                        state.sites_version += 1
+                except Exception:
+                    logger.warning("Site cache unreadable; will repopulate on load")
+
             manifest_raw = await self.storage.get(STORAGE_MANIFEST)
             state.custom_manifest = manifest_raw if manifest_raw else ""
 
@@ -192,16 +204,23 @@ class AppController:
         except Exception as e:
             logger.warning("Settings load failed: %s", e)
 
-    async def _check_updates(self) -> None:
+    async def _load_and_cache_sites(self) -> None:
+        """Load the site database, publish to state, and warm the cache.
+
+        Wraps `SherlockService.load_sites` so the controller (not the
+        service) owns persistence. Call sites:
+        - app startup (page.run_task)
+        - `refresh_sites` (used by Settings after manifest/DB changes)
+        """
+        if not self.sherlock_service:
+            return
+        count = await self.sherlock_service.load_sites()
+        if not count or not state.sites_cache:
+            return
         try:
-            if not self.sherlock_service:
-                return
-            latest = await self.sherlock_service.check_updates()
-            if latest:
-                state.update_available_version = latest
-                logger.info("New Sherlock version available: %s", latest)
-        except Exception:
-            pass
+            await self.storage.set(STORAGE_CACHED_SITES, json.dumps(state.sites_cache))
+        except Exception as e:
+            logger.warning("Failed to cache site names: %s", e)
 
     # --- Search -------------------------------------------------------
 
@@ -291,6 +310,23 @@ class AppController:
         if self.sherlock_service:
             self.sherlock_service.cancel()
 
+    async def save_selected_sites(self, sites: list[str]) -> None:
+        """Persist the network-selection scope and update observable state.
+
+        An empty list means "no custom scope" — scan every available
+        network (same semantics the pre-restructure rewrite used).
+        """
+        state.selected_sites = list(sites) if sites else []
+        if not self.storage:
+            return
+        try:
+            if sites:
+                await self.storage.set(STORAGE_SELECTED_SITES, ",".join(sites))
+            else:
+                await self.storage.delete(STORAGE_SELECTED_SITES)
+        except Exception as e:
+            logger.warning("Failed to persist site selection: %s", e)
+
     async def _save_to_history(self, username: str, found: int, total: int) -> None:
         """Append a search entry to persistent history and observable state."""
         if not self.storage:
@@ -317,16 +353,9 @@ class AppController:
 
     def _show_snack(self, message: str, duration: int = 4000) -> None:
         """Best-effort snackbar for user-facing messages."""
-        try:
-            self.page.snack_bar = ft.SnackBar(
-                content=ft.Text(message, color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.BLACK,
-                duration=duration,
-            )
-            self.page.snack_bar.open = True
-            self.page.update()
-        except Exception:
-            pass
+        from core.notify import show_snack
+
+        show_snack(self.page, message, duration=duration)
 
     def on_error(self, e) -> None:
         """Page-level error handler. Best-effort snackbar."""
@@ -361,9 +390,7 @@ class AppController:
             logger.info("Connectivity restored")
             self._show_snack(MSG_ONLINE)
 
-    async def _on_lifecycle_change(
-        self, e: ft.AppLifecycleStateChangeEvent
-    ) -> None:
+    async def _on_lifecycle_change(self, e: ft.AppLifecycleStateChangeEvent) -> None:
         """Re-probe on resume — the OS can drop the connection while we're
         backgrounded and the connectivity listener may not fire for it."""
         if e.state not in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):

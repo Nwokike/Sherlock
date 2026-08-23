@@ -56,6 +56,15 @@ def controller(fake_page):
     state.current_username = ""
 
 
+def _last_snack(page) -> ft.SnackBar:
+    """Snacks surface via page.show_dialog (page.snack_bar is not a
+    Flet 0.85 API) — grab the most recent dialog and assert it's a snack."""
+    assert page._dialogs, "expected a snackbar to be shown"
+    snack = page._dialogs[-1]
+    assert isinstance(snack, ft.SnackBar), f"last dialog was {snack!r}"
+    return snack
+
+
 class TestSearchGate:
     def test_offline_search_blocked(self, controller):
         """Offline, start_search must not launch the scan at all."""
@@ -68,7 +77,7 @@ class TestSearchGate:
         assert stub.search_calls == 0
         assert state.is_searching is False
         assert state.current_username == ""
-        assert controller.page.snack_bar is not None
+        _last_snack(controller.page)
 
     def test_offline_gate_message(self, controller):
         controller.sherlock_service = _StubSherlockService()
@@ -76,7 +85,7 @@ class TestSearchGate:
 
         asyncio.run(controller.start_search("testuser"))
 
-        assert controller.page.snack_bar.content.value == MSG_SEARCH_OFFLINE
+        assert _last_snack(controller.page).content.value == MSG_SEARCH_OFFLINE
 
     def test_online_search_failure_shows_network_error(self, controller):
         """A hard failure online must be surfaced, not silently empty."""
@@ -87,7 +96,7 @@ class TestSearchGate:
 
         assert state.search_error is not None
         assert state.is_searching is False
-        assert controller.page.snack_bar.content.value == ERR_NETWORK
+        assert _last_snack(controller.page).content.value == ERR_NETWORK
 
 
 class TestConnectivityHandlers:
@@ -97,20 +106,15 @@ class TestConnectivityHandlers:
 
     def test_change_to_offline(self, controller):
         state.is_online = True
-        controller._on_connectivity_change(
-            self._event([ft.ConnectivityType.NONE])
-        )
+        controller._on_connectivity_change(self._event([ft.ConnectivityType.NONE]))
         assert state.is_online is False
-        assert controller.page.snack_bar is not None
-        assert controller.page.snack_bar.content.value == MSG_OFFLINE
+        assert _last_snack(controller.page).content.value == MSG_OFFLINE
 
     def test_change_to_online(self, controller):
         state.is_online = False
-        controller._on_connectivity_change(
-            self._event([ft.ConnectivityType.WIFI])
-        )
+        controller._on_connectivity_change(self._event([ft.ConnectivityType.WIFI]))
         assert state.is_online is True
-        assert controller.page.snack_bar is not None
+        _last_snack(controller.page)
 
     def test_change_event_fallback_to_data(self, controller):
         """Defensive path: event without a `connectivity` attribute

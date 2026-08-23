@@ -42,19 +42,33 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _copy_urls(e):
             async def _copy():
-                from core.state import state as app_state
+                from flet import context
 
-                if app_state.search_progress and app_state.search_progress.found:
-                    urls = [
-                        r.url_user
-                        for r in app_state.search_progress.found
-                        if r.url_user
-                    ]
-                    try:
-                        cb = ft.Clipboard()
-                        await cb.set("\n".join(urls))
-                    except Exception:
-                        pass
+                page = context.page
+                from core.notify import show_snack
+                from core.state import state as app_state
+                from core.theme import AppColors
+
+                if not (app_state.search_progress and app_state.search_progress.found):
+                    return
+                urls = [
+                    r.url_user for r in app_state.search_progress.found if r.url_user
+                ]
+                try:
+                    cb = ft.Clipboard()
+                    await cb.set("\n".join(urls))
+                    show_snack(
+                        page,
+                        f"{len(urls)} profile URL{'s' if len(urls) != 1 else ''} copied",
+                        bgcolor=AppColors.SUCCESS,
+                    )
+                except Exception as ex:
+                    logger.warning("Copy URLs failed: %s", ex)
+                    show_snack(
+                        page,
+                        "Couldn't copy URLs — try again.",
+                        bgcolor=AppColors.ERROR,
+                    )
 
             asyncio.create_task(_copy())
 
@@ -179,18 +193,19 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
                         await asyncio.to_thread(_write_file)
 
-                    page.snack_bar = ft.SnackBar(
-                        ft.Text("Saved successfully!", color=ft.Colors.WHITE),
-                        bgcolor=AppColors.SUCCESS,
-                    )
+                    from core.notify import show_snack
+
+                    show_snack(page, "Saved successfully!", bgcolor=AppColors.SUCCESS)
                 except Exception as ex:
                     logger.exception("Export failed: %s", ex)
-                    page.snack_bar = ft.SnackBar(
-                        ft.Text(f"Failed to save: {ex!s}", color=ft.Colors.WHITE),
+                    from core.notify import show_snack
+
+                    show_snack(
+                        page,
+                        f"Failed to save: {ex!s}",
                         bgcolor=AppColors.ERROR,
+                        duration=10000,
                     )
-                page.snack_bar.open = True
-                page.update()
 
             asyncio.create_task(_do_export())
 

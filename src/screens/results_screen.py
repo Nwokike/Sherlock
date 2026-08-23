@@ -16,6 +16,7 @@ from components.banner_ad import build_banner_ad
 from components.result_card import ResultCard
 from components.stat_card import StatCard
 from core import tokens
+from core.constants import ERR_OPEN_URL
 from core.theme import AppColors
 from hooks.use_debounce import use_debounce
 from state.app_state import AppStateCtx
@@ -36,16 +37,6 @@ def ResultsScreen() -> Control:
     debounced_filter = use_debounce(filter_query, 250)
 
     # Get active progress
-    active_username = (
-        state.active_username
-        if state.active_username
-        else (
-            state.search_progress.username
-            if state.search_progress
-            else state.last_results_username
-        )
-    )
-
     active_progress = state.search_progress
     is_running = active_progress.is_running if active_progress else False
 
@@ -74,12 +65,19 @@ def ResultsScreen() -> Control:
                 icon=ft.Icons.SEARCH_OFF_ROUNDED,
             )
 
-        def _open_url(url):
+        def _open_url(url: str):
             async def _launch():
+                from core.notify import show_snack
+                from core.theme import AppColors
+                from flet import context
+
                 try:
                     await ft.UrlLauncher().launch_url(url)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to launch URL %s: %s", url, exc)
+                    page = context.page
+                    if page:
+                        show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
 
             asyncio.create_task(_launch())
 
@@ -91,7 +89,7 @@ def ResultsScreen() -> Control:
                     url_user=r.url_user,
                     url_main=r.url_main,
                     query_time=r.query_time,
-                    on_open=lambda e, u=r.url_user: _open_url(u) if u else None,
+                    on_open=lambda url: _open_url(url),
                 )
                 for r in items
             ],
@@ -249,66 +247,6 @@ def ResultsScreen() -> Control:
                 bottom=0,
             ),
         )
-
-    # Export actions
-    async def _copy_all_urls(e):
-        if not active_progress or not active_progress.found:
-            return
-        urls = [r.url_user for r in active_progress.found if r.url_user]
-        text = "\n".join(urls)
-        try:
-            cb = ft.Clipboard()
-            await cb.set(text)
-        except Exception:
-            pass
-
-    def _close_dialog(e=None):
-        from flet import context
-
-        context.page.pop_dialog()
-
-    def _on_export(format_type: str):
-        async def _export():
-            from flet import context
-
-            page = context.page
-            page.pop_dialog()
-            try:
-                if not active_progress:
-                    return
-                output = []
-                for r in active_progress.found:
-                    if r.url_user:
-                        output.append(r.url_user)
-                report_bytes = "\n".join(output).encode("utf-8")
-                ext = format_type
-                file_picker = ft.FilePicker()
-                page.services.append(file_picker)
-                await file_picker.save_file(
-                    file_name=f"sherlock_{active_username}.{ext}",
-                    allowed_extensions=[ext],
-                    dialog_title=f"Save scan report as {format_type.upper()}",
-                    src_bytes=report_bytes,
-                )
-            except Exception as ex:
-                logger.exception("Export failed: %s", ex)
-
-        asyncio.create_task(_export())
-
-    format_dialog = ft.AlertDialog(
-        title=ft.Text("Export Scan Report"),
-        content=ft.Text("Select your preferred file format:"),
-        actions=[
-            ft.TextButton("Plain Text (.txt)", on_click=lambda e: _on_export("txt")),
-            ft.TextButton("Cancel", on_click=_close_dialog),
-        ],
-        actions_alignment=ft.MainAxisAlignment.END,
-    )
-
-    def _show_format_dialog(e):
-        from flet import context
-
-        context.page.show_dialog(format_dialog)
 
     controls = [
         progress_section,

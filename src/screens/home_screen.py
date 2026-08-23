@@ -13,9 +13,10 @@ import logging
 import flet as ft
 from flet import Control
 
+from components.banner_ad import build_banner_ad
+from components.targets_card import TargetsCard
 from core import tokens
 from core.constants import MSG_OFFLINE, APP_NAME, STORAGE_HISTORY, STORAGE_THEME
-from core.styles import build_banner_ad
 from core.theme import (
     AppColors,
     AppStyles,
@@ -609,6 +610,13 @@ def HomeScreen() -> Control:
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
             ),
+            # ── Targets card — live network-scope summary ──
+            TargetsCard(
+                selected_count=len(state.selected_sites) if state.selected_sites else 0,
+                total_count=state.sites_total,
+                on_open=lambda e: controller.show_sites(),
+                page=_get_page(),
+            ),
             # Category chips (horizontal scroll)
             ft.Container(
                 content=ft.Row(
@@ -764,7 +772,9 @@ def HomeScreen() -> Control:
                                             border_radius=tokens.RADIUS_SM,
                                             ink=True,
                                             tooltip="View all history",
-                                            on_click=lambda _: controller.show_history(),
+                                            on_click=lambda _: (
+                                                controller.show_history()
+                                            ),
                                         ),
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,

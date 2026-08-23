@@ -1,6 +1,13 @@
-"""BannerAd component wrapper — glassmorphic banner ad (mobile only).
+"""BannerAd — single canonical banner ad builder (mobile only).
 
-Uses ft.context.page pattern so callers don't need to pass page.
+Plain helper so every screen (Home, Results, History, Settings, Sites)
+shows the exact same ad. Consolidates the previous two implementations
+(components/banner_ad.py and core/styles.py) into one.
+
+Revenue-critical: ad construction mirrors the original v1.x pattern —
+production unit ID, standard 320x50 banner, mobile-only gate, plain
+on_error handler. flet_ads 0.85.0 has no dispose() API, so no lifecycle
+hooks here; Flet's renderer unmounts the native ad view with the tree.
 """
 
 import logging
@@ -9,6 +16,7 @@ import flet as ft
 from flet import Control
 
 from core import tokens
+from core.theme import adaptive_glass_bg, adaptive_glass_border
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +24,13 @@ _UNIT_ID = "ca-app-pub-5679949845754640/5131365762"
 
 
 def build_banner_ad(page: ft.Page | None = None) -> Control:
-    """Build a glass-container-wrapped banner ad (mobile only)."""
+    """Glass-container-wrapped banner ad (mobile only).
+
+    `page` is optional; during component rendering it is resolved via
+    `flet.context.page` when omitted (the old core/styles.py signature).
+    On desktop/web it renders an empty zero-size container, so it is
+    safe to place on shared screens.
+    """
     if page is None:
         try:
             from flet import context
@@ -49,18 +63,24 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
 
     return ft.Container(
         content=ft.Column(
-            [ad],
+            [
+                ft.Text(
+                    "SPONSORED",
+                    size=tokens.FONT_XS,
+                    weight=ft.FontWeight.W_700,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    style=ft.TextStyle(letter_spacing=1),
+                ),
+                ad,
+            ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=0,
+            spacing=tokens.SPACE_XS,
         ),
         alignment=ft.Alignment.CENTER,
         padding=tokens.SPACE_SM,
-        border_radius=tokens.RADIUS_MD,
-        bgcolor=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE),
-        border=ft.Border.all(
-            1,
-            ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-        ),
+        border_radius=tokens.RADIUS_LG,
+        bgcolor=adaptive_glass_bg(page),
+        border=ft.Border.all(1, adaptive_glass_border(page)),
         margin=ft.Margin(
             tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
         ),

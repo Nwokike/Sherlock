@@ -1,8 +1,11 @@
 """ResultCard — single SiteResult row with status chip, query time, and URL.
 
 Premium result card with clear visual hierarchy, status color coding,
-and ink interaction.
+and ink interaction. Tapping a card with a resolved profile URL opens
+it in the device browser via the on_open callback.
 """
+
+from collections.abc import Callable
 
 import flet as ft
 from flet import Control
@@ -17,7 +20,7 @@ def ResultCard(
     url_user: str | None = None,
     url_main: str | None = None,
     query_time: float | None = None,
-    on_open: callable = None,
+    on_open: Callable[[str], None] | None = None,
 ) -> Control:
     """Build a single result tile for the results tabs."""
     if status == "Claimed":
@@ -36,8 +39,8 @@ def ResultCard(
     display_url = url_user or url_main or site_name
 
     async def _open(e):
-        if on_open:
-            on_open()
+        if on_open and url_user:
+            on_open(url_user)
 
     # Status chip
     chip_label = "WAF BLOCKED" if status == "WAF" else status

@@ -201,67 +201,20 @@ class SherlockService:
             site_data = {site.name: site.information for site in sites}
             self._site_data = site_data
             self._total_sites = len(site_data)
+
+            # Publish to observable state so SitesScreen / TargetsCard
+            # re-render the moment names arrive. Populating the cache
+            # here (single load path) means both screens always see
+            # consistent, up-to-date names without double loading.
+            state.sites_total = self._total_sites
+            state.sites_cache = sorted(site_data.keys(), key=str.lower)
+            state.sites_version += 1
+
             logger.info("Loaded %d sites", self._total_sites)
             return self._total_sites
         except Exception as e:
             logger.error("Failed to load sites: %s", e)
             return 0
-
-    async def sync_database(self) -> bool:
-        """Download latest data.json from GitHub and save to local storage."""
-        try:
-            import json
-            from pathlib import Path
-
-            import httpx
-
-            logger.info("Syncing database from GitHub...")
-            url = "https://raw.githubusercontent.com/sherlock-project/sherlock/master/sherlock_project/resources/data.json"
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, timeout=15)
-                if response.status_code == 200:
-                    data = response.json()
-                    # Validate JSON
-                    if isinstance(data, dict) and len(data) > 0:
-                        save_dir = Path.home() / ".sherlock"
-                        save_dir.mkdir(parents=True, exist_ok=True)
-                        save_path = save_dir / "synced_data.json"
-                        save_path.write_text(
-                            json.dumps(data, indent=2, ensure_ascii=False),
-                            encoding="utf-8",
-                        )
-                        logger.info("Database synced successfully to %s", save_path)
-                        # Reload sites so memory reflects the update
-                        await self.load_sites()
-                        return True
-            return False
-        except Exception as e:
-            logger.error("Failed to sync database: %s", e)
-            return False
-
-    async def check_updates(self) -> str | None:
-        """Checks for updates. Returns latest version tag if new release is available."""
-        try:
-            import httpx
-            import sherlock_project
-
-            current_ver = sherlock_project.__version__
-            url = sherlock_project.forge_api_latest_release
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    latest_tag = data.get("tag_name", "")
-                    if latest_tag.startswith("v"):
-                        latest_ver = latest_tag[1:]
-                    else:
-                        latest_ver = latest_tag
-
-                    if latest_ver != current_ver:
-                        return latest_ver
-            return None
-        except Exception:
-            return None
 
     async def search(
         self,

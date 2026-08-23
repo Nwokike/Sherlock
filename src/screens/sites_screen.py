@@ -1,7 +1,10 @@
-"""SitesScreen — select/deselect networks to scan.
+"""SitesScreen — select/deselect which social networks get scanned.
 
-@ft.component — reads observable state via AppStateCtx.
-Modern checkbox list with search, bulk actions, and premium styling.
+@ft.component — reads observable state via AppStateCtx. Site names come
+from the observable sites cache (populated by AppController after each
+site-database load), so the screen renders the moment names are known
+instead of instantiating its own (empty) SherlockService. Selection
+changes persist through AppController (the single StorageService owner).
 """
 
 from __future__ import annotations
@@ -13,12 +16,16 @@ import flet as ft
 from flet import Control
 
 from components.banner_ad import build_banner_ad
+from components.empty_state import EmptyState
 from core import tokens
-from core.constants import STORAGE_SELECTED_SITES
 from state.app_state import AppStateCtx
+from state.controller_ctx import ControllerMethodsCtx
 
 logger = logging.getLogger("SitesScreen")
 
+# Label-set for the "Popular Only" preset — matched case-insensitively
+# against the loaded network labels. Names that are not present in the
+# active database simply match nothing.
 POPULAR_SITES = {
     "github",
     "instagram",
@@ -41,61 +48,76 @@ POPULAR_SITES = {
 @ft.component
 def SitesScreen() -> Control:
     state = ft.use_context(AppStateCtx)
+    controller = ft.use_context(ControllerMethodsCtx)
+
+    # Bumped after every site-database load — re-runs the init effect.
+    _ = state.sites_version
 
     search_query, set_search_query = ft.use_state("")
     checked_states, set_checked_states = ft.use_state({})
 
     def _init_states():
-        from services.sherlock_service import SherlockService
+        """(Re)build checkbox states from the observed site name cache.
 
-        service = SherlockService()
-        all_sites = sorted((service._site_data or {}).keys(), key=str.lower)
-        selected_set = {s.lower() for s in state.selected_sites}
-        initial = {}
-        for sname in all_sites:
-            if not selected_set:
-                initial[sname] = True
+        Manual toggles are preserved across re-inits; only freshly
+        added names get their initial value (checked unless the user
+        has a custom selection that excludes them).
+        """
+        available = sorted(state.sites_cache or [], key=str.lower)
+        if not available:
+            return
+        selected_lower = {s.lower() for s in (state.selected_sites or []) if s}
+        current = dict(checked_states)
+        new_states = {}
+        for name in available:
+            if name in current:
+                new_states[name] = current[name]
+            elif selected_lower:
+                new_states[name] = name.lower() in selected_lower
             else:
-                initial[sname] = sname.lower() in selected_set
-        set_checked_states(initial)
+                new_states[name] = True
+        if new_states != current:
+            set_checked_states(new_states)
 
-    ft.use_effect(_init_states, [])
+    ft.use_effect(_init_states, [state.sites_version])
 
-    def _get_stats():
+    def _get_stats() -> str:
         checked = sum(1 for v in checked_states.values() if v)
         total = len(checked_states)
         return f"{checked} of {total} selected"
 
-    async def _save_selection():
-        checked_list = [name for name, checked in checked_states.items() if checked]
-        from flet import context
-        from services.storage_service import StorageService
+    def _persist(new_states: dict):
+        """Persist the given checkbox state via the controller.
 
-        storage = StorageService(context.page)
-        if len(checked_list) == len(checked_states):
-            state.selected_sites = []
-            await storage.delete(STORAGE_SELECTED_SITES)
-        else:
-            state.selected_sites = checked_list
-            await storage.set(STORAGE_SELECTED_SITES, ",".join(checked_list))
+        An all-selected scope is stored as an empty list (= no custom
+        filter, scan everything) — same semantics as pre-restructure.
+        """
+        checked_list = sorted(
+            [name for name, checked in new_states.items() if checked],
+            key=str.lower,
+        )
+        all_selected = bool(new_states) and len(checked_list) == len(new_states)
+        asyncio.create_task(
+            controller.save_selected_sites([] if all_selected else checked_list)
+        )
+
+    def _apply(new_states: dict):
+        set_checked_states(new_states)
+        _persist(new_states)
 
     def _toggle_row(name: str):
         new_states = dict(checked_states)
         new_states[name] = not new_states.get(name, False)
-        set_checked_states(new_states)
-        asyncio.create_task(_save_selection())
+        _apply(new_states)
 
     def _select_all():
-        set_checked_states({k: True for k in checked_states})
-        asyncio.create_task(_save_selection())
+        _apply({k: True for k in checked_states})
 
     def _select_none():
-        set_checked_states({k: False for k in checked_states})
-        asyncio.create_task(_save_selection())
+        _apply({k: False for k in checked_states})
 
     def _select_popular():
-        set_checked_states({k: k.lower() in POPULAR_SITES for k in checked_states})
-        asyncio.create_task(_save_selection())
+        _apply({k: k.lower() in POPULAR_SITES for k in checked_states})
 
     # Build filtered list
     query = search_query.strip().lower()
@@ -217,12 +239,25 @@ def SitesScreen() -> Control:
         padding=ft.Padding(0, tokens.SPACE_XS, 0, tokens.SPACE_SM),
     )
 
+    body = (
+        ft.ListView(controls=items, spacing=0, expand=True)
+        if checked_states
+        else ft.Container(
+            content=EmptyState(
+                title="Loading networks...",
+                message="Fetching the social network database.",
+                icon=ft.Icons.HUB_ROUNDED,
+            ),
+            expand=True,
+        )
+    )
+
     return ft.Column(
         controls=[
             search_bar,
             bulk_actions,
             stats_header,
-            ft.ListView(controls=items, spacing=0, expand=True),
+            body,
             build_banner_ad(),
         ],
         expand=True,

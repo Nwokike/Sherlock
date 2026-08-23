@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  A high-performance, private OSINT search platform to hunt down social media profiles by username across 430+ networks simultaneously
+  A high-performance, private OSINT search platform to hunt down social media profiles by username across 400+ networks simultaneously
 </p>
 
 <p align="center">
@@ -36,9 +36,9 @@
 
 | Capability | Description |
 | :--- | :--- |
-| **430+ Social Networks** | Simultaneously scans the largest index of international, regional, and specialized networks (GitHub, X, Instagram, TikTok, Steam, Reddit, Spotify, etc.) in seconds. |
-| **Fast Offline Scans** | Runs high-performance queries locally. Features an offline-first local database to scan instantly without active internet. |
-| **Selective Target Scope** | Bulk selection management. Focus your scans by enabling "Select All", "Deselect All", or "Only Popular" (popular platforms finish in under 1.5 seconds). |
+| **400+ Social Networks** | Simultaneously scans the largest index of international, regional, and specialized networks (GitHub, Instagram, Discord, Telegram, SoundCloud, and more) in seconds. |
+| **Fast Offline Scans** | Runs high-performance queries locally. Features an offline-first local database to scan instantly without an initial download. |
+| **Selective Target Scope** | Bulk selection management. Focus your scans by enabling "Select All", "Deselect All", or "Popular Only" — reachable from the targets card on the Home screen. |
 | **Throttled Real-Time Ticking** | Features a thread-safe progress collect-notifier throttled to a smooth 250ms interval, preventing rendering freezes and allowing live counter ticking. |
 | **Premium Data Exports** | Export complete scan results to your system Downloads folder as clean Plain Text, CSV spreadsheets, or beautifully structured Excel (.xlsx) files. |
 | **Local Sandbox Security** | Hardened sandboxed storage framework guaranteeing zero permission conflicts on Android environment. |
@@ -101,7 +101,7 @@
   </tr>
   <tr>
     <td align="center"><em>Detailed View Card — Highlighted bronze-gold outline matching logo.</em></td>
-    <td align="center"><em>Browser Integration — Double-check live profile directly via built-in web views.</em></td>
+    <td align="center"><em>Browser Integration — Tap any found result to open the live profile directly in your device's browser.</em></td>
   </tr>
 </table>
 
@@ -110,9 +110,9 @@
 ## Features
 
 - **Gold-Branded Design System** — Custom Solarized Light (Pure White) and classic Monokai themes aligned perfectly to the bronze-gold detective logo.
-- **Real-Time Debug Console Drawer** — Collapsible monospace terminal logs drawer streaming connection status checks, timings, and HTTP responses in real-time.
 - **Live Text-Search Filters** — Instantly filter hundreds of results in real-time as the background scanner is running.
-- **GitHub Database Syncing** — Fetch, validate, and write the latest master database rules from GitHub to guarantee search accuracy.
+- **Tap-to-Open Profile Links** — Any found result opens the live profile in your system browser with a single tap.
+- **Custom Database Manifest** — Point the scanner at your own site-database JSON (via Settings) for specialized investigations.
 - **Preloaded Interstitial Ads** — Intelligent Google AdMob integration that buffers and displays interstitial ads seamlessly on mobile platforms.
 - **Debounced Storage Writes** — Prevents disk I/O bottlenecks and race conditions when modifying search parameters.
 - **Ruff Compliance** — Clean, formatted, and strictly linted Python codebase.
@@ -124,10 +124,8 @@
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
 | **Frontend** | Flet (Flutter engine) | Cross-platform UI with clean responsive views and smooth page transitions |
-| **Scan Core** | `sherlock-project` runtime | Native multi-threaded OSINT username matching engine |
-| **Async Client** | `httpx` (connection pooling) | Dispatches fast asynchronous target network GET/POST requests |
-| **Local Database** | Flat JSON Storage (`storage.json`) | Ultra-fast local key-value storage for settings, theme state, and logs |
-| **Online Provider** | GitHub Raw API | Live database updates providing the latest social rules |
+| **Scan Core** | `sherlock-project` runtime | Native multi-threaded OSINT username matching engine (site lookups run through its own async HTTP stack) |
+| **Local Database** | Flat JSON Storage (`storage.json`) | Ultra-fast local key-value storage for settings, theme state, selection scope, and site-name cache |
 
 ### Visual Flow
 
@@ -142,12 +140,10 @@ graph TB
     end
 
     subgraph GLOBAL_RESOURCES ["🌐 EDGE DATABASE & PROVIDERS"]
-        Repo["📦 GitHub Raw Repo (data.json)"]
-        Targets["🎯 430+ Social Target Servers (HTTPS)"]
+        Targets["🎯 400+ Social Target Servers (HTTPS)"]
     end
 
     Engine ==>|HTTPS GET/POST| Targets
-    Engine ==>|Async Database Sync| Repo
 ```
 
 ---
@@ -158,9 +154,9 @@ To optimize execution speed across various platforms, reference this settings gu
 
 | Scan Profile | Targets | Estimated Time | Best Suited For |
 | :--- | :---: | :---: | :--- |
-| **Popular Only** | ~35 Popular Sites | **1.5 Seconds** | Quick check on mainstream platforms (GitHub, X, Instagram, TikTok, Reddit) |
+| **Popular Only** | ~15 Major Platforms | **Under 5 Seconds** | Quick check on mainstream platforms that exist in the current database |
 | **Custom Selection** | Selected Subset | **Depends on size** | Specific investigation focused on professional or gaming networks |
-| **Full Sweep** | 430+ Sites | **25 - 45 Seconds** | Deep exhaustive OSINT reports and full footprint audits |
+| **Full Sweep** | 400+ Sites | **25 - 45 Seconds** | Deep exhaustive OSINT reports and full footprint audits |
 
 ---
 

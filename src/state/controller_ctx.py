@@ -25,12 +25,12 @@ async def _noop_search(_username: str) -> None:
     """No-op async default for start_search(username)."""
 
 
+async def _noop_save_sites(_sites: list[str]) -> None:
+    """No-op async default for save_selected_sites(sites)."""
+
+
 def _noop_sync() -> None:
     """No-op sync default."""
-
-
-def _noop_lambda(_mode: str = "tv") -> None:
-    """No-op lambda for open_search."""
 
 
 @dataclass
@@ -46,6 +46,7 @@ class ControllerMethods:
     refresh_sites: Callable[[], Awaitable[None]] = _noop_async
     start_search: Callable[[str], Awaitable[None]] = _noop_search
     cancel_search: Callable[[], None] = _noop_sync
+    save_selected_sites: Callable[[list[str]], Awaitable[None]] = _noop_save_sites
 
     # AppShell-populated (view-local, sync closures)
     show_results: Callable[[], None] = _noop_sync
@@ -54,12 +55,6 @@ class ControllerMethods:
     show_history: Callable[[], None] = _noop_sync
     go_home: Callable[[], None] = _noop_sync
     back: Callable[[], None] = _noop_sync
-    toggle_theme: Callable[[], None] = _noop_sync
-    open_search: Callable[[str], None] = _noop_lambda
-
-    # Modal helpers (future-proofing)
-    pop_modal: Callable[[str], Awaitable[None]] = _noop_async
-    close_modal: Callable[[], Awaitable[None]] = _noop_async
 
 
 ControllerMethodsCtx = ft.create_context(ControllerMethods())

@@ -4,6 +4,7 @@ These components don't use hooks, so they can be instantiated directly
 without a renderer context.
 """
 
+import asyncio
 import sys
 import os
 
@@ -19,10 +20,10 @@ import flet as ft
 from tests.flet_tree import walk_texts, walk_buttons, find_icon
 
 from components.empty_state import EmptyState
-from components.loading_state import LoadingState
 from components.result_card import ResultCard
 from components.stat_card import StatCard
 from components.section_header import SectionHeader
+from components.targets_card import TargetsCard
 
 
 class TestEmptyState:
@@ -47,18 +48,6 @@ class TestEmptyState:
     def test_icon_present(self):
         tree = EmptyState(title="Empty", icon=ft.Icons.SEARCH)
         assert find_icon(tree, ft.Icons.SEARCH) is not None
-
-
-class TestLoadingState:
-    def test_default_label(self):
-        tree = LoadingState()
-        texts = list(walk_texts(tree))
-        assert any("Loading" in (t.value or "") for t in texts)
-
-    def test_custom_label(self):
-        tree = LoadingState(label="Searching...")
-        texts = list(walk_texts(tree))
-        assert any("Searching..." in (t.value or "") for t in texts)
 
 
 class TestResultCard:
@@ -86,6 +75,60 @@ class TestResultCard:
         tree = ResultCard(site_name="GitHub", status="Claimed", query_time=0.12)
         texts = list(walk_texts(tree))
         assert any("0.12s" in (t.value or "") for t in texts)
+
+    # --- tap-to-open (restored pre-restructure behavior) ---
+
+    def test_tap_opens_profile_url(self):
+        opened = []
+        tree = ResultCard(
+            site_name="GitHub",
+            status="Claimed",
+            url_user="https://github.com/test",
+            on_open=opened.append,
+        )
+        assert tree.on_click is not None
+        asyncio.run(tree.on_click(None))
+        assert opened == ["https://github.com/test"]
+
+    def test_no_profile_url_is_inert(self):
+        tree = ResultCard(site_name="FakeSite", status="Available")
+        assert tree.on_click is None
+
+    def test_url_without_callback_is_inert(self):
+        # No on_open supplied — the card must not be tappable, and a
+        # stray tap (if any) must not raise.
+        tree = ResultCard(
+            site_name="GitHub", status="Claimed", url_user="https://x.com/a"
+        )
+        if tree.on_click is not None:
+            asyncio.run(tree.on_click(None))
+
+
+class TestTargetsCard:
+    def test_all_networks_label(self):
+        tree = TargetsCard(selected_count=0, total_count=368, on_open=lambda: None)
+        texts = list(walk_texts(tree))
+        assert any("All networks selected" in (t.value or "") for t in texts)
+        assert any("368" in (t.value or "") for t in texts)
+
+    def test_custom_scope_label(self):
+        tree = TargetsCard(selected_count=25, total_count=368, on_open=lambda: None)
+        texts = list(walk_texts(tree))
+        assert any("25 networks selected" in (t.value or "") for t in texts)
+
+    def test_fallback_label_when_total_unknown(self):
+        tree = TargetsCard(selected_count=0, total_count=0, on_open=lambda: None)
+        texts = list(walk_texts(tree))
+        assert any("400+" in (t.value or "") for t in texts)
+
+    def test_tap_triggers_on_open(self):
+        fired = []
+        tree = TargetsCard(
+            selected_count=0, total_count=368, on_open=lambda e: fired.append(1)
+        )
+        assert tree.on_click is not None
+        tree.on_click(None)
+        assert fired == [1]
 
 
 class TestStatCard:

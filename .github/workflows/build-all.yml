@@ -142,3 +142,169 @@ jobs:
           files: build/aab/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Windows (Automated .exe Setup Installer) ──────────────
+  build-windows:
+    needs: [prepare-release]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build Windows Portable
+        run: uv run flet build windows --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+
+      - name: Generate Icon for Installer
+        run: |
+          uv pip install pillow
+          uv run python -c "from PIL import Image; Image.open('src/assets/icon.png').save('src/assets/icon.ico', format='ICO', sizes=[(256, 256)])"
+
+      - name: Build Windows Installer (Inno Setup)
+        run: |
+          $IssContent = @"
+          [Setup]
+          AppId={{00B37D31-0BA4-4DAD-88C1-2F53F1154BBE}}
+          AppName=Sherlock
+          AppVersion=${{ env.BUILD_VERSION }}
+          AppPublisher=Kiri
+          AppPublisherURL=https://kiri.ng
+          AppSupportURL=https://kiri.ng/support
+          AppUpdatesURL=https://kiri.ng/updates
+          AppCopyright=Copyright (C) 2026 Kiri
+          DefaultDirName={autopf}\Sherlock
+          DefaultGroupName=Sherlock
+          OutputDir=.\build\installer
+          OutputBaseFilename=Sherlock_Setup
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          ArchitecturesAllowed=x64
+          ArchitecturesInstallIn64BitMode=x64
+          PrivilegesRequired=lowest
+          SetupIconFile=.\src\assets\icon.ico
+          UninstallDisplayIcon={app}\sherlock.exe
+          CloseApplications=yes
+          AppMutex=Sherlock_Mutex
+
+          [Files]
+          Source: "build\windows\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\Sherlock"; Filename: "{app}\sherlock.exe"
+          Name: "{autodesktop}\Sherlock"; Filename: "{app}\sherlock.exe"; Tasks: desktopicon
+
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+          "@
+          Set-Content -Path "installer.iss" -Value $IssContent -Encoding UTF8
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/installer/Sherlock_Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Linux (.deb, .rpm & Universal .tar.gz) ────────────────
+  build-linux:
+    needs: [prepare-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Linux Build Dependencies & Packaging Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev rpm ruby ruby-dev
+          sudo gem install --no-document fpm
+      - name: Build Linux Bundle
+        run: uv run flet build linux --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+      - name: Create Linux Packages (.deb, .rpm, .tar.gz)
+        run: |
+          mkdir -p build/dist
+
+          # 1. Universal Portable .tar.gz
+          tar -czf build/dist/Sherlock_linux_x86_64.tar.gz -C build/linux .
+
+          # 2. Stage filesystem tree for rich .deb and .rpm packages
+          mkdir -p pkg_root/usr/lib/sherlock pkg_root/usr/bin pkg_root/usr/share/applications pkg_root/usr/share/icons/hicolor/256x256/apps pkg_root/usr/share/pixmaps pkg_root/usr/share/metainfo
+          cp -a build/linux/* pkg_root/usr/lib/sherlock/
+          chmod +x pkg_root/usr/lib/sherlock/sherlock
+          ln -s /usr/lib/sherlock/sherlock pkg_root/usr/bin/sherlock
+
+          # Icons (both hicolor and pixmaps ensure instant icon display when opening .deb file in Ubuntu App Center before installation)
+          cp src/assets/icon.png pkg_root/usr/share/icons/hicolor/256x256/apps/sherlock.png
+          cp src/assets/icon.png pkg_root/usr/share/pixmaps/sherlock.png
+
+          # Desktop entry
+          cat <<EOF > pkg_root/usr/share/applications/sherlock.desktop
+          [Desktop Entry]
+          Version=1.0
+          Name=Sherlock
+          GenericName=OSINT Username Search
+          Comment=Hunt down social media profiles by username across 400+ networks
+          Exec=/usr/bin/sherlock
+          Icon=sherlock
+          Terminal=false
+          Type=Application
+          Categories=Utility;Development;Network;
+          Keywords=OSINT;Username;Social Media;Investigation;Search;
+          StartupNotify=true
+          StartupWMClass=sherlock
+          EOF
+
+          # AppStream / AppData metainfo XML (rich preview information in Ubuntu App Center & GNOME Software)
+          cat <<EOF > pkg_root/usr/share/metainfo/ng.kiri.sherlock.metainfo.xml
+          <?xml version="1.0" encoding="UTF-8"?>
+          <component type="desktop-application">
+            <id>ng.kiri.sherlock</id>
+            <metadata_license>MIT</metadata_license>
+            <project_license>MIT</project_license>
+            <name>Sherlock</name>
+            <summary>Hunt down social media accounts by username across 400+ networks</summary>
+            <description>
+              <p>Sherlock hunts down social media profiles across the internet, providing:</p>
+              <ul>
+                <li>Simultaneous username scans across 400+ international, regional and specialized networks</li>
+                <li>Fast offline-first local database with Popular Only and custom target scopes</li>
+                <li>Live real-time result ticking, filtering and tap-to-open profile links</li>
+                <li>Plain Text, CSV and Excel (.xlsx) report exports saved locally</li>
+              </ul>
+            </description>
+            <launchable type="desktop-id">sherlock.desktop</launchable>
+            <url type="homepage">https://kiri.ng</url>
+            <developer_name>Kiri</developer_name>
+          </component>
+          EOF
+
+          # Build rich .deb using fpm
+          fpm -s dir -t deb -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \\
+              --architecture amd64 \\
+              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \\
+              --maintainer "Kiri <support@kiri.ng>" \\
+              --url "https://kiri.ng" \\
+              --category "utils" \\
+              -p build/dist/Sherlock_amd64.deb \\
+              -C pkg_root .
+
+          # Build rich .rpm using fpm
+          fpm -s dir -t rpm -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \\
+              --architecture x86_64 \\
+              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \\
+              --maintainer "Kiri <support@kiri.ng>" \\
+              --url "https://kiri.ng" \\
+              --category "Utility" \\
+              -p build/dist/Sherlock_x86_64.rpm \\
+              -C pkg_root .
+
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

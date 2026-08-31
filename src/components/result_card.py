@@ -108,7 +108,9 @@ def ResultCard(
         extra_lines.append(
             ft.Row(
                 [
-                    ft.Icon(ft.Icons.MAIL_OUTLINE_ROUNDED, size=12, color=AppColors.PRIMARY),
+                    ft.Icon(
+                        ft.Icons.MAIL_OUTLINE_ROUNDED, size=12, color=AppColors.PRIMARY
+                    ),
                     ft.Text(
                         email_recovery,
                         size=tokens.FONT_XS,
@@ -148,7 +150,11 @@ def ResultCard(
             extra_lines.append(
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.PERSON_OUTLINE_ROUNDED, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.Icon(
+                            ft.Icons.PERSON_OUTLINE_ROUNDED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
                         ft.Text(
                             others["FullName"],
                             size=tokens.FONT_XS,
@@ -166,7 +172,11 @@ def ResultCard(
             extra_lines.append(
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.CALENDAR_TODAY_ROUNDED, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.Icon(
+                            ft.Icons.CALENDAR_TODAY_ROUNDED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
                         ft.Text(
                             f"Created: {others['Date, time of the creation']}",
                             size=tokens.FONT_XS,
@@ -197,8 +207,16 @@ def ResultCard(
             extra_lines.append(
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.LOCATION_ON_OUTLINED, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
-                        ft.Text(location, size=tokens.FONT_XS, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.Icon(
+                            ft.Icons.LOCATION_ON_OUTLINED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            location,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
                     ],
                     spacing=4,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -215,8 +233,16 @@ def ResultCard(
             extra_lines.append(
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.PEOPLE_OUTLINE_ROUNDED, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
-                        ft.Text(" · ".join(parts), size=tokens.FONT_XS, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.Icon(
+                            ft.Icons.PEOPLE_OUTLINE_ROUNDED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            " · ".join(parts),
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
                     ],
                     spacing=4,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -238,12 +264,16 @@ def ResultCard(
     method_badge = None
     if method:
         method_color = (
-            AppColors.PRIMARY if method == "register"
-            else AppColors.WARNING if method == "password recovery"
+            AppColors.PRIMARY
+            if method == "register"
+            else AppColors.WARNING
+            if method == "password recovery"
             else ft.Colors.ON_SURFACE_VARIANT
         )
         method_badge = ft.Container(
-            content=ft.Text(method, size=9, color=method_color, weight=ft.FontWeight.W_600),
+            content=ft.Text(
+                method, size=9, color=method_color, weight=ft.FontWeight.W_600
+            ),
             padding=ft.Padding(6, 2, 6, 2),
             border_radius=tokens.RADIUS_SM,
             bgcolor=ft.Colors.with_opacity(0.1, method_color),
@@ -258,7 +288,9 @@ def ResultCard(
             ft.Text(
                 f"({query_time:.2f}s)",
                 size=tokens.FONT_XS,
-                color=ft.Colors.with_opacity(tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE),
+                color=ft.Colors.with_opacity(
+                    tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
+                ),
             )
         )
     if method_badge:
@@ -311,7 +343,9 @@ def ResultCard(
         border=ft.Border.only(
             bottom=ft.BorderSide(
                 width=0.5,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE),
+                color=ft.Colors.with_opacity(
+                    tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE
+                ),
             )
         ),
         on_click=_open if url_user else None,

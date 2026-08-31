@@ -97,9 +97,7 @@ class EnrichService:
 
         return {}
 
-    async def enrich_url_with_mutations(
-        self, url: str, timeout: int = 5
-    ) -> dict:
+    async def enrich_url_with_mutations(self, url: str, timeout: int = 5) -> dict:
         """Fetch a URL and its API mutations, merging all extracted data.
 
         First tries the direct URL, then fetches any API endpoint

@@ -62,4 +62,3 @@ class ControllerMethods:
 ControllerMethodsCtx = ft.create_context(ControllerMethods())
 
 __all__ = ["ControllerMethods", "ControllerMethodsCtx"]
-

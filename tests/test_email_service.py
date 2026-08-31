@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestValidateEmail:
     """Email validation without holehe dependency."""

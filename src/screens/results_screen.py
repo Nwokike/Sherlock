@@ -73,6 +73,7 @@ def ResultsScreen() -> Control:
     def _build_username_result_list(items):
         if not items:
             from components.empty_state import EmptyState
+
             return EmptyState(
                 title="No matches" if debounced_filter else "No results yet",
                 message=(
@@ -91,7 +92,9 @@ def ResultsScreen() -> Control:
                     url_main=r.url_main,
                     query_time=r.query_time,
                     on_open=lambda url: _open_url(url),
-                    enrichment=state.enrichments.get(r.url_user or r.url_main or "", None)
+                    enrichment=state.enrichments.get(
+                        r.url_user or r.url_main or "", None
+                    )
                     if state.enrichments
                     else None,
                 )
@@ -107,7 +110,11 @@ def ResultsScreen() -> Control:
         q = debounced_filter.strip().lower()
         if not q:
             return items
-        return [r for r in items if q in r.get("name", "").lower() or q in r.get("domain", "").lower()]
+        return [
+            r
+            for r in items
+            if q in r.get("name", "").lower() or q in r.get("domain", "").lower()
+        ]
 
     def _build_email_result_list(items, tab_type: str):
         """Build email result list. tab_type: 'found' | 'not_found' | 'rate_limited'"""
@@ -115,11 +122,22 @@ def ResultsScreen() -> Control:
             from components.empty_state import EmptyState
 
             empty_msgs = {
-                "found": ("No registrations found", "No platforms matched this email address."),
-                "not_found": ("All found", "Every platform confirmed this email is registered."),
-                "rate_limited": ("No rate limits", "All checks completed without rate limiting."),
+                "found": (
+                    "No registrations found",
+                    "No platforms matched this email address.",
+                ),
+                "not_found": (
+                    "All found",
+                    "Every platform confirmed this email is registered.",
+                ),
+                "rate_limited": (
+                    "No rate limits",
+                    "All checks completed without rate limiting.",
+                ),
             }
-            title, msg = empty_msgs.get(tab_type, ("No results", "Results will appear as scan progresses."))
+            title, msg = empty_msgs.get(
+                tab_type, ("No results", "Results will appear as scan progresses.")
+            )
             if debounced_filter:
                 title = "No matches"
                 msg = f'No results match "{debounced_filter}"'
@@ -133,11 +151,13 @@ def ResultsScreen() -> Control:
             controls=[
                 ResultCard(
                     site_name=r.get("name", "unknown"),
-                    status="Claimed" if r.get("exists") else (
-                        "Error" if r.get("rateLimit") else "Available"
-                    ),
+                    status="Claimed"
+                    if r.get("exists")
+                    else ("Error" if r.get("rateLimit") else "Available"),
                     url_user=None,
-                    url_main=f"https://{r.get('domain', '')}" if r.get("domain") else None,
+                    url_main=f"https://{r.get('domain', '')}"
+                    if r.get("domain")
+                    else None,
                     on_open=lambda url: _open_url(url),
                     email_recovery=r.get("emailrecovery"),
                     phone_number=r.get("phoneNumber"),
@@ -147,7 +167,9 @@ def ResultsScreen() -> Control:
                     frequent_rate_limit=r.get("frequent_rate_limit", False),
                     enrichment=state.enrichments.get(
                         f"https://{r.get('domain', '')}", None
-                    ) if state.enrichments else None,
+                    )
+                    if state.enrichments
+                    else None,
                 )
                 for r in items
             ],
@@ -161,9 +183,15 @@ def ResultsScreen() -> Control:
         # Email results from state.email_results
         all_email = list(state.email_results) if state.email_results else []
 
-        email_found_raw = _filter_email_items([r for r in all_email if r.get("exists") and not r.get("rateLimit")])
-        email_not_found_raw = _filter_email_items([r for r in all_email if not r.get("exists") and not r.get("rateLimit")])
-        email_rate_limited_raw = _filter_email_items([r for r in all_email if r.get("rateLimit")])
+        email_found_raw = _filter_email_items(
+            [r for r in all_email if r.get("exists") and not r.get("rateLimit")]
+        )
+        email_not_found_raw = _filter_email_items(
+            [r for r in all_email if not r.get("exists") and not r.get("rateLimit")]
+        )
+        email_rate_limited_raw = _filter_email_items(
+            [r for r in all_email if r.get("rateLimit")]
+        )
 
         total = state.email_total_modules or (len(all_email) if all_email else 0)
 
@@ -184,7 +212,9 @@ def ResultsScreen() -> Control:
                         tabs=[
                             ft.Tab(label=f"Found ({len(email_found_raw)})"),
                             ft.Tab(label=f"Not Found ({len(email_not_found_raw)})"),
-                            ft.Tab(label=f"Rate Limited ({len(email_rate_limited_raw)})"),
+                            ft.Tab(
+                                label=f"Rate Limited ({len(email_rate_limited_raw)})"
+                            ),
                         ],
                         scrollable=False,
                         indicator_color=ft.Colors.PRIMARY,
@@ -193,15 +223,19 @@ def ResultsScreen() -> Control:
                             tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
                         ),
                         label_padding=ft.Padding(
-                            tokens.SPACE_LG, tokens.SPACE_SM,
-                            tokens.SPACE_LG, tokens.SPACE_SM,
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
                         ),
                     ),
                     ft.TabBarView(
                         controls=[
                             _build_email_result_list(email_found_raw, "found"),
                             _build_email_result_list(email_not_found_raw, "not_found"),
-                            _build_email_result_list(email_rate_limited_raw, "rate_limited"),
+                            _build_email_result_list(
+                                email_rate_limited_raw, "rate_limited"
+                            ),
                         ],
                         expand=True,
                     ),
@@ -220,7 +254,9 @@ def ResultsScreen() -> Control:
                     str(len(email_not_found_raw)),
                     ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
                 ),
-                StatCard("Rate Ltd", str(len(email_rate_limited_raw)), AppColors.WARNING),
+                StatCard(
+                    "Rate Ltd", str(len(email_rate_limited_raw)), AppColors.WARNING
+                ),
                 StatCard("Total", str(total), ft.Colors.PRIMARY),
             ],
             spacing=tokens.SPACE_SM,
@@ -228,13 +264,21 @@ def ResultsScreen() -> Control:
         )
 
         progress_label = f"Checking {checked}/{total} platforms..."
-        cancel_callback = lambda e: controller.cancel_email_search()
+
+        def cancel_callback(e):
+            controller.cancel_email_search()
 
     else:
         # Username results from search_progress
-        found_items = _filter_username_items(active_progress.found) if active_progress else []
-        notfound_items = _filter_username_items(active_progress.not_found) if active_progress else []
-        error_items = _filter_username_items(active_progress.errors) if active_progress else []
+        found_items = (
+            _filter_username_items(active_progress.found) if active_progress else []
+        )
+        notfound_items = (
+            _filter_username_items(active_progress.not_found) if active_progress else []
+        )
+        error_items = (
+            _filter_username_items(active_progress.errors) if active_progress else []
+        )
         total = active_progress.total_sites if active_progress else 0
 
         tabs = ft.Tabs(
@@ -255,8 +299,10 @@ def ResultsScreen() -> Control:
                             tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
                         ),
                         label_padding=ft.Padding(
-                            tokens.SPACE_LG, tokens.SPACE_SM,
-                            tokens.SPACE_LG, tokens.SPACE_SM,
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
                         ),
                     ),
                     ft.TabBarView(
@@ -276,13 +322,21 @@ def ResultsScreen() -> Control:
 
         stats_row = ft.Row(
             controls=[
-                StatCard("Found", str(len(found_items) if active_progress else 0), AppColors.SUCCESS),
+                StatCard(
+                    "Found",
+                    str(len(found_items) if active_progress else 0),
+                    AppColors.SUCCESS,
+                ),
                 StatCard(
                     "Not Found",
                     str(len(notfound_items) if active_progress else 0),
                     ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
                 ),
-                StatCard("Errors", str(len(error_items) if active_progress else 0), AppColors.WARNING),
+                StatCard(
+                    "Errors",
+                    str(len(error_items) if active_progress else 0),
+                    AppColors.WARNING,
+                ),
                 StatCard("Total", str(total), ft.Colors.PRIMARY),
             ],
             spacing=tokens.SPACE_SM,
@@ -291,7 +345,9 @@ def ResultsScreen() -> Control:
 
         checked = active_progress.checked_sites if active_progress else 0
         progress_label = f"Checking {checked}/{total} sites..."
-        cancel_callback = lambda e: controller.cancel_search()
+
+        def cancel_callback(e):
+            controller.cancel_search()
 
     # ── Shared UI components ──────────────────────────────────────────
     stats_card = ft.Container(
@@ -303,7 +359,9 @@ def ResultsScreen() -> Control:
             width=1,
             color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
         ),
-        margin=ft.Margin(tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_SM),
+        margin=ft.Margin(
+            tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_SM
+        ),
     )
 
     filter_hint = (
@@ -318,7 +376,9 @@ def ResultsScreen() -> Control:
             prefix_icon=ft.Icons.FILTER_LIST_ROUNDED,
             border_radius=tokens.RADIUS_MD,
             border_width=1,
-            border_color=ft.Colors.with_opacity(tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE),
+            border_color=ft.Colors.with_opacity(
+                tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
+            ),
             focused_border_color=ft.Colors.PRIMARY,
             bgcolor=ft.Colors.SURFACE,
             filled=True,
@@ -328,8 +388,10 @@ def ResultsScreen() -> Control:
             height=44,
         ),
         padding=ft.Padding(
-            left=tokens.SPACE_XL, right=tokens.SPACE_XL,
-            top=tokens.SPACE_XS, bottom=tokens.SPACE_SM,
+            left=tokens.SPACE_XL,
+            right=tokens.SPACE_XL,
+            top=tokens.SPACE_XS,
+            bottom=tokens.SPACE_SM,
         ),
     )
 
@@ -341,7 +403,9 @@ def ResultsScreen() -> Control:
                 controls=[
                     ft.ProgressBar(
                         color=ft.Colors.PRIMARY,
-                        bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.PRIMARY),
+                        bgcolor=ft.Colors.with_opacity(
+                            tokens.OPACITY_LIGHT, ft.Colors.PRIMARY
+                        ),
                         height=tokens.PROGRESS_BAR_HEIGHT,
                     ),
                     ft.Row(
@@ -349,7 +413,9 @@ def ResultsScreen() -> Control:
                             ft.Text(
                                 progress_label,
                                 size=tokens.FONT_SM,
-                                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                                ),
                             ),
                             ft.Container(expand=True),
                             ft.TextButton(
@@ -367,8 +433,10 @@ def ResultsScreen() -> Control:
                 spacing=tokens.SPACE_XS,
             ),
             padding=ft.Padding(
-                left=tokens.SPACE_XL, right=tokens.SPACE_XL,
-                top=tokens.SPACE_SM, bottom=0,
+                left=tokens.SPACE_XL,
+                right=tokens.SPACE_XL,
+                top=tokens.SPACE_SM,
+                bottom=0,
             ),
         )
 

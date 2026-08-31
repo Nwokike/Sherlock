@@ -34,9 +34,7 @@ try:
 except ImportError:
     pass
 
-EMAIL_FORMAT = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"
-)
+EMAIL_FORMAT = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 
 
 @dataclass
@@ -200,9 +198,8 @@ class EmailService:
                 # Throttle progress updates to 250ms (4 per second)
                 now = time.monotonic()
                 if (
-                    (now - last_update_time >= 0.25)
-                    or progress.checked_modules == total
-                ):
+                    now - last_update_time >= 0.25
+                ) or progress.checked_modules == total:
                     last_update_time = now
                     try:
                         on_progress(progress)

@@ -16,7 +16,15 @@ from flet import Control
 from components.banner_ad import build_banner_ad
 from components.targets_card import TargetsCard
 from core import tokens
-from core.constants import MSG_OFFLINE, APP_NAME, STORAGE_HISTORY, STORAGE_THEME, MODE_USERNAME, MODE_EMAIL, STORAGE_SEARCH_MODE
+from core.constants import (
+    MSG_OFFLINE,
+    APP_NAME,
+    STORAGE_HISTORY,
+    STORAGE_THEME,
+    MODE_USERNAME,
+    MODE_EMAIL,
+    STORAGE_SEARCH_MODE,
+)
 from core.theme import (
     AppColors,
     AppStyles,
@@ -349,6 +357,7 @@ def HomeScreen() -> Control:
         async def _save():
             try:
                 from services.storage_service import StorageService
+
                 storage = StorageService(_get_page())
                 await storage.set(STORAGE_SEARCH_MODE, new_mode)
             except Exception:
@@ -617,7 +626,9 @@ def HomeScreen() -> Control:
             ),
             # ── Mode Switcher (Username / Email) ──
             ft.Container(
-                padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
+                ),
                 content=ft.Container(
                     padding=ft.Padding(4, 4, 4, 4),
                     border_radius=12,
@@ -756,7 +767,9 @@ def HomeScreen() -> Control:
             # ── Targets card — live network-scope summary (username mode only) ──
             ft.Container(
                 content=TargetsCard(
-                    selected_count=len(state.selected_sites) if state.selected_sites else 0,
+                    selected_count=len(state.selected_sites)
+                    if state.selected_sites
+                    else 0,
                     total_count=state.sites_total,
                     on_open=lambda e: controller.show_sites(),
                     page=_get_page(),

@@ -6,6 +6,8 @@ import flet as ft
 
 from core.constants import MODE_USERNAME
 
+_ENRICHMENT_CAP = 200
+
 
 @ft.observable
 class AppState:
@@ -54,6 +56,7 @@ class AppState:
 
     # --- Profile enrichment ---
     # {url_or_site_name: {field: value, ...}} from socid-extractor
+    # Capped at _ENRICHMENT_CAP via set_enrichment() to avoid long-session growth.
     enrichments: dict | None = None
 
     # --- History ---
@@ -97,6 +100,14 @@ class AppState:
         self.enrichments = {}
         self.update_data = None
         self.search_error = None
+
+    def set_enrichment(self, url: str, data: dict) -> None:
+        """Add an enrichment with LRU-ish cap at _ENRICHMENT_CAP entries."""
+        if len(self.enrichments) >= _ENRICHMENT_CAP:
+            # Drop oldest key (dict keeps insertion order in 3.7+)
+            oldest = next(iter(self.enrichments))
+            del self.enrichments[oldest]
+        self.enrichments[url] = data
 
     def reset_search(self) -> None:
         """Clear all search-related state. Called on app start, cancel, etc.

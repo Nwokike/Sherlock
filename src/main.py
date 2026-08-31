@@ -140,8 +140,12 @@ class AppController:
         # Load saved state
         await self._load_saved_state()
 
-        # Preload interstitial
-        self.page.run_task(self.ad_service.preload_interstitial)
+        # Gather UMP consent then preload interstitial (Play policy)
+        async def _consent_and_preload():
+            await self.ad_service.gather_consent()
+            await self.ad_service.preload_interstitial()
+
+        self.page.run_task(_consent_and_preload)
 
         # Load sites if sherlock is available
         if self.sherlock_service.is_available:
@@ -331,7 +335,7 @@ class AppController:
                 if claimed_urls:
 
                     def _on_enriched_profile(url: str, data: dict):
-                        state.enrichments[url] = data
+                        state.set_enrichment(url, data)
                         state.progress_version += 1
                         try:
                             self.page.update()
@@ -465,26 +469,11 @@ class AppController:
             state.email_rate_limited_count = len(result.rate_limited)
             state.email_total_modules = result.total_modules
 
-            # Enrich found profiles with socid-extractor
-            if self.enrich_service and self.enrich_service.is_available:
-                found_urls = []
-                for r in result.found:
-                    if r.domain:
-                        # Construct profile URL from domain
-                        url = f"https://{r.domain}"
-                        found_urls.append(url)
-                if found_urls:
-                    try:
-                        enrichments = await self.enrich_service.batch_enrich(
-                            found_urls,
-                            timeout=5,
-                            max_concurrent=5,
-                        )
-                        if enrichments:
-                            state.enrichments.update(enrichments)
-                            state.progress_version += 1
-                    except Exception as exc:
-                        logger.warning("Enrichment failed: %s", exc)
+            # Email enrichment via socid-extractor is intentionally skipped:
+            # holehe `r.domain` is a bare domain (e.g. "twitter.com"), not a
+            # profile URL. Fetching https://{domain}/ would hit the homepage and
+            # never match a socid scheme — wasted batch at 0% hit rate. Keep
+            # enrichment only for username mode where we have real profile URLs.
 
             await self._save_to_history(
                 email.strip(),

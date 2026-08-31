@@ -2,7 +2,7 @@
 
 APP_NAME = "Sherlock"
 APP_VERSION = "2.0.0"
-APP_BUILD_NUMBER = 8
+APP_BUILD_NUMBER = 9
 
 # ── Update & Distribution URLs ─────────────────────────────────────────
 UPDATE_CONFIG_URL = (

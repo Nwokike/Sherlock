@@ -284,7 +284,9 @@ def ResultCard(
         )
 
     # ── Avatar / Leading Icon ─────────────────────────────────────────
-    if avatar_url:
+    # Guard against relative/non-http avatar URLs from socid-extractor.
+    has_valid_avatar = bool(avatar_url and avatar_url.startswith("http"))
+    if has_valid_avatar:
         leading_control = ft.Image(
             src=avatar_url,
             width=36,

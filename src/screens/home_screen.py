@@ -7,7 +7,6 @@ feature cards, how it works, and trust banner.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 import flet as ft
@@ -478,13 +477,11 @@ def HomeScreen() -> Control:
     def _on_input_change(e):
         value = e.control.value or ""
         set_search_query(value)
-        # Auto-switch to email mode only if full email is pasted while in username mode
-        if (
-            state.search_mode == MODE_USERNAME
-            and "@" in value
-            and "." in value.split("@")[-1]
-            and len(value.split("@")[-1].split(".")[-1]) >= 2
-        ):
+
+    def _maybe_switch_to_email(value: str):
+        """Only auto-switch when pasted value is a clear email, not on typing."""
+        from services.email_service import validate_email
+        if state.search_mode == MODE_USERNAME and validate_email(value.strip()):
             _switch_mode(MODE_EMAIL)
 
     def _on_paste(e):
@@ -493,7 +490,9 @@ def HomeScreen() -> Control:
                 clipboard = ft.Clipboard()
                 text = await clipboard.get()
                 if text:
-                    set_search_query(text.strip())
+                    value = text.strip()
+                    set_search_query(value)
+                    _maybe_switch_to_email(value)
             except Exception:
                 pass
 
@@ -521,16 +520,14 @@ def HomeScreen() -> Control:
     def _load_history():
         async def _fetch():
             try:
-                from services.storage_service import StorageService
+                from services.storage_service import StorageService, load_history_entries
 
                 storage = StorageService(_get_page())
                 raw = await storage.get(STORAGE_HISTORY)
-                if raw:
-                    entries = json.loads(raw)
-                    # Contract: storage is oldest-first; observable
-                    # state.history is ALWAYS newest-first (display order).
+                entries = load_history_entries(raw)
+                if entries:
                     state.history.clear()
-                    state.history.extend(reversed(entries))
+                    state.history.extend(entries)
             except Exception:
                 pass
 

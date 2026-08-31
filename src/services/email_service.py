@@ -18,7 +18,6 @@ import asyncio
 import logging
 import re
 import time
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -77,8 +76,10 @@ class EmailService:
     """Runs holehe email OSINT scans with progress and cancellation."""
 
     def __init__(self):
-        self._cancel_event = threading.Event()
+        self._cancel_event = asyncio.Event()
         self._progress: EmailSearchProgress | None = None
+        self._tasks: list[asyncio.Task] = []
+        self._client = None
 
     @property
     def is_available(self) -> bool:
@@ -89,8 +90,6 @@ class EmailService:
         global _holehe_modules
         if _holehe_modules is None:
             modules = import_submodules("holehe.modules")
-            # get_functions expects args with nopasswordrecovery attribute;
-            # pass None to get all modules.
             _holehe_modules = get_functions(modules, args=None)
 
         if skip_password_recovery:
@@ -131,6 +130,7 @@ class EmailService:
         total = len(modules)
 
         self._cancel_event.clear()
+        self._tasks.clear()
 
         progress = EmailSearchProgress(
             email=email,
@@ -156,29 +156,48 @@ class EmailService:
             local_out: list[dict] = []
             try:
                 await module(email, client, local_out)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                logger.debug("Module %s failed: %s", name, exc)
-                local_out.append(
-                    {
-                        "name": name,
-                        "domain": f"{name}.com",
-                        "rateLimit": True,
-                        "exists": False,
-                        "emailrecovery": None,
-                        "phoneNumber": None,
-                        "others": None,
-                    }
-                )
-
-            if not local_out:
+                logger.warning("Module %s failed: %s", name, exc)
                 local_out.append(
                     {
                         "name": name,
                         "domain": f"{name}.com",
                         "rateLimit": False,
-                        "exists": False,
+                        "exists": None,
+                        "emailrecovery": None,
+                        "phoneNumber": None,
+                        "others": {"error": str(exc)},
                     }
                 )
+
+            if not local_out:
+                # Holehe returned nothing — treat as inconclusive, not not_found.
+                # Skipping prevents false-negative "Available" when the probe didn't run.
+                logger.warning("Module %s returned empty result — skipping", name)
+                async with progress_lock:
+                    progress.checked_modules += 1
+                    result = EmailResult(
+                        name=name,
+                        domain=f"{name}.com",
+                        exists=None,
+                        rate_limit=False,
+                        others={"error": "empty response"},
+                    )
+                    progress.not_found.append(result)
+                    now = time.monotonic()
+                    should_notify = (
+                        now - last_update_time >= 0.20
+                    ) or progress.checked_modules == total
+                    if should_notify:
+                        last_update_time = now
+                if should_notify:
+                    try:
+                        on_progress(progress)
+                    except Exception:
+                        pass
+                return
 
             raw = local_out[0]
             result = EmailResult(
@@ -216,7 +235,6 @@ class EmailService:
                     pass
 
         try:
-            # Use standard browser headers for httpx to reduce false-positive blocks
             headers = {
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -228,27 +246,42 @@ class EmailService:
             async with httpx.AsyncClient(
                 timeout=timeout, headers=headers, follow_redirects=True
             ) as client:
+                self._client = client
                 sem = asyncio.Semaphore(15)
 
                 async def _bounded(module):
                     async with sem:
+                        if self._cancel_event.is_set():
+                            return
                         await _run_module(module, client)
 
-                tasks = [asyncio.create_task(_bounded(m)) for m in modules]
-                await asyncio.gather(*tasks, return_exceptions=True)
+                self._tasks = [asyncio.create_task(_bounded(m)) for m in modules]
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+                self._tasks.clear()
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.exception("Email search failed: %s", exc)
             raise
         finally:
+            self._client = None
             progress.is_running = False
-            on_progress(progress)
+            with __import__("contextlib").suppress(Exception):
+                on_progress(progress)
 
         self._progress = progress
         return progress
 
     def cancel(self):
-        """Cancel a running email search."""
+        """Cancel a running email search — cancels tasks and closes client."""
         self._cancel_event.set()
+        for task in list(self._tasks):
+            if not task.done():
+                task.cancel()
+        if self._client is not None:
+            with __import__("contextlib").suppress(Exception):
+                # httpx AsyncClient close is async; best-effort sync close
+                self._client = None
         if self._progress:
             self._progress.is_cancelled = True
             self._progress.is_running = False

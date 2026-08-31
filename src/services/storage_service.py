@@ -156,3 +156,29 @@ class StorageService:
         async with self._lock:
             if self._dirty:
                 self._save_now()
+
+
+def load_history_entries(raw: str | None) -> list[dict]:
+    """Decode stored history (oldest-first) → newest-first for display.
+
+    Shared by HomeScreen and AppController so the reversed contract lives
+    in one place. Returns empty list on bad/missing JSON.
+    """
+    if not raw:
+        return []
+    try:
+        entries = json.loads(raw)
+        if not isinstance(entries, list):
+            return []
+        return list(reversed(entries))
+    except Exception:
+        return []
+
+
+def encode_history_entries(entries: list[dict], new_entry: dict | None = None) -> str:
+    """Encode history as oldest-first JSON for storage. Keeps last 50."""
+    out = list(entries)
+    if new_entry is not None:
+        out.append(new_entry)
+        out = out[-50:]
+    return json.dumps(out)

@@ -199,6 +199,12 @@ def SettingsScreen() -> Control:
     def _on_manifest_change(val: str):
         state.custom_manifest = val
         asyncio.create_task(_persist(STORAGE_MANIFEST, val))
+        # refresh_sites is debounced via AppController — not per-keystroke.
+
+    def _on_manifest_submit(e):
+        val = e.control.value.strip() if e.control.value else ""
+        state.custom_manifest = val
+        asyncio.create_task(_persist(STORAGE_MANIFEST, val))
         if controller.refresh_sites:
             asyncio.create_task(controller.refresh_sites())
 
@@ -471,6 +477,7 @@ def SettingsScreen() -> Control:
                         tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
                     ),
                     on_change=lambda e: _on_manifest_change(e.control.value),
+                    on_submit=_on_manifest_submit,
                 ),
                 padding=ft.Padding(
                     left=tokens.SPACE_LG,

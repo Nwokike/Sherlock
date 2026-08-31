@@ -143,7 +143,9 @@ def _category_chip(
         ),
         leading=ft.Icon(icon, size=15, color=ft.Colors.ON_SURFACE_VARIANT),
         bgcolor=ft.Colors.TRANSPARENT,
-        border_side=ft.BorderSide(1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)),
+        border_side=ft.BorderSide(
+            1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)
+        ),
         show_checkmark=False,
         on_select=lambda e: None,
     )

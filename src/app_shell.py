@@ -463,7 +463,13 @@ def AppShell() -> Control:
 
     ft.use_effect(
         _sync_chrome,
-        [active_tab, active_view, state.has_accepted_terms, state.theme_mode, state.progress_version],
+        [
+            active_tab,
+            active_view,
+            state.has_accepted_terms,
+            state.theme_mode,
+            state.progress_version,
+        ],
     )
 
     # --- Branching ---

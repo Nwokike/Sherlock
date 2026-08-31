@@ -62,7 +62,9 @@ def _build_slide(s: dict) -> ft.Column:
             height=tokens.ICON_FEATURE,
             color=ft.Colors.WHITE if is_dark else None,
         )
-        bg_color = ft.Colors.with_opacity(0.10, ft.Colors.WHITE if is_dark else AppColors.PRIMARY)
+        bg_color = ft.Colors.with_opacity(
+            0.10, ft.Colors.WHITE if is_dark else AppColors.PRIMARY
+        )
     else:
         icon_content = ft.Icon(s["icon"], size=tokens.ICON_FEATURE, color=s["color"])
         bg_color = ft.Colors.with_opacity(tokens.OPACITY_LIGHT, s["color"])

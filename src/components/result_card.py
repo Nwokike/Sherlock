@@ -252,6 +252,17 @@ def ResultCard(
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
+        # Extra socid fields — company, verified, links, website
+        company = enrichment.get("company") or enrichment.get("occupation")
+        if company:
+            extra_lines.append(ft.Text(str(company), size=tokens.FONT_XS, color=ft.Colors.ON_SURFACE_VARIANT, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
+        if enrichment.get("is_verified"):
+            extra_lines.append(ft.Row([ft.Icon(ft.Icons.VERIFIED_ROUNDED, size=12, color=ft.Colors.BLUE), ft.Text("Verified", size=tokens.FONT_XS, color=ft.Colors.BLUE, weight=ft.FontWeight.W_600)], spacing=4))
+        links = enrichment.get("links")
+        if links and isinstance(links, list) and links[0]:
+            first_link = links[0] if isinstance(links[0], str) else str(links[0])
+            if first_link.startswith("http"):
+                extra_lines.append(ft.Text(first_link, size=tokens.FONT_XS, color=AppColors.PRIMARY, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
 
     # Frequently rate-limited notice
     if rate_limit and frequent_rate_limit:
@@ -344,25 +355,27 @@ def ResultCard(
     if method_badge:
         name_row_controls.append(method_badge)
 
-    detail_column = ft.Column(
-        controls=[
-            ft.Row(
-                controls=name_row_controls,
-                spacing=tokens.SPACE_SM,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            ft.Text(
-                display_url,
-                size=tokens.FONT_XS,
-                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
-                no_wrap=False,
-                max_lines=1,
-                overflow=ft.TextOverflow.ELLIPSIS,
-            ),
-            *extra_lines,
-        ],
-        spacing=tokens.SPACE_XXS,
-        expand=True,
+    detail_column = ft.SelectionArea(
+        content=ft.Column(
+            controls=[
+                ft.Row(
+                    controls=name_row_controls,
+                    spacing=tokens.SPACE_SM,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Text(
+                    display_url,
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                    no_wrap=False,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                ),
+                *extra_lines,
+            ],
+            spacing=tokens.SPACE_XXS,
+            expand=True,
+        ),
     )
 
     is_clickable = (

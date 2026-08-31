@@ -323,12 +323,14 @@ class SherlockService:
 
             def _run(tgt=tgt, query_notify=query_notify):
                 try:
+                    proxy = getattr(state, "proxy_url", "") or None
                     results = sherlock(
                         username=tgt,
                         site_data=site_data,
                         query_notify=query_notify,
                         dump_response=False,
                         timeout=timeout,
+                        proxy=proxy,
                     )
                     return results
                 except SystemExit as se:

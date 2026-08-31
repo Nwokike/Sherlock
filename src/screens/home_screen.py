@@ -104,46 +104,28 @@ _STEPS_EMAIL = [
 # ── Compact components ─────────────────────────────────────────────────
 
 
-@ft.memo
 def _category_chip(
     icon: str,
     label: str,
     color: str,
     is_active: bool,
     on_click=None,
-) -> ft.Container:
-    """Compact filter-chip style category / quick-setting selector."""
-    return ft.Container(
-        content=ft.Row(
-            [
-                ft.Icon(
-                    icon,
-                    size=15,
-                    color=color if is_active else ft.Colors.ON_SURFACE_VARIANT,
-                ),
-                ft.Text(
-                    label,
-                    size=12,
-                    weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.W_400,
-                    color=color if is_active else ft.Colors.ON_SURFACE,
-                    font_family="Outfit",
-                ),
-            ],
-            spacing=5,
-            tight=True,
-        ),
-        padding=ft.Padding(10, 6, 12, 6),
-        border_radius=20,
-        border=ft.Border.all(
-            1.5 if is_active else 1,
-            color if is_active else ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE),
-        ),
-        bgcolor=ft.Colors.with_opacity(0.1, color)
-        if is_active
-        else ft.Colors.TRANSPARENT,
-        ink=True if on_click else False,
-        on_click=on_click,
-        animate=ft.Animation(tokens.ANIM_FAST, "easeOut"),
+) -> ft.Control:
+    """Material 3 Chip — replaces hand-rolled Container pill."""
+    if on_click is not None:
+        return ft.Chip(
+            label=ft.Text(label, size=12, weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.W_400, font_family="Outfit"),
+            leading=ft.Icon(icon, size=15, color=color if is_active else ft.Colors.ON_SURFACE_VARIANT),
+            selected=is_active,
+            selected_color=ft.Colors.with_opacity(0.14, color),
+            bgcolor=ft.Colors.with_opacity(0.08, color) if is_active else ft.Colors.TRANSPARENT,
+            show_checkmark=False,
+            on_select=on_click,
+        )
+    return ft.Chip(
+        label=ft.Text(label, size=12, font_family="Outfit"),
+        leading=ft.Icon(icon, size=15, color=ft.Colors.ON_SURFACE_VARIANT),
+        disabled_color=ft.Colors.ON_SURFACE_VARIANT,
     )
 
 
@@ -465,6 +447,11 @@ def HomeScreen() -> Control:
         if not query:
             return
 
+        try:
+            ft.HapticFeedback().medium_impact()
+        except Exception:
+            pass
+
         async def _run():
             controller.show_results()
             if state.search_mode == MODE_EMAIL:
@@ -696,112 +683,24 @@ def HomeScreen() -> Control:
                     controller.show_settings() if controller.show_settings else None
                 ),
             ),
-            # Offline banner — reactively bound to state.is_online
-            ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(
-                            ft.Icons.WIFI_OFF_ROUNDED,
-                            color=ft.Colors.ON_ERROR_CONTAINER,
-                            size=tokens.ICON_SM,
-                        ),
-                        ft.Text(
-                            MSG_OFFLINE,
-                            size=tokens.FONT_XS,
-                            color=ft.Colors.ON_ERROR_CONTAINER,
-                            expand=True,
-                        ),
-                    ],
-                    spacing=tokens.SPACE_SM,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=ft.Padding(
-                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM
-                ),
+            # Offline — Material 3 Banner (replaces plain Container)
+            ft.Banner(
+                content=ft.Text(MSG_OFFLINE, size=tokens.FONT_XS, color=ft.Colors.ON_ERROR_CONTAINER),
+                leading=ft.Icon(ft.Icons.WIFI_OFF_ROUNDED, color=ft.Colors.ON_ERROR_CONTAINER, size=tokens.ICON_SM),
                 bgcolor=ft.Colors.ERROR_CONTAINER,
-                visible=not state.is_online,
+                actions=[ft.TextButton("Dismiss", on_click=lambda e: None)],
+                open=not state.is_online,
             ),
-            # ── Mode Switcher (Username / Email) ──
+            # ── Mode Switcher — Material 3 SegmentedButton ──
             ft.Container(
-                padding=ft.Padding(
-                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
-                ),
-                content=ft.Container(
-                    padding=ft.Padding(4, 4, 4, 4),
-                    border_radius=12,
-                    bgcolor=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE),
-                    border=ft.Border.all(
-                        1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)
-                    ),
-                    content=ft.Row(
-                        controls=[
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        ft.Icon(
-                                            ft.Icons.PERSON_SEARCH_ROUNDED,
-                                            size=16,
-                                            color=ft.Colors.WHITE
-                                            if not is_email_mode
-                                            else ft.Colors.ON_SURFACE_VARIANT,
-                                        ),
-                                        ft.Text(
-                                            "Username",
-                                            size=12,
-                                            weight=ft.FontWeight.BOLD,
-                                            color=ft.Colors.WHITE
-                                            if not is_email_mode
-                                            else ft.Colors.ON_SURFACE_VARIANT,
-                                        ),
-                                    ],
-                                    spacing=6,
-                                    alignment=ft.MainAxisAlignment.CENTER,
-                                ),
-                                bgcolor=AppColors.PRIMARY
-                                if not is_email_mode
-                                else ft.Colors.TRANSPARENT,
-                                border_radius=8,
-                                padding=ft.Padding(12, 6, 12, 6),
-                                ink=True,
-                                expand=True,
-                                alignment=ft.Alignment.CENTER,
-                                on_click=lambda e: _switch_mode(MODE_USERNAME),
-                            ),
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        ft.Icon(
-                                            ft.Icons.ALTERNATE_EMAIL_ROUNDED,
-                                            size=16,
-                                            color=ft.Colors.WHITE
-                                            if is_email_mode
-                                            else ft.Colors.ON_SURFACE_VARIANT,
-                                        ),
-                                        ft.Text(
-                                            "Email",
-                                            size=12,
-                                            weight=ft.FontWeight.BOLD,
-                                            color=ft.Colors.WHITE
-                                            if is_email_mode
-                                            else ft.Colors.ON_SURFACE_VARIANT,
-                                        ),
-                                    ],
-                                    spacing=6,
-                                    alignment=ft.MainAxisAlignment.CENTER,
-                                ),
-                                bgcolor=AppColors.PRIMARY
-                                if is_email_mode
-                                else ft.Colors.TRANSPARENT,
-                                border_radius=8,
-                                padding=ft.Padding(12, 6, 12, 6),
-                                ink=True,
-                                expand=True,
-                                alignment=ft.Alignment.CENTER,
-                                on_click=lambda e: _switch_mode(MODE_EMAIL),
-                            ),
-                        ],
-                        spacing=4,
-                    ),
+                padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0),
+                content=ft.SegmentedButton(
+                    segments=[
+                        ft.Segment(value=MODE_USERNAME, label=ft.Text("Username", font_family="Outfit"), icon=ft.Icons.PERSON_SEARCH_ROUNDED),
+                        ft.Segment(value=MODE_EMAIL, label=ft.Text("Email", font_family="Outfit"), icon=ft.Icons.ALTERNATE_EMAIL_ROUNDED),
+                    ],
+                    selected={state.search_mode},
+                    on_change=lambda e: _switch_mode(e.control.selected[0] if e.control.selected else MODE_USERNAME),
                 ),
             ),
             # Search field — modern SearchBar
@@ -812,7 +711,7 @@ def HomeScreen() -> Control:
                     bar_hint_text=(
                         "Enter email to check 120+ platforms..."
                         if is_email_mode
-                        else "Enter username to hunt across 400+ networks..."
+                        else "Enter username (tip: user{?}name → 3 variants)..."
                     ),
                     bar_leading=ft.Icon(
                         ft.Icons.ALTERNATE_EMAIL_ROUNDED
@@ -856,6 +755,14 @@ def HomeScreen() -> Control:
                     on_submit=lambda e: _on_search(),
                     on_change=_on_input_change,
                     autofocus=False,
+                    controls=[
+                        ft.ListTile(
+                            title=ft.Text(e.get("query", ""), size=tokens.FONT_SM, font_family="Outfit"),
+                            leading=ft.Icon(ft.Icons.HISTORY_ROUNDED, size=16, color=AppColors.PRIMARY),
+                            on_click=lambda _, entry=e: (_on_history_click(entry)),
+                        )
+                        for e in (list(state.history[:5]) if state.history else [])
+                    ] if state.history else [],
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0

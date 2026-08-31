@@ -34,6 +34,10 @@ from core.constants import (
     MSG_SEARCH_OFFLINE,
     STORAGE_CACHED_SITES,
     STORAGE_EMAIL_TIMEOUT,
+    STORAGE_EMAIL_CONCURRENCY,
+    STORAGE_EMAIL_ONLY_FOUND,
+    STORAGE_EMAIL_METHOD_FILTER,
+    STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
     STORAGE_LOCAL_DB,
@@ -41,6 +45,7 @@ from core.constants import (
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_ONBOARDING_DONE,
+    STORAGE_PROXY_URL,
     STORAGE_SEARCH_MODE,
     STORAGE_SELECTED_SITES,
     STORAGE_THEME,
@@ -242,6 +247,22 @@ class AppController:
             if email_timeout_raw:
                 state.email_timeout = int(email_timeout_raw)
 
+            conc_raw = await self.storage.get(STORAGE_EMAIL_CONCURRENCY)
+            if conc_raw:
+                state.email_concurrency = max(5, min(30, int(conc_raw)))
+            only_found_raw = await self.storage.get(STORAGE_EMAIL_ONLY_FOUND)
+            if only_found_raw is not None:
+                state.email_only_found = only_found_raw == "true"
+            method_filter_raw = await self.storage.get(STORAGE_EMAIL_METHOD_FILTER)
+            if method_filter_raw in ("all", "register", "login", "recovery"):
+                state.email_method_filter = method_filter_raw
+            proxy_raw = await self.storage.get(STORAGE_PROXY_URL)
+            if proxy_raw:
+                state.proxy_url = proxy_raw
+            enrich_mode_raw = await self.storage.get(STORAGE_ENRICHMENT_MODE)
+            if enrich_mode_raw in ("basic", "full"):
+                state.enrichment_mode = enrich_mode_raw
+
             no_pw_raw = await self.storage.get(STORAGE_NO_PASSWORD_RECOVERY)
             if no_pw_raw is not None:
                 state.no_password_recovery = no_pw_raw == "true"
@@ -343,11 +364,13 @@ class AppController:
                             pass
 
                     async def _enrich_task():
+                        use_mutations = getattr(state, "enrichment_mode", "basic") == "full"
                         await self.enrich_service.batch_enrich(
                             claimed_urls,
-                            timeout=6,
+                            timeout=8 if use_mutations else 6,
                             on_result=_on_enriched_profile,
-                            max_concurrent=4,
+                            max_concurrent=3 if use_mutations else 4,
+                            use_mutations=use_mutations,
                         )
 
                     self.page.run_task(_enrich_task)
@@ -443,6 +466,7 @@ class AppController:
                 on_progress=self._email_progress_callback,
                 timeout=state.email_timeout,
                 skip_password_recovery=state.no_password_recovery,
+                concurrency=getattr(state, "email_concurrency", 15),
             )
             state.is_searching = False
 

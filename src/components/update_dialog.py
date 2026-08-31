@@ -150,11 +150,11 @@ def show_update_dialog(page: ft.Page, update_data: dict) -> None:
             )
             content_controls.append(ft.Container(height=tokens.SPACE_XS))
         content_controls.append(
-            ft.Text(
+            ft.Markdown(
                 release_notes,
-                size=tokens.FONT_SM,
-                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
                 selectable=True,
+                extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+                on_tap_link=lambda e: __import__("asyncio").create_task(ft.UrlLauncher().launch_url(e.data)),
             )
         )
 

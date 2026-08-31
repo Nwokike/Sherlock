@@ -11,6 +11,7 @@ import logging
 import flet as ft
 from flet import Control
 
+from core.theme import AppColors
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -41,36 +42,44 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
     if active_view == "results":
 
         def _copy_urls(e):
+            try:
+                ft.HapticFeedback().medium_impact()
+            except Exception:
+                pass
             async def _copy():
                 from flet import context
-
                 page = context.page
                 from core.notify import show_snack
                 from core.state import state as app_state
-                from core.theme import AppColors
-
                 if not (app_state.search_progress and app_state.search_progress.found):
                     return
-                urls = [
-                    r.url_user for r in app_state.search_progress.found if r.url_user
-                ]
+                urls = [r.url_user for r in app_state.search_progress.found if r.url_user]
                 try:
                     cb = ft.Clipboard()
                     await cb.set("\n".join(urls))
-                    show_snack(
-                        page,
-                        f"{len(urls)} profile URL{'s' if len(urls) != 1 else ''} copied",
-                        bgcolor=AppColors.SUCCESS,
-                    )
+                    show_snack(page, f"{len(urls)} URL{'s' if len(urls)!=1 else ''} copied", bgcolor=AppColors.SUCCESS)
                 except Exception as ex:
-                    logger.warning("Copy URLs failed: %s", ex)
-                    show_snack(
-                        page,
-                        "Couldn't copy URLs — try again.",
-                        bgcolor=AppColors.ERROR,
-                    )
-
+                    logger.warning("Copy failed: %s", ex)
+                    show_snack(page, "Couldn't copy — try again.", bgcolor=AppColors.ERROR)
             asyncio.create_task(_copy())
+
+        def _share_urls(e):
+            try:
+                ft.HapticFeedback().light_impact()
+            except Exception:
+                pass
+            async def _share():
+                from core.state import state as app_state
+                if not (app_state.search_progress and app_state.search_progress.found):
+                    return
+                urls = [r.url_user for r in app_state.search_progress.found if r.url_user]
+                if not urls:
+                    return
+                try:
+                    await ft.Share().share("\n".join(urls[:20]))
+                except Exception as ex:
+                    logger.warning("Share failed: %s", ex)
+            asyncio.create_task(_share())
 
         def _on_export_click(format_type: str):
             """Full export dialog — Excel, CSV, or Text (original Sherlock behavior)."""
@@ -217,27 +226,33 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
             if not app_state.search_progress:
                 return
-            dialog = ft.AlertDialog(
-                title=ft.Text("Export Scan Report"),
-                content=ft.Text("Select your preferred file format:"),
-                actions=[
-                    ft.TextButton(
-                        "Excel Spreadsheet (.xlsx)",
-                        on_click=lambda e: _on_export_click("xlsx"),
-                    ),
-                    ft.TextButton(
-                        "CSV Spreadsheet (.csv)",
-                        on_click=lambda e: _on_export_click("csv"),
-                    ),
-                    ft.TextButton(
-                        "Plain Text List (.txt)",
-                        on_click=lambda e: _on_export_click("txt"),
-                    ),
-                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
+            sheet = ft.BottomSheet(
+                content=ft.Column(
+                    [
+                        ft.ListTile(
+                            title=ft.Text("Excel Spreadsheet (.xlsx)", weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Full report with all columns"),
+                            leading=ft.Icon(ft.Icons.TABLE_CHART_ROUNDED, color=AppColors.PRIMARY),
+                            on_click=lambda e: (page.pop_dialog(), _on_export_click("xlsx")),
+                        ),
+                        ft.ListTile(
+                            title=ft.Text("CSV Spreadsheet (.csv)", weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("Spreadsheet compatible"),
+                            leading=ft.Icon(ft.Icons.GRID_ON_ROUNDED, color=AppColors.PRIMARY),
+                            on_click=lambda e: (page.pop_dialog(), _on_export_click("csv")),
+                        ),
+                        ft.ListTile(
+                            title=ft.Text("Plain Text List (.txt)", weight=ft.FontWeight.W_600),
+                            subtitle=ft.Text("URLs only"),
+                            leading=ft.Icon(ft.Icons.ARTICLE_ROUNDED, color=AppColors.PRIMARY),
+                            on_click=lambda e: (page.pop_dialog(), _on_export_click("txt")),
+                        ),
+                    ],
+                    tight=True,
+                ),
+                show_drag_handle=True,
             )
-            page.show_dialog(dialog)
+            page.show_dialog(sheet)
 
         def _restart(e):
             from core.state import state as app_state
@@ -261,21 +276,10 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             center_title=False,
             bgcolor=ft.Colors.TRANSPARENT,
             actions=[
-                ft.IconButton(
-                    icon=ft.Icons.CONTENT_COPY_ROUNDED,
-                    tooltip="Copy URLs",
-                    on_click=_copy_urls,
-                ),
-                ft.IconButton(
-                    icon=ft.Icons.DOWNLOAD_ROUNDED,
-                    tooltip="Export",
-                    on_click=_show_export_dialog,
-                ),
-                ft.IconButton(
-                    icon=ft.Icons.REFRESH_ROUNDED,
-                    tooltip="Search again",
-                    on_click=_restart,
-                ),
+                ft.IconButton(icon=ft.Icons.CONTENT_COPY_ROUNDED, tooltip="Copy URLs", on_click=_copy_urls),
+                ft.IconButton(icon=ft.Icons.SHARE_ROUNDED, tooltip="Share URLs", on_click=_share_urls),
+                ft.IconButton(icon=ft.Icons.DOWNLOAD_ROUNDED, tooltip="Export", on_click=_show_export_dialog),
+                ft.IconButton(icon=ft.Icons.REFRESH_ROUNDED, tooltip="Search again", on_click=_restart),
             ],
         )
 

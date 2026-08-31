@@ -48,11 +48,13 @@ from core.constants import (
 )
 from core.state import state
 from core.theme import AppTheme
+from components.update_dialog import show_update_dialog
 from services.ad_service import AdService
 from services.email_service import EmailService
 from services.enrich_service import EnrichService
 from services.sherlock_service import SherlockService
 from services.storage_service import StorageService
+from services.update_service import UpdateService
 from state.controller_ctx import (
     ControllerMethods,
     ControllerMethodsCtx,
@@ -71,6 +73,7 @@ class AppController:
         self.sherlock_service: SherlockService | None = None
         self.email_service: EmailService | None = None
         self.enrich_service: EnrichService | None = None
+        self.update_service: UpdateService | None = None
         self.connectivity: ft.Connectivity | None = None
         # Main-thread event loop, captured in init(). Worker threads
         # (the sherlock scan thread) bridge progress callbacks onto it
@@ -132,6 +135,7 @@ class AppController:
         self.sherlock_service = SherlockService()
         self.email_service = EmailService()
         self.enrich_service = EnrichService()
+        self.update_service = UpdateService()
 
         # Load saved state
         await self._load_saved_state()
@@ -142,6 +146,9 @@ class AppController:
         # Load sites if sherlock is available
         if self.sherlock_service.is_available:
             self.page.run_task(self._load_and_cache_sites)
+
+        # Check for remote updates / announcements in background
+        self.page.run_task(self.check_for_updates)
 
         # Mount the React-style component tree
         from app_shell import AppShell
@@ -159,6 +166,8 @@ class AppController:
             start_email_search=self.start_email_search,
             cancel_email_search=self.cancel_email_search,
             save_selected_sites=self.save_selected_sites,
+            check_for_updates=self.check_for_updates,
+            open_update_dialog=self.open_update_dialog,
         )
         self._controller_methods = methods
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
@@ -534,6 +543,31 @@ class AppController:
                 state.history[:] = state.history[:50]
         except Exception as e:
             logger.warning("Failed to save history: %s", e)
+
+    # --- Updates & Announcements --------------------------------------
+
+    def open_update_dialog(self) -> None:
+        """Open update or announcement dialog using data loaded from version.json."""
+        if state.update_available and state.update_data:
+            show_update_dialog(self.page, state.update_data)
+
+    async def check_for_updates(self, notify_if_latest: bool = False) -> None:
+        """Query version.json on GitHub for updates/announcements."""
+        if not self.update_service:
+            return
+        update_info = await self.update_service.check_for_update()
+        if update_info:
+            state.update_available = True
+            state.update_data = update_info
+            state.progress_version += 1
+            if update_info.get("mandatory"):
+                self.open_update_dialog()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+        elif notify_if_latest:
+            self._show_snack(f"Sherlock v{APP_VERSION} is up to date!")
 
     # --- Errors -------------------------------------------------------
 

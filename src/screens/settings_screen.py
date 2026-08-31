@@ -27,6 +27,7 @@ from core.constants import (
     STORAGE_THEME,
     STORAGE_TIMEOUT,
 )
+from core.theme import AppColors
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -391,7 +392,50 @@ def SettingsScreen() -> Control:
         ]
     )
 
-    # About
+    # About & Updates
+    is_announcement = (
+        state.update_available
+        and state.update_data
+        and state.update_data.get("type") == "announcement"
+    )
+
+    update_badge_controls: list[Control] = []
+    if state.update_available and state.update_data:
+        badge_color = AppColors.ACCENT if is_announcement else AppColors.PRIMARY
+        badge_label = (
+            "Announcement Available"
+            if is_announcement
+            else f"Update to v{state.update_data.get('version', '')} available"
+        )
+        badge_icon = (
+            ft.Icons.CAMPAIGN_ROUNDED if is_announcement else ft.Icons.UPGRADE_ROUNDED
+        )
+        update_badge_controls.append(
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(badge_icon, size=16, color=badge_color),
+                        ft.Text(
+                            badge_label,
+                            size=tokens.FONT_SM,
+                            weight=ft.FontWeight.W_600,
+                            color=badge_color,
+                            font_family="Outfit",
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=6,
+                ),
+                padding=ft.Padding(14, 8, 14, 8),
+                border_radius=tokens.RADIUS_MD,
+                bgcolor=ft.Colors.with_opacity(0.12, badge_color),
+                border=ft.Border.all(1.2, badge_color),
+                ink=True,
+                on_click=lambda e: controller.open_update_dialog(),
+                margin=ft.Margin(0, tokens.SPACE_MD, 0, tokens.SPACE_XS),
+            )
+        )
+
     about_card = _settings_card(
         [
             ft.Container(
@@ -426,6 +470,30 @@ def SettingsScreen() -> Control:
                             ),
                             text_align=ft.TextAlign.CENTER,
                         ),
+                        *update_badge_controls,
+                        ft.Container(height=tokens.SPACE_SM),
+                        ft.TextButton(
+                            content=ft.Row(
+                                [
+                                    ft.Icon(
+                                        ft.Icons.SYNC_ROUNDED,
+                                        size=14,
+                                        color=ft.Colors.ON_SURFACE_VARIANT,
+                                    ),
+                                    ft.Text(
+                                        "Check for updates",
+                                        size=tokens.FONT_XS,
+                                        color=ft.Colors.ON_SURFACE_VARIANT,
+                                    ),
+                                ],
+                                spacing=4,
+                                alignment=ft.MainAxisAlignment.CENTER,
+                                tight=True,
+                            ),
+                            on_click=lambda e: asyncio.create_task(
+                                controller.check_for_updates()
+                            ),
+                        ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=0,
@@ -434,7 +502,7 @@ def SettingsScreen() -> Control:
                     left=tokens.SPACE_LG,
                     right=tokens.SPACE_LG,
                     top=tokens.SPACE_XL,
-                    bottom=tokens.SPACE_XL,
+                    bottom=tokens.SPACE_LG,
                 ),
                 alignment=ft.Alignment.CENTER,
             ),

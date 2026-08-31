@@ -17,13 +17,14 @@ from components.banner_ad import build_banner_ad
 from components.targets_card import TargetsCard
 from core import tokens
 from core.constants import (
-    MSG_OFFLINE,
     APP_NAME,
-    STORAGE_HISTORY,
-    STORAGE_THEME,
-    MODE_USERNAME,
+    APP_VERSION,
     MODE_EMAIL,
+    MODE_USERNAME,
+    MSG_OFFLINE,
+    STORAGE_HISTORY,
     STORAGE_SEARCH_MODE,
+    STORAGE_THEME,
 )
 from core.theme import (
     AppColors,
@@ -549,6 +550,64 @@ def HomeScreen() -> Control:
         ),
     ]
 
+    # ── Version / Update Chip ──
+    is_announcement = (
+        state.update_available
+        and state.update_data
+        and state.update_data.get("type") == "announcement"
+    )
+    if state.update_available:
+        badge_color = AppColors.ACCENT if is_announcement else AppColors.PRIMARY
+        badge_text = "News" if is_announcement else "Update"
+        badge_icon = (
+            ft.Icons.CAMPAIGN_ROUNDED if is_announcement else ft.Icons.UPGRADE_ROUNDED
+        )
+        version_chip = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(badge_icon, size=13, color=badge_color),
+                    ft.Text(
+                        badge_text,
+                        size=11,
+                        weight=ft.FontWeight.W_700,
+                        color=badge_color,
+                        font_family="Outfit",
+                    ),
+                    ft.Container(
+                        width=6,
+                        height=6,
+                        border_radius=3,
+                        bgcolor=badge_color,
+                    ),
+                ],
+                spacing=4,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(7, 3, 7, 3),
+            border_radius=tokens.RADIUS_SM,
+            bgcolor=ft.Colors.with_opacity(0.12, badge_color),
+            border=ft.Border.all(1.2, badge_color),
+            ink=True,
+            tooltip="New update available — tap to view",
+            on_click=lambda e: controller.open_update_dialog(),
+        )
+    else:
+        version_chip = ft.Container(
+            content=ft.Text(
+                f"v{APP_VERSION}",
+                size=11,
+                weight=ft.FontWeight.W_500,
+                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                font_family="Outfit",
+            ),
+            padding=ft.Padding(6, 2, 6, 2),
+            border_radius=tokens.RADIUS_SM,
+            border=ft.Border.all(
+                1,
+                ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE),
+            ),
+        )
+
     # ── Assemble ──
 
     content = ft.Column(
@@ -571,8 +630,10 @@ def HomeScreen() -> Control:
                                     weight=ft.FontWeight.BOLD,
                                     font_family="Outfit",
                                 ),
+                                version_chip,
                             ],
                             spacing=8,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             tight=True,
                         ),
                         ft.Row(

@@ -1,0 +1,10 @@
+{
+  "build_number": 8,
+  "version": "2.0.0",
+  "type": "update",
+  "title": "Sherlock 2.0 is here!",
+  "release_notes": "• Dual-Mode OSINT: Username & Email search\n• 120+ platforms email check via holehe\n• Profile enrichment (bio, location, followers)\n• Redesigned results with recovery hints\n• Privacy-first: 100% on-device OSINT",
+  "mandatory": false,
+  "github_url": "https://github.com/Nwokike/Sherlock/releases/latest",
+  "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.sherlock"
+}

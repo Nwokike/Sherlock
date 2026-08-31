@@ -79,6 +79,10 @@ class AppState:
     # screen render before (or if) a fresh load finishes.
     sites_cache: list | None = None
 
+    # --- Update & Announcement ---
+    update_available: bool = False
+    update_data: dict | None = None
+
     def __init__(self):
         # Collections must be assigned in __init__ so the Observable
         # __setattr__ auto-wraps them into ObservableList / ObservableDict
@@ -91,6 +95,7 @@ class AppState:
         self.sites_cache = []
         self.email_results = []
         self.enrichments = {}
+        self.update_data = None
         self.search_error = None
 
     def reset_search(self) -> None:

@@ -2,6 +2,14 @@
 
 APP_NAME = "Sherlock"
 APP_VERSION = "2.0.0"
+APP_BUILD_NUMBER = 8
+
+# ── Update & Distribution URLs ─────────────────────────────────────────
+UPDATE_CONFIG_URL = (
+    "https://raw.githubusercontent.com/Nwokike/Sherlock/main/version.json"
+)
+PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=ng.kiri.sherlock"
+GITHUB_RELEASES_URL = "https://github.com/Nwokike/Sherlock/releases/latest"
 
 # ── Storage keys ──────────────────────────────────────────────────────
 STORAGE_HISTORY = "sherlock_history"

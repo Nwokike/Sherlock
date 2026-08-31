@@ -669,6 +669,24 @@ def HomeScreen() -> Control:
             on_click=lambda e: controller.open_update_dialog(),
         )
     else:
+        # Always tappable — shows local changelog even when no remote update
+        def _open_changelog(e):
+            if state.update_available and state.update_data:
+                controller.open_update_dialog()
+            else:
+                from components.update_dialog import show_update_dialog
+                fallback = {
+                    "version": APP_VERSION,
+                    "type": "update",
+                    "title": f"Sherlock {APP_VERSION}",
+                    "release_notes": "• Dual-mode OSINT (Username + Email)\n• 120+ email platforms + profile enrichment\n• Proxy, enrichment modes, markdown changelogs\n• You're up to date!",
+                    "github_url": "https://github.com/Nwokike/Sherlock/releases/latest",
+                    "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.sherlock",
+                }
+                pg = _get_page()
+                if pg:
+                    show_update_dialog(pg, fallback)
+
         version_chip = ft.Container(
             content=ft.Text(
                 f"v{APP_VERSION}",
@@ -683,6 +701,9 @@ def HomeScreen() -> Control:
                 1,
                 ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE),
             ),
+            ink=True,
+            tooltip="Tap to view changelog",
+            on_click=_open_changelog,
         )
 
     # ── Assemble ──

@@ -122,7 +122,7 @@
 - **Tap-to-Open + Share + Haptic** — Tap result → browser; copy/share via `Clipboard` + `Share`; `HapticFeedback` on search/copy/share.
 - **Network & Proxy** — `sherlock(..., proxy=)` via Settings → Network & Proxy (`socks5://` / `http://`).
 - **Wildcard `user{?}name`** — Expands to `user_name`, `user-name`, `user.name` automatically.
-- **Email Concurrency + Filters** — Slider 5–30, Found-Only toggle, method filter (`All` / `Register` / `Login` / `Recovery`), flaky-platform threshold.
+- **Email Concurrency + Filters** — Slider 5–30 (default 5), Found-Only toggle, method filter (`All` / `Register` / `Login` / `Recovery`), flaky-platform threshold.
 - **History** — `Dismissible` swipe-to-delete rows, `Banner` offline strip, `SearchBar` history typeahead, type-ahead `Chip` filters.
 - **Interstitial Frequency Capping** — DDGS-style every-3rd-search cadence (`search_count % 3 == 0` via `state.search_count`).
 - **Custom Database Manifest** — Point the scanner at your own site-database JSON (via Settings) for specialized investigations.
@@ -175,7 +175,7 @@ To optimize execution speed, tune the sliders in Settings:
 | :--- | :---: | :---: | :--- |
 | **Popular Only** | ~15 Major Platforms | **Under 5 Seconds** | Quick check on mainstream platforms |
 | **Custom Selection** | Selected Subset | **Depends on size** | Focused investigation (professional / gaming networks) |
-| **Email (holehe)** | 120 reasons | **10–30 s** | Use concurrency Slider 5–30 (default 15); higher = faster but more rate-limits |
+| **Email (holehe)** | 120 reasons | **10–30 s** | Use concurrency Slider 5–30 (default 5); higher = faster but more rate-limits |
 | **Full Sweep** | 400+ Sites | **25–45 Seconds** | Deep exhaustive OSINT reports and full footprint audits |
 
 ---

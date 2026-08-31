@@ -80,7 +80,7 @@ jobs:
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 --decode > upload-key.jks
+        run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
       - name: Pre-compile missing wheels (stem and holehe have no binary wheels on PyPI)
         run: |
           mkdir -p ${{ github.workspace }}/wheels
@@ -88,7 +88,7 @@ jobs:
           pip wheel stem==1.8.1 holehe==1.61 --no-deps -w ${{ github.workspace }}/wheels
       - name: Build APK (split per ABI)
         env:
-          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/upload-key.jks
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
           FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -120,7 +120,7 @@ jobs:
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 --decode > upload-key.jks
+        run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
       - name: Pre-compile missing wheels (stem and holehe have no binary wheels on PyPI)
         run: |
           mkdir -p ${{ github.workspace }}/wheels
@@ -128,7 +128,7 @@ jobs:
           pip wheel stem==1.8.1 holehe==1.61 --no-deps -w ${{ github.workspace }}/wheels
       - name: Build AAB
         env:
-          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/upload-key.jks
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
           FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}

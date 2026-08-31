@@ -312,6 +312,41 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 )
                 controller.show_results()
 
+        from core.constants import MODE_EMAIL
+        from core.state import state as app_state
+
+        is_email_results = (
+            app_state.search_mode == MODE_EMAIL
+            or getattr(app_state.search_progress, "email", None) is not None
+        )
+        _actions: list[ft.Control] = []
+        if not is_email_results:
+            _actions.extend(
+                [
+                    ft.IconButton(
+                        icon=ft.Icons.CONTENT_COPY_ROUNDED,
+                        tooltip="Copy URLs",
+                        on_click=_copy_urls,
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.SHARE_ROUNDED,
+                        tooltip="Share URLs",
+                        on_click=_share_urls,
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.DOWNLOAD_ROUNDED,
+                        tooltip="Export",
+                        on_click=_show_export_dialog,
+                    ),
+                ]
+            )
+        _actions.append(
+            ft.IconButton(
+                icon=ft.Icons.REFRESH_ROUNDED,
+                tooltip="Search again",
+                on_click=_restart,
+            )
+        )
         return ft.AppBar(
             leading=ft.IconButton(
                 icon=ft.Icons.ARROW_BACK_ROUNDED,
@@ -324,28 +359,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             ),
             center_title=False,
             bgcolor=ft.Colors.TRANSPARENT,
-            actions=[
-                ft.IconButton(
-                    icon=ft.Icons.CONTENT_COPY_ROUNDED,
-                    tooltip="Copy URLs",
-                    on_click=_copy_urls,
-                ),
-                ft.IconButton(
-                    icon=ft.Icons.SHARE_ROUNDED,
-                    tooltip="Share URLs",
-                    on_click=_share_urls,
-                ),
-                ft.IconButton(
-                    icon=ft.Icons.DOWNLOAD_ROUNDED,
-                    tooltip="Export",
-                    on_click=_show_export_dialog,
-                ),
-                ft.IconButton(
-                    icon=ft.Icons.REFRESH_ROUNDED,
-                    tooltip="Search again",
-                    on_click=_restart,
-                ),
-            ],
+            actions=_actions,
         )
 
     if active_view == "sites":

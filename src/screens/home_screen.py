@@ -133,10 +133,19 @@ def _category_chip(
             show_checkmark=False,
             on_select=on_click,
         )
+    # Informational — stay enabled with explicit styling (never disabled grey on grey)
     return ft.Chip(
-        label=ft.Text(label, size=12, font_family="Outfit"),
+        label=ft.Text(
+            label,
+            size=12,
+            color=ft.Colors.ON_SURFACE,
+            font_family="Outfit",
+        ),
         leading=ft.Icon(icon, size=15, color=ft.Colors.ON_SURFACE_VARIANT),
-        disabled_color=ft.Colors.ON_SURFACE_VARIANT,
+        bgcolor=ft.Colors.TRANSPARENT,
+        side=ft.BorderSide(1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)),
+        show_checkmark=False,
+        on_select=lambda e: None,
     )
 
 
@@ -363,7 +372,7 @@ def HomeScreen() -> Control:
         next_val = (
             timeouts[(timeouts.index(curr) + 1) % len(timeouts)]
             if curr in timeouts
-            else 10
+            else 30
         )
         state.email_timeout = next_val
         state.progress_version += 1
@@ -741,28 +750,86 @@ def HomeScreen() -> Control:
                 bgcolor=ft.Colors.ERROR_CONTAINER,
                 visible=not state.is_online,
             ),
-            # ── Mode Switcher — Material 3 SegmentedButton (centered) ──
+            # ── Mode Switcher (Username / Email) — KTV Player pill style ──
             ft.Container(
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
-                alignment=ft.Alignment.CENTER,
-                content=ft.SegmentedButton(
-                    segments=[
-                        ft.Segment(
-                            value=MODE_USERNAME,
-                            label=ft.Text("Username", font_family="Outfit"),
-                            icon=ft.Icons.PERSON_SEARCH_ROUNDED,
-                        ),
-                        ft.Segment(
-                            value=MODE_EMAIL,
-                            label=ft.Text("Email", font_family="Outfit"),
-                            icon=ft.Icons.ALTERNATE_EMAIL_ROUNDED,
-                        ),
-                    ],
-                    selected=[state.search_mode],
-                    on_change=lambda e: _switch_mode(
-                        e.control.selected[0] if e.control.selected else MODE_USERNAME
+                content=ft.Container(
+                    padding=ft.Padding(4, 4, 4, 4),
+                    border_radius=12,
+                    bgcolor=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE),
+                    border=ft.Border.all(
+                        1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)
+                    ),
+                    content=ft.Row(
+                        controls=[
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.PERSON_SEARCH_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if not is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Username",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if not is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if not is_email_mode
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=True,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                on_click=lambda e: _switch_mode(MODE_USERNAME),
+                            ),
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Email",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if is_email_mode
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=True,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                on_click=lambda e: _switch_mode(MODE_EMAIL),
+                            ),
+                        ],
+                        spacing=4,
                     ),
                 ),
             ),

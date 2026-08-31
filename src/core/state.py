@@ -66,12 +66,12 @@ class AppState:
     nsfw_enabled: bool = True
     ignore_exclusions: bool = False
     timeout: int = 30
-    email_timeout: int = 10
-    email_concurrency: int = 15
+    email_timeout: int = 30
+    email_concurrency: int = 5
     email_only_found: bool = False
     email_method_filter: str = "all"
     proxy_url: str = ""
-    enrichment_mode: str = "basic"
+    enrichment_mode: str = "full"
     no_password_recovery: bool = False
     selected_sites: list[str] | None = None
     use_local_db: bool = True

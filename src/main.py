@@ -245,11 +245,23 @@ class AppController:
 
             email_timeout_raw = await self.storage.get(STORAGE_EMAIL_TIMEOUT)
             if email_timeout_raw:
-                state.email_timeout = int(email_timeout_raw)
+                val = int(email_timeout_raw)
+                # Migration: old default 10 → new default 30
+                if val == 10:
+                    state.email_timeout = 30
+                    await self.storage.set(STORAGE_EMAIL_TIMEOUT, "30")
+                else:
+                    state.email_timeout = val
 
             conc_raw = await self.storage.get(STORAGE_EMAIL_CONCURRENCY)
             if conc_raw:
-                state.email_concurrency = max(5, min(30, int(conc_raw)))
+                val = max(5, min(30, int(conc_raw)))
+                # Migration: old default 15 → new default 5
+                if val == 15:
+                    state.email_concurrency = 5
+                    await self.storage.set(STORAGE_EMAIL_CONCURRENCY, "5")
+                else:
+                    state.email_concurrency = val
             only_found_raw = await self.storage.get(STORAGE_EMAIL_ONLY_FOUND)
             if only_found_raw is not None:
                 state.email_only_found = only_found_raw == "true"
@@ -261,7 +273,12 @@ class AppController:
                 state.proxy_url = proxy_raw
             enrich_mode_raw = await self.storage.get(STORAGE_ENRICHMENT_MODE)
             if enrich_mode_raw in ("basic", "full"):
-                state.enrichment_mode = enrich_mode_raw
+                # Migration: old default basic → new default full
+                if enrich_mode_raw == "basic":
+                    state.enrichment_mode = "full"
+                    await self.storage.set(STORAGE_ENRICHMENT_MODE, "full")
+                else:
+                    state.enrichment_mode = enrich_mode_raw
 
             no_pw_raw = await self.storage.get(STORAGE_NO_PASSWORD_RECOVERY)
             if no_pw_raw is not None:

@@ -615,29 +615,6 @@ def SettingsScreen() -> Control:
                             text_align=ft.TextAlign.CENTER,
                         ),
                         *update_badge_controls,
-                        ft.Container(height=tokens.SPACE_SM),
-                        ft.TextButton(
-                            content=ft.Row(
-                                [
-                                    ft.Icon(
-                                        ft.Icons.SYNC_ROUNDED,
-                                        size=14,
-                                        color=ft.Colors.ON_SURFACE_VARIANT,
-                                    ),
-                                    ft.Text(
-                                        "Check for updates",
-                                        size=tokens.FONT_XS,
-                                        color=ft.Colors.ON_SURFACE_VARIANT,
-                                    ),
-                                ],
-                                spacing=4,
-                                alignment=ft.MainAxisAlignment.CENTER,
-                                tight=True,
-                            ),
-                            on_click=lambda e: asyncio.create_task(
-                                controller.check_for_updates()
-                            ),
-                        ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=0,

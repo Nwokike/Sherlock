@@ -20,11 +20,16 @@ from core.constants import (
     APP_NAME,
     APP_VERSION,
     STORAGE_EMAIL_TIMEOUT,
+    STORAGE_EMAIL_CONCURRENCY,
+    STORAGE_EMAIL_ONLY_FOUND,
+    STORAGE_EMAIL_METHOD_FILTER,
+    STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
+    STORAGE_PROXY_URL,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
 )
@@ -216,6 +221,26 @@ def SettingsScreen() -> Control:
         state.email_timeout = int(val)
         asyncio.create_task(_persist(STORAGE_EMAIL_TIMEOUT, val))
 
+    def _on_email_concurrency_change(val: str):
+        state.email_concurrency = max(5, min(30, int(val)))
+        asyncio.create_task(_persist(STORAGE_EMAIL_CONCURRENCY, val))
+
+    def _toggle_email_only_found(val: bool):
+        state.email_only_found = val
+        asyncio.create_task(_persist(STORAGE_EMAIL_ONLY_FOUND, "true" if val else "false"))
+
+    def _on_email_method_filter_change(val: str):
+        state.email_method_filter = val
+        asyncio.create_task(_persist(STORAGE_EMAIL_METHOD_FILTER, val))
+
+    def _on_proxy_change(val: str):
+        state.proxy_url = val.strip()
+        asyncio.create_task(_persist(STORAGE_PROXY_URL, val.strip()))
+
+    def _on_enrichment_mode_change(val: str):
+        state.enrichment_mode = val
+        asyncio.create_task(_persist(STORAGE_ENRICHMENT_MODE, val))
+
     def _toggle_no_password_recovery(val: bool):
         state.no_password_recovery = val
         asyncio.create_task(
@@ -338,21 +363,42 @@ def SettingsScreen() -> Control:
                 ft.Icons.ALTERNATE_EMAIL_ROUNDED,
                 "Email Request Timeout",
                 "Max wait time per email check (holehe)",
-                ft.Dropdown(
-                    value=str(state.email_timeout),
-                    options=[
-                        ft.DropdownOption("5", "5s"),
-                        ft.DropdownOption("10", "10s"),
-                        ft.DropdownOption("15", "15s"),
-                        ft.DropdownOption("30", "30s"),
-                    ],
-                    width=80,
-                    height=44,
-                    text_size=tokens.FONT_SM,
-                    border_radius=tokens.RADIUS_SM,
-                    focused_border_color=ft.Colors.PRIMARY,
-                    on_select=lambda e: _on_email_timeout_change(e.control.value),
-                    content_padding=4,
+                ft.Slider(
+                    value=float(state.email_timeout),
+                    min=5, max=30, divisions=5,
+                    label=f"{state.email_timeout}s",
+                    active_color=AppColors.PRIMARY,
+                    on_change=lambda e: _on_email_timeout_change(str(int(e.control.value))),
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.SPEED_ROUNDED,
+                "Email Concurrency",
+                "Parallel checks — higher is faster but rate-limits more",
+                ft.Slider(
+                    value=float(getattr(state, "email_concurrency", 15)),
+                    min=5, max=30, divisions=5,
+                    label=f"{getattr(state, 'email_concurrency', 15)}",
+                    active_color=AppColors.PRIMARY,
+                    on_change=lambda e: _on_email_concurrency_change(str(int(e.control.value))),
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.FILTER_ALT_ROUNDED,
+                "Show Found Only",
+                "Hide not-found platforms in email results",
+                ft.Switch(
+                    value=getattr(state, "email_only_found", False),
+                    on_change=lambda e: _toggle_email_only_found(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
                 ),
             ),
             ft.Divider(
@@ -393,22 +439,12 @@ def SettingsScreen() -> Control:
                 ft.Icons.TIMER_OUTLINED,
                 "Request Timeout",
                 "Maximum connection wait time per site",
-                ft.Dropdown(
-                    value=str(state.timeout),
-                    options=[
-                        ft.DropdownOption("5", "5s"),
-                        ft.DropdownOption("10", "10s"),
-                        ft.DropdownOption("15", "15s"),
-                        ft.DropdownOption("30", "30s"),
-                        ft.DropdownOption("60", "60s"),
-                    ],
-                    width=80,
-                    height=44,
-                    text_size=tokens.FONT_SM,
-                    border_radius=tokens.RADIUS_SM,
-                    focused_border_color=ft.Colors.PRIMARY,
-                    on_select=lambda e: _on_timeout_change(e.control.value),
-                    content_padding=4,
+                ft.Slider(
+                    value=float(state.timeout),
+                    min=5, max=60, divisions=11,
+                    label=f"{state.timeout}s",
+                    active_color=AppColors.PRIMARY,
+                    on_change=lambda e: _on_timeout_change(str(int(e.control.value))),
                 ),
             ),
         ]
@@ -605,6 +641,40 @@ def SettingsScreen() -> Control:
         ]
     )
 
+    # Extra cards: Network & Enrichment
+    network_card = _settings_card([
+        ft.Container(
+            content=ft.TextField(
+                value=state.proxy_url,
+                hint_text="socks5://127.0.0.1:1080 or http://proxy:8080 (empty = direct)",
+                label="Proxy URL",
+                prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
+                border_radius=tokens.RADIUS_SM,
+                text_size=tokens.FONT_SM,
+                content_padding=tokens.SPACE_SM,
+                focused_border_color=ft.Colors.PRIMARY,
+                bgcolor=ft.Colors.SURFACE,
+                filled=True,
+                on_submit=lambda e: _on_proxy_change(e.control.value),
+                on_blur=lambda e: _on_proxy_change(e.control.value),
+            ),
+            padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD),
+        ),
+    ])
+    enrichment_card = _settings_card([
+        _setting_row(
+            ft.Icons.AUTO_AWESOME_ROUNDED, "Enrichment Mode", "Basic = fast (1 req/url) · Full = richer via API mutations",
+            ft.Dropdown(
+                value=state.enrichment_mode,
+                options=[ft.DropdownOption("basic", "Basic"), ft.DropdownOption("full", "Full")],
+                width=100, text_size=tokens.FONT_SM, border_radius=tokens.RADIUS_SM,
+                focused_border_color=ft.Colors.PRIMARY,
+                on_select=lambda e: _on_enrichment_mode_change(e.control.value),
+                content_padding=4,
+            ),
+        ),
+    ])
+
     content = ft.ListView(
         controls=[
             ft.Container(height=tokens.SPACE_SM),
@@ -612,17 +682,19 @@ def SettingsScreen() -> Control:
             preferences_card,
             SectionHeader("SCAN PARAMETERS"),
             scan_card,
-            # Banner ad (mid-column) — DDGS placement
             build_banner_ad(),
             SectionHeader("EMAIL INTELLIGENCE"),
             email_card,
+            SectionHeader("NETWORK & PROXY"),
+            network_card,
+            SectionHeader("ENRICHMENT"),
+            enrichment_card,
             SectionHeader("CONNECTION & SPEED"),
             performance_card,
             SectionHeader("CUSTOM MANIFEST"),
             manifest_card,
             SectionHeader("ABOUT"),
             about_card,
-            # Banner ad (bottom) — DDGS placement
             build_banner_ad(),
             ft.Container(height=tokens.SPACE_XXXL),
         ],

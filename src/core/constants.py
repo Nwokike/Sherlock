@@ -24,6 +24,11 @@ STORAGE_ONBOARDING_DONE = "sherlock_onboarding_done"
 STORAGE_MANIFEST = "sherlock_manifest"
 STORAGE_SEARCH_MODE = "sherlock_search_mode"
 STORAGE_EMAIL_TIMEOUT = "sherlock_email_timeout"
+STORAGE_EMAIL_CONCURRENCY = "sherlock_email_concurrency"
+STORAGE_EMAIL_ONLY_FOUND = "sherlock_email_only_found"
+STORAGE_EMAIL_METHOD_FILTER = "sherlock_email_method_filter"
+STORAGE_PROXY_URL = "sherlock_proxy_url"
+STORAGE_ENRICHMENT_MODE = "sherlock_enrichment_mode"
 STORAGE_NO_PASSWORD_RECOVERY = "sherlock_no_pw_recovery"
 
 # ── Search modes ──────────────────────────────────────────────────────

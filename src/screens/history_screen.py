@@ -80,105 +80,78 @@ def HistoryScreen() -> Control:
             ts = entry.get("timestamp", "")
             is_email = mode == MODE_EMAIL
 
-            tile = ft.Container(
+            dismiss_bg = ft.Container(
+                content=ft.Row(
+                    [ft.Icon(ft.Icons.DELETE_ROUNDED, color=ft.Colors.WHITE), ft.Text("Delete", color=ft.Colors.WHITE)],
+                    alignment=ft.MainAxisAlignment.END,
+                ),
+                bgcolor=ft.Colors.ERROR,
+                alignment=ft.Alignment.CENTER_RIGHT,
+                padding=ft.Padding(0, 0, tokens.SPACE_XL, 0),
+            )
+            inner_tile = ft.Container(
                 content=ft.Row(
                     controls=[
                         ft.Container(
                             content=ft.Icon(
-                                ft.Icons.ALTERNATE_EMAIL_ROUNDED
-                                if is_email
-                                else ft.Icons.PERSON_SEARCH_ROUNDED,
-                                size=tokens.ICON_MD,
-                                color=ft.Colors.PRIMARY,
+                                ft.Icons.ALTERNATE_EMAIL_ROUNDED if is_email else ft.Icons.PERSON_SEARCH_ROUNDED,
+                                size=tokens.ICON_MD, color=ft.Colors.PRIMARY,
                             ),
-                            width=40,
-                            height=40,
-                            border_radius=20,
-                            bgcolor=ft.Colors.with_opacity(
-                                tokens.OPACITY_LIGHT, ft.Colors.PRIMARY
-                            ),
+                            width=40, height=40, border_radius=20,
+                            bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.PRIMARY),
                             alignment=ft.Alignment.CENTER,
                         ),
                         ft.Column(
                             controls=[
-                                ft.Text(
-                                    query,
-                                    size=tokens.FONT_LG,
-                                    weight=ft.FontWeight.W_600,
-                                ),
+                                ft.Text(query, size=tokens.FONT_LG, weight=ft.FontWeight.W_600),
                                 ft.Row(
                                     controls=[
-                                        ft.Text(
-                                            f"{found}/{total} matches",
-                                            size=tokens.FONT_SM,
-                                            color=ft.Colors.with_opacity(
-                                                tokens.OPACITY_DIM,
-                                                ft.Colors.ON_SURFACE,
-                                            ),
-                                        ),
-                                        ft.Text(
-                                            "·",
-                                            size=tokens.FONT_SM,
-                                            color=ft.Colors.with_opacity(
-                                                tokens.OPACITY_MUTED,
-                                                ft.Colors.ON_SURFACE,
-                                            ),
-                                        ),
-                                        ft.Text(
-                                            "Email" if is_email else "Username",
-                                            size=tokens.FONT_XS,
-                                            color=ft.Colors.PRIMARY,
-                                            weight=ft.FontWeight.W_500,
-                                        ),
-                                        ft.Text(
-                                            "·",
-                                            size=tokens.FONT_SM,
-                                            color=ft.Colors.with_opacity(
-                                                tokens.OPACITY_MUTED,
-                                                ft.Colors.ON_SURFACE,
-                                            ),
-                                        ),
-                                        ft.Text(
-                                            ts,
-                                            size=tokens.FONT_XS,
-                                            color=ft.Colors.with_opacity(
-                                                tokens.OPACITY_MUTED,
-                                                ft.Colors.ON_SURFACE,
-                                            ),
-                                        ),
+                                        ft.Text(f"{found}/{total} matches", size=tokens.FONT_SM, color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)),
+                                        ft.Text("·", size=tokens.FONT_SM, color=ft.Colors.with_opacity(tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE)),
+                                        ft.Text("Email" if is_email else "Username", size=tokens.FONT_XS, color=ft.Colors.PRIMARY, weight=ft.FontWeight.W_500),
+                                        ft.Text("·", size=tokens.FONT_SM, color=ft.Colors.with_opacity(tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE)),
+                                        ft.Text(ts, size=tokens.FONT_XS, color=ft.Colors.with_opacity(tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE)),
                                     ],
                                     spacing=tokens.SPACE_XS,
                                 ),
                             ],
-                            spacing=tokens.SPACE_XXS,
-                            expand=True,
+                            spacing=tokens.SPACE_XXS, expand=True,
                         ),
                         ft.IconButton(
-                            icon=ft.Icons.REFRESH_ROUNDED,
-                            tooltip="Search again",
-                            icon_color=ft.Colors.PRIMARY,
+                            icon=ft.Icons.REFRESH_ROUNDED, tooltip="Search again", icon_color=ft.Colors.PRIMARY,
                             on_click=lambda e, ent=entry: _on_re_search(ent),
                         ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=ft.Padding(
-                    left=tokens.SPACE_LG,
-                    right=tokens.SPACE_LG,
-                    top=tokens.SPACE_MD,
-                    bottom=tokens.SPACE_MD,
-                ),
+                padding=ft.Padding(left=tokens.SPACE_LG, right=tokens.SPACE_LG, top=tokens.SPACE_MD, bottom=tokens.SPACE_MD),
                 border_radius=tokens.RADIUS_LG,
                 bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                border=ft.Border.all(
-                    width=1,
-                    color=ft.Colors.with_opacity(
-                        tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE
-                    ),
-                ),
+                border=ft.Border.all(width=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
                 margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
                 ink=True,
                 on_click=lambda e, ent=entry: _on_re_search(ent),
+            )
+            # Swipe-to-delete via Dismissible
+            def _make_dismiss(ent=entry):
+                def _on_dismiss(e):
+                    try:
+                        state.history.remove(ent)
+                        import asyncio as _asyncio
+                        from services.storage_service import StorageService
+                        from flet import context
+                        s = StorageService(context.page)
+                        all_entries = list(reversed(state.history))
+                        import json as _json
+                        _asyncio.create_task(s.set("sherlock_history", _json.dumps(all_entries)))
+                    except Exception:
+                        pass
+                return _on_dismiss
+            tile = ft.Dismissible(
+                content=inner_tile,
+                background=dismiss_bg,
+                dismiss_direction=ft.DismissDirection.END_TO_START,
+                on_dismiss=_make_dismiss(),
             )
             items.append(tile)
 

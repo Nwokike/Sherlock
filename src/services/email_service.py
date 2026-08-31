@@ -118,6 +118,7 @@ class EmailService:
         on_progress: Callable[[EmailSearchProgress], None],
         timeout: int = 10,
         skip_password_recovery: bool = False,
+        concurrency: int = 15,
     ) -> EmailSearchProgress:
         """Run holehe email scan across all modules concurrently."""
         if not _HOLEHE_AVAILABLE:
@@ -247,7 +248,7 @@ class EmailService:
                 timeout=timeout, headers=headers, follow_redirects=True
             ) as client:
                 self._client = client
-                sem = asyncio.Semaphore(15)
+                sem = asyncio.Semaphore(max(5, min(30, concurrency)))
 
                 async def _bounded(module):
                     async with sem:

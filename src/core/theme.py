@@ -255,6 +255,35 @@ class AppTheme:
             ),
             font_family="Outfit",
             visual_density=ft.VisualDensity.COMFORTABLE,
+            scrollbar_theme=ft.ScrollbarTheme(
+                thumb_color=AppColors.PRIMARY,
+                thickness=4,
+                radius=4,
+            ),
+            snack_bar_theme=ft.SnackBarTheme(
+                behavior=ft.SnackBarBehavior.FLOATING,
+                shape=ft.RoundedRectangleBorder(radius=12),
+                bgcolor=AppColors.DARK_SURFACE_2,
+            ),
+            tab_bar_theme=ft.TabBarTheme(
+                indicator_size=ft.TabBarIndicatorSize.TAB,
+                label_color=AppColors.PRIMARY,
+                divider_color=ft.Colors.TRANSPARENT,
+            ),
+            card_theme=ft.CardTheme(
+                elevation=1,
+                shape=ft.RoundedRectangleBorder(radius=12),
+            ),
+            chip_theme=ft.ChipTheme(
+                show_checkmark=True,
+                shape=ft.RoundedRectangleBorder(radius=20),
+            ),
+            page_transitions_theme=ft.PageTransitionsTheme(
+                builders={
+                    ft.PagePlatform.ANDROID: ft.PageTransitionTheme.CUPERTINO,
+                    ft.PagePlatform.IOS: ft.PageTransitionTheme.CUPERTINO,
+                }
+            ),
         )
 
     @staticmethod
@@ -279,4 +308,33 @@ class AppTheme:
             ),
             font_family="Outfit",
             visual_density=ft.VisualDensity.COMFORTABLE,
+            scrollbar_theme=ft.ScrollbarTheme(
+                thumb_color=AppColors.PRIMARY,
+                thickness=4,
+                radius=4,
+            ),
+            snack_bar_theme=ft.SnackBarTheme(
+                behavior=ft.SnackBarBehavior.FLOATING,
+                shape=ft.RoundedRectangleBorder(radius=12),
+                bgcolor=AppColors.DARK_SURFACE_2,
+            ),
+            tab_bar_theme=ft.TabBarTheme(
+                indicator_size=ft.TabBarIndicatorSize.TAB,
+                label_color=AppColors.PRIMARY,
+                divider_color=ft.Colors.TRANSPARENT,
+            ),
+            card_theme=ft.CardTheme(
+                elevation=2,
+                shape=ft.RoundedRectangleBorder(radius=12),
+            ),
+            chip_theme=ft.ChipTheme(
+                show_checkmark=True,
+                shape=ft.RoundedRectangleBorder(radius=20),
+            ),
+            page_transitions_theme=ft.PageTransitionsTheme(
+                builders={
+                    ft.PagePlatform.ANDROID: ft.PageTransitionTheme.CUPERTINO,
+                    ft.PagePlatform.IOS: ft.PageTransitionTheme.CUPERTINO,
+                }
+            ),
         )

@@ -136,6 +136,18 @@ def ResultsScreen() -> Control:
                 others=r.get("others"), method=r.get("method", ""), rate_limit=r.get("rateLimit", False), frequent_rate_limit=r.get("frequent_rate_limit", False),
             )
 
+        # Apply method + only-found filters
+        method_filter = getattr(state, "email_method_filter", "all")
+        only_found = getattr(state, "email_only_found", False)
+        def _apply_email_extras(items):
+            out = items
+            if method_filter != "all":
+                out = [r for r in out if r.get("method", "") == method_filter]
+            return out
+        raw_found = _apply_email_extras(raw_found)
+        raw_not_found = [] if only_found else _apply_email_extras(raw_not_found)
+        raw_rate_limited = [] if only_found else _apply_email_extras(raw_rate_limited)
+
         email_found_filtered = _filter_by_name(raw_found, lambda r: f"{r.get('name','')} {r.get('domain','')}")
         email_not_found_filtered = _filter_by_name(raw_not_found, lambda r: f"{r.get('name','')} {r.get('domain','')}")
         email_rate_limited_filtered = _filter_by_name(raw_rate_limited, lambda r: f"{r.get('name','')} {r.get('domain','')}")
@@ -193,10 +205,28 @@ def ResultsScreen() -> Control:
             controller.cancel_search()
 
     stats_card = ft.Container(content=stats_row, padding=tokens.SPACE_MD, border_radius=tokens.RADIUS_LG, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border=ft.Border.all(width=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)), margin=ft.Margin(tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_SM))
+    # Email method filter chips (only in email mode)
+    method_filter_row = ft.Container(width=0, height=0)
+    if is_email_mode:
+        method_filter = getattr(state, "email_method_filter", "all")
+        def _method_chip(value, label):
+            return ft.Chip(label=ft.Text(label, size=11, font_family="Outfit"), selected=method_filter == value, show_checkmark=False, on_select=lambda e, v=value: _set_method_filter(v))
+        def _set_method_filter(v):
+            state.email_method_filter = v
+            state.progress_version += 1
+            try:
+                from services.storage_service import StorageService
+                from flet import context
+                import asyncio as _asyncio
+                s = StorageService(context.page)
+                _asyncio.create_task(s.set("sherlock_email_method_filter", v))
+            except Exception:
+                pass
+        method_filter_row = ft.Container(content=ft.Row(controls=[_method_chip("all", "All"), _method_chip("register", "Register"), _method_chip("login", "Login"), _method_chip("password recovery", "Recovery")], spacing=tokens.SPACE_XS, wrap=True, alignment=ft.MainAxisAlignment.CENTER), padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, 0))
     filter_hint = "Filter results by platform name..." if is_email_mode else "Filter results by site name..."
     filter_box = ft.Container(content=ft.TextField(value=filter_query, hint_text=filter_hint, prefix_icon=ft.Icons.FILTER_LIST_ROUNDED, border_radius=tokens.RADIUS_MD, border_width=1, border_color=ft.Colors.with_opacity(tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE), focused_border_color=ft.Colors.PRIMARY, bgcolor=ft.Colors.SURFACE, filled=True, on_change=lambda e: set_filter_query(e.control.value), text_size=tokens.FONT_SM, content_padding=tokens.SPACE_SM, height=44), padding=ft.Padding(left=tokens.SPACE_XL, right=tokens.SPACE_XL, top=tokens.SPACE_XS, bottom=tokens.SPACE_SM))
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
         progress_section = ft.Container(content=ft.Column(controls=[ft.ProgressBar(value=None, color=ft.Colors.PRIMARY, bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.PRIMARY), height=tokens.PROGRESS_BAR_HEIGHT), ft.Row(controls=[ft.Text(progress_label, size=tokens.FONT_SM, color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)), ft.Container(expand=True), ft.TextButton(content=ft.Text("Cancel", size=tokens.FONT_SM, color=AppColors.ERROR, weight=ft.FontWeight.W_600), on_click=cancel_callback)])], spacing=tokens.SPACE_XS), padding=ft.Padding(left=tokens.SPACE_XL, right=tokens.SPACE_XL, top=tokens.SPACE_SM, bottom=0))
 
-    return ft.Column(controls=[progress_section, stats_card, filter_box, tabs, build_banner_ad()], expand=True, spacing=0)
+    return ft.Column(controls=[progress_section, stats_card, method_filter_row, filter_box, tabs, build_banner_ad()], expand=True, spacing=0)

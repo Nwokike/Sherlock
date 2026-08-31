@@ -143,7 +143,7 @@ def _category_chip(
         ),
         leading=ft.Icon(icon, size=15, color=ft.Colors.ON_SURFACE_VARIANT),
         bgcolor=ft.Colors.TRANSPARENT,
-        side=ft.BorderSide(1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)),
+        border_side=ft.BorderSide(1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)),
         show_checkmark=False,
         on_select=lambda e: None,
     )
@@ -684,6 +684,7 @@ def HomeScreen() -> Control:
                 controller.open_update_dialog()
             else:
                 from components.update_dialog import show_update_dialog
+
                 fallback = {
                     "version": APP_VERSION,
                     "type": "update",

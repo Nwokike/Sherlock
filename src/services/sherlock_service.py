@@ -184,21 +184,35 @@ class SherlockService:
             if state.custom_manifest:
                 path_arg = state.custom_manifest.strip()
                 logger.info("Using custom manifest database: %s", path_arg)
+            elif state.use_local_db:
+                # On device, sherlock_project is inside sitepackages.zip — local
+                # resources/data.json path fails ([Errno 20] Not a directory).
+                # Fall through to None -> live GitHub manifest URL.
+                try_db = os.path.join(
+                    os.path.dirname(sherlock_project.__file__),
+                    "resources",
+                    "data.json",
+                )
+                if os.path.isfile(try_db):
+                    logger.info("Using local package database: %s", try_db)
+                    path_arg = try_db
+                else:
+                    # Check synced override before falling back to live URL
+                    synced_path = get_storage_dir() / "synced_data.json"
+                    if synced_path.exists():
+                        path_arg = str(synced_path)
+                        logger.info("Using synced database: %s", path_arg)
+                    else:
+                        logger.info("Local data.json not readable (zip) — using live manifest URL")
+                        path_arg = None
             else:
-                # Determine local database path
                 synced_path = get_storage_dir() / "synced_data.json"
                 if synced_path.exists():
                     db_path = str(synced_path)
                     logger.info("Using synced database: %s", db_path)
+                    path_arg = db_path
                 else:
-                    db_path = os.path.join(
-                        os.path.dirname(sherlock_project.__file__),
-                        "resources",
-                        "data.json",
-                    )
-                    logger.info("Using local package database: %s", db_path)
-
-                path_arg = db_path if state.use_local_db else None
+                    path_arg = None
 
             sites = await asyncio.to_thread(
                 SitesInformation,
@@ -254,15 +268,24 @@ class SherlockService:
 
         if state.custom_manifest:
             path_arg = state.custom_manifest.strip()
+        elif state.use_local_db:
+            try_db = os.path.join(
+                os.path.dirname(sherlock_project.__file__),
+                "resources",
+                "data.json",
+            )
+            if os.path.isfile(try_db):
+                path_arg = try_db
+            else:
+                synced_path = get_storage_dir() / "synced_data.json"
+                path_arg = str(synced_path) if synced_path.exists() else None
         else:
             synced_path = get_storage_dir() / "synced_data.json"
             if synced_path.exists():
                 db_path = str(synced_path)
             else:
-                db_path = os.path.join(
-                    os.path.dirname(sherlock_project.__file__), "resources", "data.json"
-                )
-            path_arg = db_path if state.use_local_db else None
+                db_path = None
+            path_arg = db_path
 
         try:
             sites = await asyncio.to_thread(

@@ -1,12 +1,12 @@
 """ResultCard — single result row for both username and email OSINT results.
 
-Supports two display modes:
-1. Username result (Sherlock): site name, status, query time, profile URL.
-2. Email result (holehe): service name, exists/not-found, detection method,
-   recovery email hint, phone hint, full name, creation date.
-
-Enrichment data from socid-extractor (bio, location, follower count)
-is displayed inline when available.
+Supports rich profile previews:
+- Avatar image (from socid-extractor) or stylized status icon
+- Display name & platform label
+- Profile bio / description snippet
+- Follower count, location, recovery email & phone hints
+- Method badge (register / login / password recovery)
+- Tapping opens the ProfileDetailDialog for complete OSINT inspection
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ def ResultCard(
     url_main: str | None = None,
     query_time: float | None = None,
     on_open: Callable[[str], None] | None = None,
+    on_tap: Callable[[], None] | None = None,
     # Email-mode extras (holehe fields)
     email_recovery: str | None = None,
     phone_number: str | None = None,
@@ -67,12 +68,7 @@ def ResultCard(
     # Enrichment extras (socid-extractor fields)
     enrichment: dict | None = None,
 ) -> Control:
-    """Build a single result tile for the results tabs.
-
-    Works for both username results (Sherlock) and email results (holehe).
-    Pass email_recovery, phone_number, others, or method to render email extras.
-    Pass enrichment dict to show socid-extractor extracted profile data.
-    """
+    """Build a single result tile for the results tabs."""
     icon, icon_color = _status_icon_and_color(status)
 
     # ── Status chip ────────────────────────────────────────────────────
@@ -96,11 +92,13 @@ def ResultCard(
 
     display_url = url_user or url_main or site_name
 
-    async def _open(e):
-        if on_open and url_user:
+    def _handle_click(e):
+        if on_tap:
+            on_tap()
+        elif on_open and url_user:
             on_open(url_user)
 
-    # ── Email-mode extras ──────────────────────────────────────────────
+    # ── Extras / Enriched lines ────────────────────────────────────────
     extra_lines: list[ft.Control] = []
 
     # Recovery email hint
@@ -189,7 +187,13 @@ def ResultCard(
             )
 
     # Enrichment data from socid-extractor
+    avatar_url = None
     if enrichment and isinstance(enrichment, dict):
+        avatar_url = (
+            enrichment.get("image")
+            or enrichment.get("avatar")
+            or enrichment.get("photo")
+        )
         bio = enrichment.get("bio") or enrichment.get("description")
         if bio:
             extra_lines.append(
@@ -222,8 +226,8 @@ def ResultCard(
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
-        followers = enrichment.get("follower_count")
-        following = enrichment.get("following_count")
+        followers = enrichment.get("follower_count") or enrichment.get("followers")
+        following = enrichment.get("following_count") or enrichment.get("following")
         if followers is not None or following is not None:
             parts = []
             if followers is not None:
@@ -279,9 +283,51 @@ def ResultCard(
             bgcolor=ft.Colors.with_opacity(0.1, method_color),
         )
 
-    # ── Name row ──────────────────────────────────────────────────────
+    # ── Avatar / Leading Icon ─────────────────────────────────────────
+    if avatar_url:
+        leading_control = ft.Image(
+            src=avatar_url,
+            width=36,
+            height=36,
+            border_radius=18,
+            fit=ft.BoxFit.COVER,
+            error_content=ft.Container(
+                content=ft.Icon(icon, size=tokens.RESULT_ICON, color=icon_color),
+                width=36,
+                height=36,
+                border_radius=18,
+                bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, icon_color),
+                alignment=ft.Alignment.CENTER,
+            ),
+        )
+    else:
+        leading_control = ft.Container(
+            content=ft.Icon(icon, size=tokens.RESULT_ICON, color=icon_color),
+            width=36,
+            height=36,
+            border_radius=18,
+            bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, icon_color),
+            alignment=ft.Alignment.CENTER,
+        )
+
+    # ── Title / Name row ──────────────────────────────────────────────
+    display_title = site_name
+    if enrichment and (enrichment.get("name") or enrichment.get("fullname")):
+        display_title = (
+            f"{site_name} · {enrichment.get('name') or enrichment.get('fullname')}"
+        )
+    elif others and others.get("FullName"):
+        display_title = f"{site_name} · {others['FullName']}"
+
     name_row_controls: list[ft.Control] = [
-        ft.Text(site_name, size=tokens.FONT_MD, weight=ft.FontWeight.W_600),
+        ft.Text(
+            display_title,
+            size=tokens.FONT_MD,
+            weight=ft.FontWeight.W_600,
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            expand=True,
+        ),
     ]
     if query_time is not None:
         name_row_controls.append(
@@ -317,17 +363,17 @@ def ResultCard(
         expand=True,
     )
 
+    is_clickable = (
+        on_tap is not None
+        or on_open is not None
+        or url_user is not None
+        or url_main is not None
+    )
+
     return ft.Container(
         content=ft.Row(
             controls=[
-                ft.Container(
-                    content=ft.Icon(icon, size=tokens.RESULT_ICON, color=icon_color),
-                    width=36,
-                    height=36,
-                    border_radius=18,
-                    bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, icon_color),
-                    alignment=ft.Alignment.CENTER,
-                ),
+                leading_control,
                 detail_column,
                 _chip(chip_label, chip_color, chip_bg),
             ],
@@ -348,6 +394,6 @@ def ResultCard(
                 ),
             )
         ),
-        on_click=_open if url_user else None,
-        ink=True,
+        on_click=_handle_click if is_clickable else None,
+        ink=True if is_clickable else False,
     )

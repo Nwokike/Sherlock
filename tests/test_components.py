@@ -4,7 +4,6 @@ These components don't use hooks, so they can be instantiated directly
 without a renderer context.
 """
 
-import asyncio
 import sys
 import os
 
@@ -87,21 +86,32 @@ class TestResultCard:
             on_open=opened.append,
         )
         assert tree.on_click is not None
-        asyncio.run(tree.on_click(None))
+        tree.on_click(None)
         assert opened == ["https://github.com/test"]
+
+    def test_tap_triggers_on_tap(self):
+        tapped = []
+        tree = ResultCard(
+            site_name="GitHub",
+            status="Claimed",
+            url_user="https://github.com/test",
+            on_tap=lambda: tapped.append(True),
+        )
+        assert tree.on_click is not None
+        tree.on_click(None)
+        assert tapped == [True]
 
     def test_no_profile_url_is_inert(self):
         tree = ResultCard(site_name="FakeSite", status="Available")
         assert tree.on_click is None
 
     def test_url_without_callback_is_inert(self):
-        # No on_open supplied — the card must not be tappable, and a
-        # stray tap (if any) must not raise.
+        # No on_open or on_tap supplied — calling on_click must not raise.
         tree = ResultCard(
             site_name="GitHub", status="Claimed", url_user="https://x.com/a"
         )
         if tree.on_click is not None:
-            asyncio.run(tree.on_click(None))
+            tree.on_click(None)
 
 
 class TestTargetsCard:
@@ -144,3 +154,41 @@ class TestSectionHeader:
         tree = SectionHeader("PREFERENCES")
         texts = list(walk_texts(tree))
         assert any("PREFERENCES" in (t.value or "") for t in texts)
+
+
+class TestProfileDetailDialog:
+    def test_renders_dialog(self):
+        from components.profile_detail_dialog import show_profile_detail_dialog
+
+        class MockPage:
+            def __init__(self):
+                self.platform = ft.PagePlatform.ANDROID
+                self.dialog = None
+
+            def show_dialog(self, dlg):
+                self.dialog = dlg
+
+            def pop_dialog(self):
+                self.dialog = None
+
+        page = MockPage()
+        show_profile_detail_dialog(
+            page=page,
+            site_name="GitHub",
+            status="Claimed",
+            url_user="https://github.com/torvalds",
+            query_time=0.45,
+            enrichment={
+                "name": "Linus Torvalds",
+                "bio": "Creator of Linux & Git",
+                "location": "Portland, OR",
+                "follower_count": 210000,
+                "uid": "1024025",
+            },
+        )
+        assert page.dialog is not None
+        assert isinstance(page.dialog, ft.AlertDialog)
+        texts = list(walk_texts(page.dialog))
+        assert any("GitHub" in (t.value or "") for t in texts)
+        assert any("Linus Torvalds" in (t.value or "") for t in texts)
+        assert any("Creator of Linux & Git" in (t.value or "") for t in texts)

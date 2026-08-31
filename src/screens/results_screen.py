@@ -18,6 +18,7 @@ import flet as ft
 from flet import Control
 
 from components.banner_ad import build_banner_ad
+from components.profile_detail_dialog import show_profile_detail_dialog
 from components.result_card import ResultCard
 from components.stat_card import StatCard
 from core import tokens
@@ -63,6 +64,57 @@ def ResultsScreen() -> Control:
 
         asyncio.create_task(_launch())
 
+    # ── Detail Dialog Openers ─────────────────────────────────────────
+    def _show_username_details(r):
+        from flet import context
+
+        page = context.page
+        if not page:
+            return
+        enrich = (
+            state.enrichments.get(r.url_user or r.url_main or "", None)
+            if state.enrichments
+            else None
+        )
+        show_profile_detail_dialog(
+            page=page,
+            site_name=r.site_name,
+            status=r.status,
+            url_user=r.url_user,
+            url_main=r.url_main,
+            query_time=r.query_time,
+            enrichment=enrich,
+        )
+
+    def _show_email_details(r):
+        from flet import context
+
+        page = context.page
+        if not page:
+            return
+        domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
+        enrich = (
+            state.enrichments.get(domain_url, None)
+            if state.enrichments and domain_url
+            else None
+        )
+        show_profile_detail_dialog(
+            page=page,
+            site_name=r.get("name", "unknown"),
+            status="Claimed"
+            if r.get("exists")
+            else ("Error" if r.get("rateLimit") else "Available"),
+            url_user=None,
+            url_main=domain_url,
+            email_recovery=r.get("emailrecovery"),
+            phone_number=r.get("phoneNumber"),
+            others=r.get("others"),
+            method=r.get("method", ""),
+            rate_limit=r.get("rateLimit", False),
+            frequent_rate_limit=r.get("frequent_rate_limit", False),
+            enrichment=enrich,
+        )
+
     # ── Username mode ─────────────────────────────────────────────────
     def _filter_username_items(items):
         q = debounced_filter.strip().lower()
@@ -92,6 +144,7 @@ def ResultsScreen() -> Control:
                     url_main=r.url_main,
                     query_time=r.query_time,
                     on_open=lambda url: _open_url(url),
+                    on_tap=lambda item=r: _show_username_details(item),
                     enrichment=state.enrichments.get(
                         r.url_user or r.url_main or "", None
                     )
@@ -159,6 +212,7 @@ def ResultsScreen() -> Control:
                     if r.get("domain")
                     else None,
                     on_open=lambda url: _open_url(url),
+                    on_tap=lambda item=r: _show_email_details(item),
                     email_recovery=r.get("emailrecovery"),
                     phone_number=r.get("phoneNumber"),
                     others=r.get("others"),

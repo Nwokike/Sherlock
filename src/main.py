@@ -317,6 +317,32 @@ class AppController:
 
             # Final progress apply
             await self._apply_progress(result)
+
+            # Auto-enrich claimed profiles with socid-extractor
+            if (
+                self.enrich_service
+                and self.enrich_service.is_available
+                and result.found
+            ):
+                claimed_urls = [r.url_user for r in result.found if r.url_user]
+                if claimed_urls:
+
+                    def _on_enriched_profile(url: str, data: dict):
+                        state.enrichments[url] = data
+                        state.progress_version += 1
+                        try:
+                            self.page.update()
+                        except Exception:
+                            pass
+
+                    self.page.run_task(
+                        lambda: self.enrich_service.batch_enrich(
+                            claimed_urls,
+                            timeout=6,
+                            on_result=_on_enriched_profile,
+                            max_concurrent=4,
+                        )
+                    )
         except Exception as e:
             logger.exception("Search failed")
             state.is_searching = False
@@ -450,7 +476,9 @@ class AppController:
                             timeout=5,
                             max_concurrent=5,
                         )
-                        state.enrichments.update(enrichments)
+                        if enrichments:
+                            state.enrichments.update(enrichments)
+                            state.progress_version += 1
                     except Exception as exc:
                         logger.warning("Enrichment failed: %s", exc)
 

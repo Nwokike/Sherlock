@@ -385,12 +385,14 @@ def HomeScreen() -> Control:
     def _on_input_change(e):
         value = e.control.value or ""
         set_search_query(value)
-        # Auto-detect email input and switch mode
-        if "@" in value and "." in value.split("@")[-1]:
-            if state.search_mode != MODE_EMAIL:
-                _switch_mode(MODE_EMAIL)
-        elif state.search_mode == MODE_EMAIL and "@" not in value:
-            _switch_mode(MODE_USERNAME)
+        # Auto-switch to email mode only if full email is pasted while in username mode
+        if (
+            state.search_mode == MODE_USERNAME
+            and "@" in value
+            and "." in value.split("@")[-1]
+            and len(value.split("@")[-1].split(".")[-1]) >= 2
+        ):
+            _switch_mode(MODE_EMAIL)
 
     def _on_paste(e):
         async def _paste():

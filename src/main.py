@@ -359,7 +359,9 @@ class AppController:
                             pass
 
                     async def _enrich_task():
-                        use_mutations = getattr(state, "enrichment_mode", "basic") == "full"
+                        use_mutations = (
+                            getattr(state, "enrichment_mode", "basic") == "full"
+                        )
                         await self.enrich_service.batch_enrich(
                             claimed_urls,
                             timeout=8 if use_mutations else 6,

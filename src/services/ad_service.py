@@ -71,7 +71,10 @@ class AdService:
             return
         try:
             self._consent_manager = fta.ConsentManager()
-            if hasattr(self.page, "services") and self._consent_manager not in self.page.services:
+            if (
+                hasattr(self.page, "services")
+                and self._consent_manager not in self.page.services
+            ):
                 self.page.services.append(self._consent_manager)
             await self._consent_manager.request_consent_info_update()
             await self._consent_manager.load_and_show_consent_form_if_required()
@@ -85,7 +88,9 @@ class AdService:
         if not self._consent_manager:
             return
         try:
-            status = await self._consent_manager.get_privacy_options_requirement_status()
+            status = (
+                await self._consent_manager.get_privacy_options_requirement_status()
+            )
             if status == fta.PrivacyOptionsRequirementStatus.REQUIRED:
                 await self._consent_manager.show_privacy_options_form()
                 self._can_request_ads = await self._consent_manager.can_request_ads()

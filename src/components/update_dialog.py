@@ -154,7 +154,9 @@ def show_update_dialog(page: ft.Page, update_data: dict) -> None:
                 release_notes,
                 selectable=True,
                 extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-                on_tap_link=lambda e: __import__("asyncio").create_task(ft.UrlLauncher().launch_url(e.data)),
+                on_tap_link=lambda e: __import__("asyncio").create_task(
+                    ft.UrlLauncher().launch_url(e.data)
+                ),
             )
         )
 

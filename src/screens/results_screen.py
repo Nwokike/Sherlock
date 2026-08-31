@@ -30,13 +30,18 @@ from state.controller_ctx import ControllerMethodsCtx
 logger = logging.getLogger("ResultsScreen")
 
 
-def _build_result_list(items, empty_title: str, empty_msg: str, build_card, debounced_filter: str = "") -> Control:
+def _build_result_list(
+    items, empty_title: str, empty_msg: str, build_card, debounced_filter: str = ""
+) -> Control:
     """Shared list builder with virtualization for large result sets."""
     if not items:
         from components.empty_state import EmptyState
+
         return EmptyState(
             title="No matches" if debounced_filter else empty_title,
-            message=f'No results match "{debounced_filter}"' if debounced_filter else empty_msg,
+            message=f'No results match "{debounced_filter}"'
+            if debounced_filter
+            else empty_msg,
             icon=ft.Icons.SEARCH_OFF_ROUNDED,
         )
     # Use ListView with build_controls_on_demand for virtualization on large lists (400+).
@@ -68,6 +73,7 @@ def ResultsScreen() -> Control:
         async def _launch():
             from core.notify import show_snack
             from flet import context
+
             try:
                 await ft.UrlLauncher().launch_url(url)
             except Exception as exc:
@@ -75,31 +81,56 @@ def ResultsScreen() -> Control:
                 page = context.page
                 if page:
                     show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
+
         asyncio.create_task(_launch())
 
     def _show_username_details(r):
         from flet import context
+
         page = context.page
         if not page:
             return
-        enrich = state.enrichments.get(r.url_user or r.url_main or "", None) if state.enrichments else None
-        show_profile_detail_dialog(page=page, site_name=r.site_name, status=r.status, mode="username", target_query=state.current_username or state.last_results_username, url_user=r.url_user, url_main=r.url_main, query_time=r.query_time, enrichment=enrich)
+        enrich = (
+            state.enrichments.get(r.url_user or r.url_main or "", None)
+            if state.enrichments
+            else None
+        )
+        show_profile_detail_dialog(
+            page=page,
+            site_name=r.site_name,
+            status=r.status,
+            mode="username",
+            target_query=state.current_username or state.last_results_username,
+            url_user=r.url_user,
+            url_main=r.url_main,
+            query_time=r.query_time,
+            enrichment=enrich,
+        )
 
     def _show_email_details(r):
         from flet import context
+
         page = context.page
         if not page:
             return
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
         show_profile_detail_dialog(
-            page=page, site_name=r.get("name", "unknown"),
-            status="Claimed" if r.get("exists") else ("Error" if r.get("rateLimit") else "Available"),
+            page=page,
+            site_name=r.get("name", "unknown"),
+            status="Claimed"
+            if r.get("exists")
+            else ("Error" if r.get("rateLimit") else "Available"),
             mode="email",
-            target_query=state.email_results_address or (active_progress.email if hasattr(active_progress, "email") else None),
-            url_user=None, url_main=domain_url,
-            email_recovery=r.get("emailrecovery"), phone_number=r.get("phoneNumber"),
-            others=r.get("others"), method=r.get("method", ""),
-            rate_limit=r.get("rateLimit", False), frequent_rate_limit=r.get("frequent_rate_limit", False),
+            target_query=state.email_results_address
+            or (active_progress.email if hasattr(active_progress, "email") else None),
+            url_user=None,
+            url_main=domain_url,
+            email_recovery=r.get("emailrecovery"),
+            phone_number=r.get("phoneNumber"),
+            others=r.get("others"),
+            method=r.get("method", ""),
+            rate_limit=r.get("rateLimit", False),
+            frequent_rate_limit=r.get("frequent_rate_limit", False),
         )
 
     def _filter_by_name(items, key_fn):
@@ -111,8 +142,20 @@ def ResultsScreen() -> Control:
     # ── Build content based on mode ───────────────────────────────────
     if is_email_mode:
         if active_progress and hasattr(active_progress, "checked_modules"):
+
             def _to_dict(r):
-                return {"name": r.name, "domain": r.domain, "method": r.method, "exists": r.exists, "rateLimit": r.rate_limit, "frequent_rate_limit": r.frequent_rate_limit, "emailrecovery": r.email_recovery, "phoneNumber": r.phone_number, "others": r.others}
+                return {
+                    "name": r.name,
+                    "domain": r.domain,
+                    "method": r.method,
+                    "exists": r.exists,
+                    "rateLimit": r.rate_limit,
+                    "frequent_rate_limit": r.frequent_rate_limit,
+                    "emailrecovery": r.email_recovery,
+                    "phoneNumber": r.phone_number,
+                    "others": r.others,
+                }
+
             raw_found = [_to_dict(r) for r in active_progress.found]
             raw_not_found = [_to_dict(r) for r in active_progress.not_found]
             raw_rate_limited = [_to_dict(r) for r in active_progress.rate_limited]
@@ -120,8 +163,12 @@ def ResultsScreen() -> Control:
             checked = active_progress.checked_modules
         else:
             all_email = list(state.email_results) if state.email_results else []
-            raw_found = [r for r in all_email if r.get("exists") and not r.get("rateLimit")]
-            raw_not_found = [r for r in all_email if not r.get("exists") and not r.get("rateLimit")]
+            raw_found = [
+                r for r in all_email if r.get("exists") and not r.get("rateLimit")
+            ]
+            raw_not_found = [
+                r for r in all_email if not r.get("exists") and not r.get("rateLimit")
+            ]
             raw_rate_limited = [r for r in all_email if r.get("rateLimit")]
             total = state.email_total_modules or len(all_email) or 121
             checked = total if all_email else 0
@@ -129,41 +176,119 @@ def ResultsScreen() -> Control:
         def _make_email_card(r):
             return ResultCard(
                 site_name=r.get("name", "unknown"),
-                status="Claimed" if r.get("exists") else ("Error" if r.get("rateLimit") else "Available"),
-                url_user=None, url_main=f"https://{r.get('domain', '')}" if r.get("domain") else None,
-                on_open=lambda url: _open_url(url), on_tap=lambda item=r: _show_email_details(item),
-                email_recovery=r.get("emailrecovery"), phone_number=r.get("phoneNumber"),
-                others=r.get("others"), method=r.get("method", ""), rate_limit=r.get("rateLimit", False), frequent_rate_limit=r.get("frequent_rate_limit", False),
+                status="Claimed"
+                if r.get("exists")
+                else ("Error" if r.get("rateLimit") else "Available"),
+                url_user=None,
+                url_main=f"https://{r.get('domain', '')}" if r.get("domain") else None,
+                on_open=lambda url: _open_url(url),
+                on_tap=lambda item=r: _show_email_details(item),
+                email_recovery=r.get("emailrecovery"),
+                phone_number=r.get("phoneNumber"),
+                others=r.get("others"),
+                method=r.get("method", ""),
+                rate_limit=r.get("rateLimit", False),
+                frequent_rate_limit=r.get("frequent_rate_limit", False),
             )
 
         # Apply method + only-found filters
         method_filter = getattr(state, "email_method_filter", "all")
         only_found = getattr(state, "email_only_found", False)
+
         def _apply_email_extras(items):
             out = items
             if method_filter != "all":
                 out = [r for r in out if r.get("method", "") == method_filter]
             return out
+
         raw_found = _apply_email_extras(raw_found)
         raw_not_found = [] if only_found else _apply_email_extras(raw_not_found)
         raw_rate_limited = [] if only_found else _apply_email_extras(raw_rate_limited)
 
-        email_found_filtered = _filter_by_name(raw_found, lambda r: f"{r.get('name','')} {r.get('domain','')}")
-        email_not_found_filtered = _filter_by_name(raw_not_found, lambda r: f"{r.get('name','')} {r.get('domain','')}")
-        email_rate_limited_filtered = _filter_by_name(raw_rate_limited, lambda r: f"{r.get('name','')} {r.get('domain','')}")
+        email_found_filtered = _filter_by_name(
+            raw_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+        )
+        email_not_found_filtered = _filter_by_name(
+            raw_not_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+        )
+        email_rate_limited_filtered = _filter_by_name(
+            raw_rate_limited, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+        )
 
         tabs = ft.Tabs(
-            selected_index=0, length=3,
-            content=ft.Column([
-                ft.TabBar(tabs=[ft.Tab(label=f"Found ({len(email_found_filtered)})"), ft.Tab(label=f"Not Found ({len(email_not_found_filtered)})"), ft.Tab(label=f"Rate Limited ({len(email_rate_limited_filtered)})")], scrollable=False, indicator_color=ft.Colors.PRIMARY, label_color=ft.Colors.PRIMARY, unselected_label_color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE), label_padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM)),
-                ft.TabBarView(controls=[
-                    _build_result_list(email_found_filtered, "No registrations found", "No platforms matched this email address.", _make_email_card, debounced_filter),
-                    _build_result_list(email_not_found_filtered, "All found", "Every platform confirmed this email is registered.", _make_email_card, debounced_filter),
-                    _build_result_list(email_rate_limited_filtered, "No rate limits", "All checks completed without rate limiting.", _make_email_card, debounced_filter),
-                ], expand=True),
-            ], expand=True, spacing=0), expand=True,
+            selected_index=0,
+            length=3,
+            content=ft.Column(
+                [
+                    ft.TabBar(
+                        tabs=[
+                            ft.Tab(label=f"Found ({len(email_found_filtered)})"),
+                            ft.Tab(
+                                label=f"Not Found ({len(email_not_found_filtered)})"
+                            ),
+                            ft.Tab(
+                                label=f"Rate Limited ({len(email_rate_limited_filtered)})"
+                            ),
+                        ],
+                        scrollable=False,
+                        indicator_color=ft.Colors.PRIMARY,
+                        label_color=ft.Colors.PRIMARY,
+                        unselected_label_color=ft.Colors.with_opacity(
+                            tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                        ),
+                        label_padding=ft.Padding(
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
+                        ),
+                    ),
+                    ft.TabBarView(
+                        controls=[
+                            _build_result_list(
+                                email_found_filtered,
+                                "No registrations found",
+                                "No platforms matched this email address.",
+                                _make_email_card,
+                                debounced_filter,
+                            ),
+                            _build_result_list(
+                                email_not_found_filtered,
+                                "All found",
+                                "Every platform confirmed this email is registered.",
+                                _make_email_card,
+                                debounced_filter,
+                            ),
+                            _build_result_list(
+                                email_rate_limited_filtered,
+                                "No rate limits",
+                                "All checks completed without rate limiting.",
+                                _make_email_card,
+                                debounced_filter,
+                            ),
+                        ],
+                        expand=True,
+                    ),
+                ],
+                expand=True,
+                spacing=0,
+            ),
+            expand=True,
         )
-        stats_row = ft.Row(controls=[StatCard("Found", str(len(raw_found)), AppColors.SUCCESS), StatCard("Not Found", str(len(raw_not_found)), ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)), StatCard("Rate Ltd", str(len(raw_rate_limited)), AppColors.WARNING), StatCard("Total", str(total), ft.Colors.PRIMARY)], spacing=tokens.SPACE_SM, alignment=ft.MainAxisAlignment.SPACE_EVENLY)
+        stats_row = ft.Row(
+            controls=[
+                StatCard("Found", str(len(raw_found)), AppColors.SUCCESS),
+                StatCard(
+                    "Not Found",
+                    str(len(raw_not_found)),
+                    ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                ),
+                StatCard("Rate Ltd", str(len(raw_rate_limited)), AppColors.WARNING),
+                StatCard("Total", str(total), ft.Colors.PRIMARY),
+            ],
+            spacing=tokens.SPACE_SM,
+            alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+        )
         if active_progress and getattr(active_progress, "is_cancelled", False):
             progress_label = f"Cancelled — {checked}/{total} checked"
         else:
@@ -174,27 +299,129 @@ def ResultsScreen() -> Control:
             controller.cancel_email_search()
 
     else:
-        def _make_username_card(r):
-            return ResultCard(site_name=r.site_name, status=r.status, url_user=r.url_user, url_main=r.url_main, query_time=r.query_time, on_open=lambda url: _open_url(url), on_tap=lambda item=r: _show_username_details(item), enrichment=state.enrichments.get(r.url_user or r.url_main or "", None) if state.enrichments else None)
 
-        found_items = _filter_by_name(active_progress.found, lambda r: r.site_name) if active_progress else []
-        notfound_items = _filter_by_name(active_progress.not_found, lambda r: r.site_name) if active_progress else []
-        error_items = _filter_by_name(active_progress.errors, lambda r: r.site_name) if active_progress else []
-        total = active_progress.total_sites if active_progress else state.sites_total or 400
-        checked = active_progress.checked_sites if active_progress else (total if state.last_results else 0)
+        def _make_username_card(r):
+            return ResultCard(
+                site_name=r.site_name,
+                status=r.status,
+                url_user=r.url_user,
+                url_main=r.url_main,
+                query_time=r.query_time,
+                on_open=lambda url: _open_url(url),
+                on_tap=lambda item=r: _show_username_details(item),
+                enrichment=state.enrichments.get(r.url_user or r.url_main or "", None)
+                if state.enrichments
+                else None,
+            )
+
+        found_items = (
+            _filter_by_name(active_progress.found, lambda r: r.site_name)
+            if active_progress
+            else []
+        )
+        notfound_items = (
+            _filter_by_name(active_progress.not_found, lambda r: r.site_name)
+            if active_progress
+            else []
+        )
+        error_items = (
+            _filter_by_name(active_progress.errors, lambda r: r.site_name)
+            if active_progress
+            else []
+        )
+        total = (
+            active_progress.total_sites if active_progress else state.sites_total or 400
+        )
+        checked = (
+            active_progress.checked_sites
+            if active_progress
+            else (total if state.last_results else 0)
+        )
 
         tabs = ft.Tabs(
-            selected_index=0, length=3,
-            content=ft.Column([
-                ft.TabBar(tabs=[ft.Tab(label=f"Found ({len(found_items)})"), ft.Tab(label=f"Not Found ({len(notfound_items)})"), ft.Tab(label=f"Errors ({len(error_items)})")], scrollable=False, indicator_color=ft.Colors.PRIMARY, label_color=ft.Colors.PRIMARY, unselected_label_color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE), label_padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM)),
-                ft.TabBarView(controls=[
-                    _build_result_list(found_items, "No matches" if debounced_filter else "No results yet", f'No results match "{debounced_filter}"' if debounced_filter else "Results will appear as the scan progresses.", _make_username_card, debounced_filter),
-                    _build_result_list(notfound_items, "No matches" if debounced_filter else "No results yet", f'No results match "{debounced_filter}"' if debounced_filter else "Results will appear as the scan progresses.", _make_username_card, debounced_filter),
-                    _build_result_list(error_items, "No matches" if debounced_filter else "No results yet", f'No results match "{debounced_filter}"' if debounced_filter else "Results will appear as the scan progresses.", _make_username_card, debounced_filter),
-                ], expand=True),
-            ], expand=True, spacing=0), expand=True,
+            selected_index=0,
+            length=3,
+            content=ft.Column(
+                [
+                    ft.TabBar(
+                        tabs=[
+                            ft.Tab(label=f"Found ({len(found_items)})"),
+                            ft.Tab(label=f"Not Found ({len(notfound_items)})"),
+                            ft.Tab(label=f"Errors ({len(error_items)})"),
+                        ],
+                        scrollable=False,
+                        indicator_color=ft.Colors.PRIMARY,
+                        label_color=ft.Colors.PRIMARY,
+                        unselected_label_color=ft.Colors.with_opacity(
+                            tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                        ),
+                        label_padding=ft.Padding(
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
+                            tokens.SPACE_LG,
+                            tokens.SPACE_SM,
+                        ),
+                    ),
+                    ft.TabBarView(
+                        controls=[
+                            _build_result_list(
+                                found_items,
+                                "No matches" if debounced_filter else "No results yet",
+                                f'No results match "{debounced_filter}"'
+                                if debounced_filter
+                                else "Results will appear as the scan progresses.",
+                                _make_username_card,
+                                debounced_filter,
+                            ),
+                            _build_result_list(
+                                notfound_items,
+                                "No matches" if debounced_filter else "No results yet",
+                                f'No results match "{debounced_filter}"'
+                                if debounced_filter
+                                else "Results will appear as the scan progresses.",
+                                _make_username_card,
+                                debounced_filter,
+                            ),
+                            _build_result_list(
+                                error_items,
+                                "No matches" if debounced_filter else "No results yet",
+                                f'No results match "{debounced_filter}"'
+                                if debounced_filter
+                                else "Results will appear as the scan progresses.",
+                                _make_username_card,
+                                debounced_filter,
+                            ),
+                        ],
+                        expand=True,
+                    ),
+                ],
+                expand=True,
+                spacing=0,
+            ),
+            expand=True,
         )
-        stats_row = ft.Row(controls=[StatCard("Found", str(len(found_items) if active_progress else 0), AppColors.SUCCESS), StatCard("Not Found", str(len(notfound_items) if active_progress else 0), ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)), StatCard("Errors", str(len(error_items) if active_progress else 0), AppColors.WARNING), StatCard("Total", str(total), ft.Colors.PRIMARY)], spacing=tokens.SPACE_SM, alignment=ft.MainAxisAlignment.SPACE_EVENLY)
+        stats_row = ft.Row(
+            controls=[
+                StatCard(
+                    "Found",
+                    str(len(found_items) if active_progress else 0),
+                    AppColors.SUCCESS,
+                ),
+                StatCard(
+                    "Not Found",
+                    str(len(notfound_items) if active_progress else 0),
+                    ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                ),
+                StatCard(
+                    "Errors",
+                    str(len(error_items) if active_progress else 0),
+                    AppColors.WARNING,
+                ),
+                StatCard("Total", str(total), ft.Colors.PRIMARY),
+            ],
+            spacing=tokens.SPACE_SM,
+            alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+        )
         if active_progress and getattr(active_progress, "is_cancelled", False):
             progress_label = f"Cancelled — {checked}/{total} checked"
         else:
@@ -204,13 +431,32 @@ def ResultsScreen() -> Control:
         def cancel_callback(e):
             controller.cancel_search()
 
-    stats_card = ft.Container(content=stats_row, padding=tokens.SPACE_MD, border_radius=tokens.RADIUS_LG, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, border=ft.Border.all(width=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)), margin=ft.Margin(tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_SM))
+    stats_card = ft.Container(
+        content=stats_row,
+        padding=tokens.SPACE_MD,
+        border_radius=tokens.RADIUS_LG,
+        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+        border=ft.Border.all(
+            width=1,
+            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+        ),
+        margin=ft.Margin(
+            tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_SM
+        ),
+    )
     # Email method filter chips (only in email mode)
     method_filter_row = ft.Container(width=0, height=0)
     if is_email_mode:
         method_filter = getattr(state, "email_method_filter", "all")
+
         def _method_chip(value, label):
-            return ft.Chip(label=ft.Text(label, size=11, font_family="Outfit"), selected=method_filter == value, show_checkmark=False, on_select=lambda e, v=value: _set_method_filter(v))
+            return ft.Chip(
+                label=ft.Text(label, size=11, font_family="Outfit"),
+                selected=method_filter == value,
+                show_checkmark=False,
+                on_select=lambda e, v=value: _set_method_filter(v),
+            )
+
         def _set_method_filter(v):
             state.email_method_filter = v
             state.progress_version += 1
@@ -218,15 +464,110 @@ def ResultsScreen() -> Control:
                 from services.storage_service import StorageService
                 from flet import context
                 import asyncio as _asyncio
+
                 s = StorageService(context.page)
                 _asyncio.create_task(s.set("sherlock_email_method_filter", v))
             except Exception:
                 pass
-        method_filter_row = ft.Container(content=ft.Row(controls=[_method_chip("all", "All"), _method_chip("register", "Register"), _method_chip("login", "Login"), _method_chip("password recovery", "Recovery")], spacing=tokens.SPACE_XS, wrap=True, alignment=ft.MainAxisAlignment.CENTER), padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, 0))
-    filter_hint = "Filter results by platform name..." if is_email_mode else "Filter results by site name..."
-    filter_box = ft.Container(content=ft.TextField(value=filter_query, hint_text=filter_hint, prefix_icon=ft.Icons.FILTER_LIST_ROUNDED, border_radius=tokens.RADIUS_MD, border_width=1, border_color=ft.Colors.with_opacity(tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE), focused_border_color=ft.Colors.PRIMARY, bgcolor=ft.Colors.SURFACE, filled=True, on_change=lambda e: set_filter_query(e.control.value), text_size=tokens.FONT_SM, content_padding=tokens.SPACE_SM, height=44), padding=ft.Padding(left=tokens.SPACE_XL, right=tokens.SPACE_XL, top=tokens.SPACE_XS, bottom=tokens.SPACE_SM))
+
+        method_filter_row = ft.Container(
+            content=ft.Row(
+                controls=[
+                    _method_chip("all", "All"),
+                    _method_chip("register", "Register"),
+                    _method_chip("login", "Login"),
+                    _method_chip("password recovery", "Recovery"),
+                ],
+                spacing=tokens.SPACE_XS,
+                wrap=True,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, 0),
+        )
+    filter_hint = (
+        "Filter results by platform name..."
+        if is_email_mode
+        else "Filter results by site name..."
+    )
+    filter_box = ft.Container(
+        content=ft.TextField(
+            value=filter_query,
+            hint_text=filter_hint,
+            prefix_icon=ft.Icons.FILTER_LIST_ROUNDED,
+            border_radius=tokens.RADIUS_MD,
+            border_width=1,
+            border_color=ft.Colors.with_opacity(
+                tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
+            ),
+            focused_border_color=ft.Colors.PRIMARY,
+            bgcolor=ft.Colors.SURFACE,
+            filled=True,
+            on_change=lambda e: set_filter_query(e.control.value),
+            text_size=tokens.FONT_SM,
+            content_padding=tokens.SPACE_SM,
+            height=44,
+        ),
+        padding=ft.Padding(
+            left=tokens.SPACE_XL,
+            right=tokens.SPACE_XL,
+            top=tokens.SPACE_XS,
+            bottom=tokens.SPACE_SM,
+        ),
+    )
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
-        progress_section = ft.Container(content=ft.Column(controls=[ft.ProgressBar(value=None, color=ft.Colors.PRIMARY, bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.PRIMARY), height=tokens.PROGRESS_BAR_HEIGHT), ft.Row(controls=[ft.Text(progress_label, size=tokens.FONT_SM, color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)), ft.Container(expand=True), ft.TextButton(content=ft.Text("Cancel", size=tokens.FONT_SM, color=AppColors.ERROR, weight=ft.FontWeight.W_600), on_click=cancel_callback)])], spacing=tokens.SPACE_XS), padding=ft.Padding(left=tokens.SPACE_XL, right=tokens.SPACE_XL, top=tokens.SPACE_SM, bottom=0))
+        progress_section = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.ProgressBar(
+                        value=None,
+                        color=ft.Colors.PRIMARY,
+                        bgcolor=ft.Colors.with_opacity(
+                            tokens.OPACITY_LIGHT, ft.Colors.PRIMARY
+                        ),
+                        height=tokens.PROGRESS_BAR_HEIGHT,
+                    ),
+                    ft.Row(
+                        controls=[
+                            ft.Text(
+                                progress_label,
+                                size=tokens.FONT_SM,
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                                ),
+                            ),
+                            ft.Container(expand=True),
+                            ft.TextButton(
+                                content=ft.Text(
+                                    "Cancel",
+                                    size=tokens.FONT_SM,
+                                    color=AppColors.ERROR,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                on_click=cancel_callback,
+                            ),
+                        ]
+                    ),
+                ],
+                spacing=tokens.SPACE_XS,
+            ),
+            padding=ft.Padding(
+                left=tokens.SPACE_XL,
+                right=tokens.SPACE_XL,
+                top=tokens.SPACE_SM,
+                bottom=0,
+            ),
+        )
 
-    return ft.Column(controls=[progress_section, stats_card, method_filter_row, filter_box, tabs, build_banner_ad()], expand=True, spacing=0)
+    return ft.Column(
+        controls=[
+            progress_section,
+            stats_card,
+            method_filter_row,
+            filter_box,
+            tabs,
+            build_banner_ad(),
+        ],
+        expand=True,
+        spacing=0,
+    )

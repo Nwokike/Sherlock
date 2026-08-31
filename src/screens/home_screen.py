@@ -114,11 +114,22 @@ def _category_chip(
     """Material 3 Chip — replaces hand-rolled Container pill."""
     if on_click is not None:
         return ft.Chip(
-            label=ft.Text(label, size=12, weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.W_400, font_family="Outfit"),
-            leading=ft.Icon(icon, size=15, color=color if is_active else ft.Colors.ON_SURFACE_VARIANT),
+            label=ft.Text(
+                label,
+                size=12,
+                weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.W_400,
+                font_family="Outfit",
+            ),
+            leading=ft.Icon(
+                icon,
+                size=15,
+                color=color if is_active else ft.Colors.ON_SURFACE_VARIANT,
+            ),
             selected=is_active,
             selected_color=ft.Colors.with_opacity(0.14, color),
-            bgcolor=ft.Colors.with_opacity(0.08, color) if is_active else ft.Colors.TRANSPARENT,
+            bgcolor=ft.Colors.with_opacity(0.08, color)
+            if is_active
+            else ft.Colors.TRANSPARENT,
             show_checkmark=False,
             on_select=on_click,
         )
@@ -468,6 +479,7 @@ def HomeScreen() -> Control:
     def _maybe_switch_to_email(value: str):
         """Only auto-switch when pasted value is a clear email, not on typing."""
         from services.email_service import validate_email
+
         if state.search_mode == MODE_USERNAME and validate_email(value.strip()):
             _switch_mode(MODE_EMAIL)
 
@@ -507,7 +519,10 @@ def HomeScreen() -> Control:
     def _load_history():
         async def _fetch():
             try:
-                from services.storage_service import StorageService, load_history_entries
+                from services.storage_service import (
+                    StorageService,
+                    load_history_entries,
+                )
 
                 storage = StorageService(_get_page())
                 raw = await storage.get(STORAGE_HISTORY)
@@ -683,24 +698,50 @@ def HomeScreen() -> Control:
                     controller.show_settings() if controller.show_settings else None
                 ),
             ),
-            # Offline — Material 3 Banner (replaces plain Container)
-            ft.Banner(
-                content=ft.Text(MSG_OFFLINE, size=tokens.FONT_XS, color=ft.Colors.ON_ERROR_CONTAINER),
-                leading=ft.Icon(ft.Icons.WIFI_OFF_ROUNDED, color=ft.Colors.ON_ERROR_CONTAINER, size=tokens.ICON_SM),
+            # Offline — subtle inline banner (visible only when offline)
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.WIFI_OFF_ROUNDED,
+                            size=14,
+                            color=ft.Colors.ON_ERROR_CONTAINER,
+                        ),
+                        ft.Text(
+                            MSG_OFFLINE,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_ERROR_CONTAINER,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+                padding=ft.Padding(tokens.SPACE_LG, 6, tokens.SPACE_LG, 6),
                 bgcolor=ft.Colors.ERROR_CONTAINER,
-                actions=[ft.TextButton("Dismiss", on_click=lambda e: None)],
-                open=not state.is_online,
+                visible=not state.is_online,
             ),
             # ── Mode Switcher — Material 3 SegmentedButton ──
             ft.Container(
-                padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
+                ),
                 content=ft.SegmentedButton(
                     segments=[
-                        ft.Segment(value=MODE_USERNAME, label=ft.Text("Username", font_family="Outfit"), icon=ft.Icons.PERSON_SEARCH_ROUNDED),
-                        ft.Segment(value=MODE_EMAIL, label=ft.Text("Email", font_family="Outfit"), icon=ft.Icons.ALTERNATE_EMAIL_ROUNDED),
+                        ft.Segment(
+                            value=MODE_USERNAME,
+                            label=ft.Text("Username", font_family="Outfit"),
+                            icon=ft.Icons.PERSON_SEARCH_ROUNDED,
+                        ),
+                        ft.Segment(
+                            value=MODE_EMAIL,
+                            label=ft.Text("Email", font_family="Outfit"),
+                            icon=ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+                        ),
                     ],
-                    selected={state.search_mode},
-                    on_change=lambda e: _switch_mode(e.control.selected[0] if e.control.selected else MODE_USERNAME),
+                    selected=[state.search_mode],
+                    on_change=lambda e: _switch_mode(
+                        e.control.selected[0] if e.control.selected else MODE_USERNAME
+                    ),
                 ),
             ),
             # Search field — modern SearchBar
@@ -757,12 +798,22 @@ def HomeScreen() -> Control:
                     autofocus=False,
                     controls=[
                         ft.ListTile(
-                            title=ft.Text(e.get("query", ""), size=tokens.FONT_SM, font_family="Outfit"),
-                            leading=ft.Icon(ft.Icons.HISTORY_ROUNDED, size=16, color=AppColors.PRIMARY),
-                            on_click=lambda _, entry=e: (_on_history_click(entry)),
+                            title=ft.Text(
+                                e.get("query", ""),
+                                size=tokens.FONT_SM,
+                                font_family="Outfit",
+                            ),
+                            leading=ft.Icon(
+                                ft.Icons.HISTORY_ROUNDED,
+                                size=16,
+                                color=AppColors.PRIMARY,
+                            ),
+                            on_click=lambda _, entry=e: _on_history_click(entry),
                         )
                         for e in (list(state.history[:5]) if state.history else [])
-                    ] if state.history else [],
+                    ]
+                    if state.history
+                    else [],
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  A high-performance, private OSINT search platform to hunt down social media profiles by username across 400+ networks simultaneously
+  Dual-mode OSINT — hunt usernames across 400+ networks and emails across 120+ platforms simultaneously
 </p>
 
 <p align="center">
@@ -14,7 +14,6 @@
   <img src="https://img.shields.io/badge/Built%20with-Flet%200.86.5-00B0FF?style=for-the-badge&logo=flutter&logoColor=white" alt="Flet" />
   <img src="https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
-
 
 ---
 
@@ -42,12 +41,13 @@
 
 | Capability | Description |
 | :--- | :--- |
-| **400+ Social Networks** | Simultaneously scans the largest index of international, regional, and specialized networks (GitHub, Instagram, Discord, Telegram, SoundCloud, and more) in seconds. |
-| **Fast Offline Scans** | Runs high-performance queries locally. Features an offline-first local database to scan instantly without an initial download. |
-| **Selective Target Scope** | Bulk selection management. Focus your scans by enabling "Select All", "Deselect All", or "Popular Only" — reachable from the targets card on the Home screen. |
-| **Throttled Real-Time Ticking** | Features a thread-safe progress collect-notifier throttled to a smooth 250ms interval, preventing rendering freezes and allowing live counter ticking. |
-| **Premium Data Exports** | Export complete scan results to your system Downloads folder as clean Plain Text, CSV spreadsheets, or beautifully structured Excel (.xlsx) files. |
-| **Local Sandbox Security** | Hardened sandboxed storage framework guaranteeing zero permission conflicts on Android environment. |
+| **400+ Username Networks** | Username OSINT via `sherlock-project` — GitHub, Instagram, Discord, Telegram, SoundCloud, and more. Wildcard `user{?}name` → 3 variants. |
+| **120+ Email Platforms** | Email OSINT via `holehe` — register/login/recovery checks with masked recovery email + phone hints, method badges, and flaky-platform warnings. |
+| **Profile Enrichment** | `socid-extractor` (164 schemes) — avatar, bio, followers, location, company, verified, personal links. Basic (fast) / Full (API mutations) modes. |
+| **Fast Offline Scans** | Local-first database — scan instantly without an initial download. |
+| **Selective Target Scope** | Bulk selection: Select All / Deselect All / Popular Only — from the targets card on Home. |
+| **Premium Data Exports** | Plain Text, CSV, and Excel (.xlsx) via system file picker — BottomSheet chooser with drag handle. |
+| **History + Typeahead** | Local search history with `Dismissible` swipe-to-delete and `SearchBar` typeahead suggestions. |
 
 ---
 
@@ -73,7 +73,7 @@
     <td width="50%"><img src="screenshots/homepage_showing_history_dark_mobile.png" width="100%" alt="Home Dashboard Dark" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Home Dashboard (Light) — Pristine logo header layout displaying recent lookups.</em></td>
+    <td align="center"><em>Home Dashboard (Light) — Material 3 `SegmentedButton` + `Chip` filters + `Banner` offline strip + history typeahead.</em></td>
     <td align="center"><em>Home Dashboard (Dark) — Monokai-optimized interface with quick-theme header toggle.</em></td>
   </tr>
 </table>
@@ -85,7 +85,7 @@
   </tr>
   <tr>
     <td align="center"><em>Live Search Ticking — Fluid progress counter with cancellation action.</em></td>
-    <td align="center"><em>Scan Complete — Segmented tabs displaying found match cards.</em></td>
+    <td align="center"><em>Scan Complete — Segmented tabs + method-filter `Chip` bar + `SelectionArea` long-press + haptic feedback.</em></td>
   </tr>
 </table>
 
@@ -96,7 +96,7 @@
   </tr>
   <tr>
     <td align="center"><em>Selective Site Switcher — Custom toggle checks to prune search scope.</em></td>
-    <td align="center"><em>Recent History Log — Complete chronological list of previous runs.</em></td>
+    <td align="center"><em>Recent History Log — `Dismissible` swipe-to-delete + `ListView` virtualization.</em></td>
   </tr>
 </table>
 
@@ -115,11 +115,19 @@
 
 ## Features
 
-- **Gold-Branded Design System** — Custom Solarized Light (Pure White) and classic Monokai themes aligned perfectly to the bronze-gold detective logo.
-- **Live Text-Search Filters** — Instantly filter hundreds of results in real-time as the background scanner is running.
-- **Tap-to-Open Profile Links** — Any found result opens the live profile in your system browser with a single tap.
+- **Gold-Branded Design System** — Solarized Light (Pure White) and Monokai themes aligned to the bronze-gold detective logo. `ScrollbarTheme` / `ChipTheme` / `TabBarTheme` / `CardTheme` / `PageTransitionsTheme` unified in `AppTheme`.
+- **Dual-Mode OSINT** — Username (sherlock-project) + Email (holehe) with material `SegmentedButton` pill and type-ahead `SearchBar`.
+- **Profile Enrichment** — `socid-extractor` post-scan enrichment: avatar guard (`https` only), bio, followers, location, company, verified badge, personal link — Basic/Full modes via `mutate_url` API schemes.
+- **Live Text-Search Filters** — Instantly filter hundreds of results as the scanner runs. `ListView(build_controls_on_demand=True)` virtualization + `SelectionArea` long-press.
+- **Tap-to-Open + Share + Haptic** — Tap result → browser; copy/share via `Clipboard` + `Share`; `HapticFeedback` on search/copy/share.
+- **Network & Proxy** — `sherlock(..., proxy=)` via Settings → Network & Proxy (`socks5://` / `http://`).
+- **Wildcard `user{?}name`** — Expands to `user_name`, `user-name`, `user.name` automatically.
+- **Email Concurrency + Filters** — Slider 5–30, Found-Only toggle, method filter (`All` / `Register` / `Login` / `Recovery`), flaky-platform threshold.
+- **History** — `Dismissible` swipe-to-delete rows, `Banner` offline strip, `SearchBar` history typeahead, type-ahead `Chip` filters.
+- **Interstitial Frequency Capping** — DDGS-style every-3rd-search cadence (`search_count % 3 == 0` via `state.search_count`).
 - **Custom Database Manifest** — Point the scanner at your own site-database JSON (via Settings) for specialized investigations.
-- **Preloaded Interstitial Ads** — Intelligent Google AdMob integration that buffers and displays interstitial ads seamlessly on mobile platforms.
+- **Markdown Release Notes** — `UpdateDialog` renders rich `Markdown(GITHUB_WEB)` changelogs with tappable links.
+- **Export BottomSheet** — Material 3 `BottomSheet` (drag handle, `ListTile` per format) replaces `AlertDialog`.
 - **Debounced Storage Writes** — Prevents disk I/O bottlenecks and race conditions when modifying search parameters.
 - **Ruff Compliance** — Clean, formatted, and strictly linted Python codebase.
 
@@ -129,40 +137,46 @@
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Flet (Flutter engine) | Cross-platform UI with clean responsive views and smooth page transitions |
-| **Scan Core** | `sherlock-project` runtime | Native multi-threaded OSINT username matching engine (site lookups run through its own async HTTP stack) |
-| **Local Database** | Flat JSON Storage (`storage.json`) | Ultra-fast local key-value storage for settings, theme state, selection scope, and site-name cache |
+| **Frontend** | Flet 0.86.5 (Flutter 3.44) | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
+| **Scan Core** | `sherlock-project 0.16.0` + `holehe 1.61` | Username (multi-threaded `sherlock`) + Email (async `holehe` semaphore `state.email_concurrency`) |
+| **Enrichment** | `socid-extractor 0.1.1` (164 schemes, 449 fields) | Post-scan avatar/bio/metrics via `batch_enrich` (Basic/Full `use_mutations`) |
+| **Ads** | `flet-ads 0.86.5` | `BannerAd 320×50` + `InterstitialAd` (3-search capping) + UMP `ConsentManager` |
+| **Local Database** | `.flet/storage/data` (`storage.json`) | Debounced atomic `JSON` store — settings, theme, selection scope, site-name cache, history |
 
 ### Visual Flow
 
 ```mermaid
 graph TB
-    subgraph SHERLOCK_CLIENT ["📱 SHERLOCK CLIENT (Local-First OSINT App)"]
-        UI["🎨 Flet Reactive UI (Home | History | Settings | Social Networks)"]
-        Engine["⚙️ Sherlock Search Engine (sherlock-project)"]
-        Storage["💾 Local Storage (storage.json | client_storage)"]
+    subgraph SHERLOCK_CLIENT ["📱 SHERLOCK CLIENT (Local-First Dual OSINT App)"]
+        UI["🎨 Flet 0.86.5 Reactive UI (Home | History | Settings | Social Networks)"]
+        Engine["⚙️ Sherlock + holehe Engines"]
+        Enrich["✨ socid-extractor Enrichment (Basic/Full)"]
+        Storage["💾 .flet Storage (atomic JSON)"]
         UI --> Engine
+        Engine --> Enrich
         UI --> Storage
     end
 
     subgraph GLOBAL_RESOURCES ["🌐 EDGE DATABASE & PROVIDERS"]
-        Targets["🎯 400+ Social Target Servers (HTTPS)"]
+        Targets["🎯 400+ Social + 120+ Email Servers (HTTPS)"]
     end
 
     Engine ==>|HTTPS GET/POST| Targets
+    Enrich -.->|Profile fetch| Targets
 ```
 
 ---
 
 ## Scan Performance Guide
 
-To optimize execution speed across various platforms, reference this settings guide:
+To optimize execution speed, tune the sliders in Settings:
 
 | Scan Profile | Targets | Estimated Time | Best Suited For |
 | :--- | :---: | :---: | :--- |
-| **Popular Only** | ~15 Major Platforms | **Under 5 Seconds** | Quick check on mainstream platforms that exist in the current database |
-| **Custom Selection** | Selected Subset | **Depends on size** | Specific investigation focused on professional or gaming networks |
-| **Full Sweep** | 400+ Sites | **25 - 45 Seconds** | Deep exhaustive OSINT reports and full footprint audits |
+| **Popular Only** | ~15 Major Platforms | **Under 5 Seconds** | Quick check on mainstream platforms |
+| **Custom Selection** | Selected Subset | **Depends on size** | Focused investigation (professional / gaming networks) |
+| **Email (holehe)** | 120 reasons | **10–30 s** | Use concurrency Slider 5–30 (default 15); higher = faster but more rate-limits |
+| **Full Sweep** | 400+ Sites | **25–45 Seconds** | Deep exhaustive OSINT reports and full footprint audits |
 
 ---
 
@@ -170,9 +184,9 @@ To optimize execution speed across various platforms, reference this settings gu
 
 Sherlock is designed with a strict **Privacy-First** philosophy:
 
-1. **Local Connections**: All network scans are sent directly from your own device IP address. No middleman, proxy, or server tracking.
+1. **Local Connections**: All network scans are sent directly from your own device IP address. No middleman, proxy, or server tracking — or via your configured `socks5://` / `http://` proxy if set.
 2. **Zero Logging**: We do not log, track, or share your search history, checked usernames, or discovered profiles.
-3. **Sandbox Directories**: Mapped directories use Android secure sandboxing ensuring zero access to other system folders.
+3. **Sandbox Directories**: `.flet/storage/data|cache|temp` via `FLET_APP_STORAGE_*` — the process CWD is `storage/data` during `flet run`, matching packaged app behavior (see `.flet/README.md`).
 4. **Data Sovereignty**: Generated reports (.csv, .xlsx, .txt) reside 100% locally in your default system Downloads folder.
 
 ---

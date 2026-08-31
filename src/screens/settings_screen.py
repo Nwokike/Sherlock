@@ -227,7 +227,9 @@ def SettingsScreen() -> Control:
 
     def _toggle_email_only_found(val: bool):
         state.email_only_found = val
-        asyncio.create_task(_persist(STORAGE_EMAIL_ONLY_FOUND, "true" if val else "false"))
+        asyncio.create_task(
+            _persist(STORAGE_EMAIL_ONLY_FOUND, "true" if val else "false")
+        )
 
     def _on_email_method_filter_change(val: str):
         state.email_method_filter = val
@@ -365,10 +367,14 @@ def SettingsScreen() -> Control:
                 "Max wait time per email check (holehe)",
                 ft.Slider(
                     value=float(state.email_timeout),
-                    min=5, max=30, divisions=5,
+                    min=5,
+                    max=30,
+                    divisions=5,
                     label=f"{state.email_timeout}s",
                     active_color=AppColors.PRIMARY,
-                    on_change=lambda e: _on_email_timeout_change(str(int(e.control.value))),
+                    on_change=lambda e: _on_email_timeout_change(
+                        str(int(e.control.value))
+                    ),
                 ),
             ),
             ft.Divider(
@@ -381,10 +387,14 @@ def SettingsScreen() -> Control:
                 "Parallel checks — higher is faster but rate-limits more",
                 ft.Slider(
                     value=float(getattr(state, "email_concurrency", 15)),
-                    min=5, max=30, divisions=5,
+                    min=5,
+                    max=30,
+                    divisions=5,
                     label=f"{getattr(state, 'email_concurrency', 15)}",
                     active_color=AppColors.PRIMARY,
-                    on_change=lambda e: _on_email_concurrency_change(str(int(e.control.value))),
+                    on_change=lambda e: _on_email_concurrency_change(
+                        str(int(e.control.value))
+                    ),
                 ),
             ),
             ft.Divider(
@@ -441,7 +451,9 @@ def SettingsScreen() -> Control:
                 "Maximum connection wait time per site",
                 ft.Slider(
                     value=float(state.timeout),
-                    min=5, max=60, divisions=11,
+                    min=5,
+                    max=60,
+                    divisions=11,
                     label=f"{state.timeout}s",
                     active_color=AppColors.PRIMARY,
                     on_change=lambda e: _on_timeout_change(str(int(e.control.value))),
@@ -642,38 +654,51 @@ def SettingsScreen() -> Control:
     )
 
     # Extra cards: Network & Enrichment
-    network_card = _settings_card([
-        ft.Container(
-            content=ft.TextField(
-                value=state.proxy_url,
-                hint_text="socks5://127.0.0.1:1080 or http://proxy:8080 (empty = direct)",
-                label="Proxy URL",
-                prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
-                border_radius=tokens.RADIUS_SM,
-                text_size=tokens.FONT_SM,
-                content_padding=tokens.SPACE_SM,
-                focused_border_color=ft.Colors.PRIMARY,
-                bgcolor=ft.Colors.SURFACE,
-                filled=True,
-                on_submit=lambda e: _on_proxy_change(e.control.value),
-                on_blur=lambda e: _on_proxy_change(e.control.value),
+    network_card = _settings_card(
+        [
+            ft.Container(
+                content=ft.TextField(
+                    value=state.proxy_url,
+                    hint_text="socks5://127.0.0.1:1080 or http://proxy:8080 (empty = direct)",
+                    label="Proxy URL",
+                    prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
+                    border_radius=tokens.RADIUS_SM,
+                    text_size=tokens.FONT_SM,
+                    content_padding=tokens.SPACE_SM,
+                    focused_border_color=ft.Colors.PRIMARY,
+                    bgcolor=ft.Colors.SURFACE,
+                    filled=True,
+                    on_submit=lambda e: _on_proxy_change(e.control.value),
+                    on_blur=lambda e: _on_proxy_change(e.control.value),
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD
+                ),
             ),
-            padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD),
-        ),
-    ])
-    enrichment_card = _settings_card([
-        _setting_row(
-            ft.Icons.AUTO_AWESOME_ROUNDED, "Enrichment Mode", "Basic = fast (1 req/url) · Full = richer via API mutations",
-            ft.Dropdown(
-                value=state.enrichment_mode,
-                options=[ft.DropdownOption("basic", "Basic"), ft.DropdownOption("full", "Full")],
-                width=100, text_size=tokens.FONT_SM, border_radius=tokens.RADIUS_SM,
-                focused_border_color=ft.Colors.PRIMARY,
-                on_select=lambda e: _on_enrichment_mode_change(e.control.value),
-                content_padding=4,
+        ]
+    )
+    enrichment_card = _settings_card(
+        [
+            _setting_row(
+                ft.Icons.AUTO_AWESOME_ROUNDED,
+                "Enrichment Mode",
+                "Basic = fast (1 req/url) · Full = richer via API mutations",
+                ft.Dropdown(
+                    value=state.enrichment_mode,
+                    options=[
+                        ft.DropdownOption("basic", "Basic"),
+                        ft.DropdownOption("full", "Full"),
+                    ],
+                    width=100,
+                    text_size=tokens.FONT_SM,
+                    border_radius=tokens.RADIUS_SM,
+                    focused_border_color=ft.Colors.PRIMARY,
+                    on_select=lambda e: _on_enrichment_mode_change(e.control.value),
+                    content_padding=4,
+                ),
             ),
-        ),
-    ])
+        ]
+    )
 
     content = ft.ListView(
         controls=[

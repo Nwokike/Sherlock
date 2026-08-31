@@ -575,13 +575,6 @@ def HomeScreen() -> Control:
                 is_active=not state.no_password_recovery,
                 on_click=_toggle_password_recovery,
             ),
-            _category_chip(
-                icon=ft.Icons.CATEGORY_ROUNDED,
-                label="121 Platforms (23 Categories)",
-                color=AppColors.PRIMARY_LIGHT,
-                is_active=False,
-                on_click=None,
-            ),
         ]
     else:
         chips = [
@@ -923,15 +916,15 @@ def HomeScreen() -> Control:
                 ),
                 visible=not is_email_mode,
             ),
-            # Category / Quick Setting Chips (horizontal scroll, wrap on narrow)
+            # Category / Quick Setting Chips — single horizontal track that
+            # scrolls on narrow screens (never wraps to a second line).
             ft.Container(
                 content=ft.Row(
                     chips,
-                    wrap=True,
+                    wrap=False,
                     scroll=ft.ScrollMode.AUTO,
                     spacing=tokens.SPACE_SM,
-                    alignment=ft.MainAxisAlignment.START,
-                    run_spacing=tokens.SPACE_SM,
+                    alignment=ft.MainAxisAlignment.CENTER,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0

@@ -24,6 +24,61 @@ except ImportError:
     QueryNotify = None
 
 
+def _resolve_local_db() -> str:
+    """Return a real filesystem path to the site database.
+
+    Prefers the user-synced database. Otherwise falls back to the database
+    bundled with sherlock_project. On desktop the package lives in a real
+    directory, but on mobile the Flet runtime imports it from inside
+    sitepackages.zip — a zip *file*, not a folder — so naively joining
+    dirname(__file__) yields a virtual path that open() rejects with
+    [Errno 20] Not a directory. There we read the resource through the
+    package loader and materialize a copy in the app storage dir,
+    re-extracting only when the bundled content changes.
+    """
+    import hashlib
+    import os
+    import pkgutil
+
+    import sherlock_project
+    from services.storage_service import get_storage_dir
+
+    synced_path = get_storage_dir() / "synced_data.json"
+    if synced_path.exists():
+        logger.info("Using synced database: %s", synced_path)
+        return str(synced_path)
+
+    bundled = os.path.join(
+        os.path.dirname(sherlock_project.__file__), "resources", "data.json"
+    )
+    if os.path.isfile(bundled):
+        logger.info("Using local package database: %s", bundled)
+        return bundled
+
+    raw = pkgutil.get_data("sherlock_project", "resources/data.json")
+    if raw is None:
+        raise FileNotFoundError(
+            "bundled resources/data.json not found in sherlock_project"
+        )
+
+    storage = get_storage_dir()
+    storage.mkdir(parents=True, exist_ok=True)
+    db_path = storage / "bundled_data.json"
+    digest = hashlib.sha256(raw).hexdigest()
+    hash_path = storage / "bundled_data.json.sha256"
+    stored_hash = ""
+    if hash_path.exists():
+        try:
+            stored_hash = hash_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    if not (db_path.exists() and stored_hash == digest):
+        db_path.write_bytes(raw)
+        hash_path.write_text(digest, encoding="utf-8")
+    logger.info("Using local package database: %s", db_path)
+    return str(db_path)
+
+
 @dataclass
 class SiteResult:
     site_name: str
@@ -153,6 +208,7 @@ class SherlockService:
         self._site_data: dict | None = None
         self._collector: list = []
         self._last_config: tuple | None = None
+        self._total_sites: int = 0
 
     @property
     def is_available(self) -> bool:
@@ -177,42 +233,23 @@ class SherlockService:
 
         try:
             logger.info("Loading site data...")
-            import os
-            import sherlock_project
             from services.storage_service import get_storage_dir
 
             if state.custom_manifest:
                 path_arg = state.custom_manifest.strip()
                 logger.info("Using custom manifest database: %s", path_arg)
             elif state.use_local_db:
-                # On device, sherlock_project is inside sitepackages.zip — local
-                # resources/data.json path fails ([Errno 20] Not a directory).
-                # Fall through to None -> live GitHub manifest URL.
-                try_db = os.path.join(
-                    os.path.dirname(sherlock_project.__file__),
-                    "resources",
-                    "data.json",
-                )
-                if os.path.isfile(try_db):
-                    logger.info("Using local package database: %s", try_db)
-                    path_arg = try_db
-                else:
-                    # Check synced override before falling back to live URL
-                    synced_path = get_storage_dir() / "synced_data.json"
-                    if synced_path.exists():
-                        path_arg = str(synced_path)
-                        logger.info("Using synced database: %s", path_arg)
-                    else:
-                        logger.info("Local data.json not readable (zip) — using live manifest URL")
-                        path_arg = None
+                # Synced copy first, else the bundled DB (a real file on
+                # desktop; extracted from sitepackages.zip on device).
+                path_arg = _resolve_local_db()
             else:
                 synced_path = get_storage_dir() / "synced_data.json"
                 if synced_path.exists():
-                    db_path = str(synced_path)
-                    logger.info("Using synced database: %s", db_path)
-                    path_arg = db_path
+                    path_arg = str(synced_path)
+                    logger.info("Using synced database: %s", path_arg)
                 else:
                     path_arg = None
+                    logger.info("Using live manifest URL (no local DB)")
 
             sites = await asyncio.to_thread(
                 SitesInformation,
@@ -262,30 +299,17 @@ class SherlockService:
             raise RuntimeError("No valid usernames specified for scanning")
 
         # Load fresh SitesInformation based on current manifest configuration
-        import os
-        import sherlock_project
         from services.storage_service import get_storage_dir
 
         if state.custom_manifest:
             path_arg = state.custom_manifest.strip()
         elif state.use_local_db:
-            try_db = os.path.join(
-                os.path.dirname(sherlock_project.__file__),
-                "resources",
-                "data.json",
-            )
-            if os.path.isfile(try_db):
-                path_arg = try_db
-            else:
-                synced_path = get_storage_dir() / "synced_data.json"
-                path_arg = str(synced_path) if synced_path.exists() else None
+            # Synced copy first, else the bundled DB (a real file on
+            # desktop; extracted from sitepackages.zip on device).
+            path_arg = _resolve_local_db()
         else:
             synced_path = get_storage_dir() / "synced_data.json"
-            if synced_path.exists():
-                db_path = str(synced_path)
-            else:
-                db_path = None
-            path_arg = db_path
+            path_arg = str(synced_path) if synced_path.exists() else None
 
         try:
             sites = await asyncio.to_thread(

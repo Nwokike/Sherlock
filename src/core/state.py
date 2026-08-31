@@ -91,6 +91,9 @@ class AppState:
     update_available: bool = False
     update_data: dict | None = None
 
+    # --- Ad frequency ---
+    search_count: int = 0
+
     def __init__(self):
         # Collections must be assigned in __init__ so the Observable
         # __setattr__ auto-wraps them into ObservableList / ObservableDict

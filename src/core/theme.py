@@ -260,7 +260,7 @@ class AppTheme:
                 thickness=4,
                 radius=4,
             ),
-            snack_bar_theme=ft.SnackBarTheme(
+            snackbar_theme=ft.SnackBarTheme(
                 behavior=ft.SnackBarBehavior.FLOATING,
                 shape=ft.RoundedRectangleBorder(radius=12),
                 bgcolor=AppColors.DARK_SURFACE_2,
@@ -278,11 +278,9 @@ class AppTheme:
                 show_checkmark=True,
                 shape=ft.RoundedRectangleBorder(radius=20),
             ),
-            page_transitions_theme=ft.PageTransitionsTheme(
-                builders={
-                    ft.PagePlatform.ANDROID: ft.PageTransitionTheme.CUPERTINO,
-                    ft.PagePlatform.IOS: ft.PageTransitionTheme.CUPERTINO,
-                }
+            page_transitions=ft.PageTransitionsTheme(
+                android=ft.PageTransitionTheme.CUPERTINO,
+                ios=ft.PageTransitionTheme.CUPERTINO,
             ),
         )
 
@@ -313,7 +311,7 @@ class AppTheme:
                 thickness=4,
                 radius=4,
             ),
-            snack_bar_theme=ft.SnackBarTheme(
+            snackbar_theme=ft.SnackBarTheme(
                 behavior=ft.SnackBarBehavior.FLOATING,
                 shape=ft.RoundedRectangleBorder(radius=12),
                 bgcolor=AppColors.DARK_SURFACE_2,
@@ -331,10 +329,8 @@ class AppTheme:
                 show_checkmark=True,
                 shape=ft.RoundedRectangleBorder(radius=20),
             ),
-            page_transitions_theme=ft.PageTransitionsTheme(
-                builders={
-                    ft.PagePlatform.ANDROID: ft.PageTransitionTheme.CUPERTINO,
-                    ft.PagePlatform.IOS: ft.PageTransitionTheme.CUPERTINO,
-                }
+            page_transitions=ft.PageTransitionsTheme(
+                android=ft.PageTransitionTheme.CUPERTINO,
+                ios=ft.PageTransitionTheme.CUPERTINO,
             ),
         )

@@ -36,8 +36,6 @@ class AdService:
         self._can_request_ads: bool = True
         self._consent_manager = None
         self._is_shutting_down: bool = False
-        self._last_interstitial_ts: float = 0.0
-        self._search_count: int = 0
 
     @property
     def banner_id(self) -> str:
@@ -139,16 +137,10 @@ class AdService:
             await self.preload_interstitial(on_close=self._on_close)
 
     async def show_interstitial(self) -> bool:
-        """Show a preloaded interstitial with frequency capping (3 min / every 3rd search)."""
-        import time
-        self._search_count += 1
-        now = time.monotonic()
-        if now - self._last_interstitial_ts < 180 and self._search_count % 3 != 0:
-            return False
+        """Show a preloaded interstitial. Frequency is gated by the caller (every 3rd search)."""
         if self.interstitial and self._can_request_ads:
             try:
                 await self.interstitial.show()
-                self._last_interstitial_ts = time.monotonic()
                 return True
             except Exception:
                 return False

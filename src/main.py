@@ -314,11 +314,6 @@ class AppController:
         state.is_searching = True
         state.search_error = None
 
-        # Preload interstitial
-        if self.ad_service:
-            with contextlib.suppress(Exception):
-                await self.ad_service.show_interstitial()
-
         # Make sure sites are loaded before searching
         try:
             await self.sherlock_service.load_sites()
@@ -454,11 +449,6 @@ class AppController:
         state.is_searching = True
         state.search_error = None
         state.email_results.clear()
-
-        # Preload interstitial
-        if self.ad_service:
-            with contextlib.suppress(Exception):
-                await self.ad_service.show_interstitial()
 
         try:
             result = await self.email_service.search(
@@ -603,6 +593,11 @@ class AppController:
             state.history.insert(0, entry)
             if len(state.history) > 50:
                 state.history[:] = state.history[:50]
+            # Smart interstitial: every 3rd search (DDGS cadence)
+            state.search_count += 1
+            if state.search_count % 3 == 0 and self.ad_service:
+                with contextlib.suppress(Exception):
+                    await self.ad_service.show_interstitial()
         except Exception as e:
             logger.warning("Failed to save history: %s", e)
 

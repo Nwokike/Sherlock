@@ -30,13 +30,13 @@ _SLIDES = [
         ),
     },
     {
-        "icon": ft.Icons.SPEED_ROUNDED,
+        "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
         "color": AppColors.ACCENT,
-        "title": "Ultra-Fast\nOffline Scans",
+        "title": "Email OSINT\nMade Easy",
         "body": (
-            "Run high-performance asynchronous queries from the local "
-            "offline database — no site-list download first. Configure "
-            "custom timeouts for your network speed."
+            "Switch to Email mode to check 120+ platforms at once. "
+            "Uncover masked recovery emails, phone hints, full names, "
+            "account creation dates, and more."
         ),
     },
     {
@@ -54,7 +54,6 @@ _SLIDES = [
 def _build_slide(s: dict) -> ft.Column:
     return ft.Column(
         [
-            ft.Container(height=tokens.SPACE_XXXL),
             ft.Container(
                 content=ft.Icon(s["icon"], size=tokens.ICON_FEATURE, color=s["color"]),
                 width=tokens.ICON_FEATURE + 54,
@@ -70,16 +69,19 @@ def _build_slide(s: dict) -> ft.Column:
                 weight=ft.FontWeight.W_800,
                 text_align=ft.TextAlign.CENTER,
                 color=ft.Colors.ON_SURFACE,
+                font_family="Outfit",
             ),
             ft.Container(height=tokens.SPACE_MD),
             ft.Text(
                 s["body"],
                 size=tokens.FONT_MD,
-                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                color=ft.Colors.ON_SURFACE_VARIANT,
                 text_align=ft.TextAlign.CENTER,
+                font_family="Outfit",
             ),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        alignment=ft.MainAxisAlignment.CENTER,
         spacing=0,
     )
 
@@ -87,8 +89,10 @@ def _build_slide(s: dict) -> ft.Column:
 @ft.component
 def OnboardingScreen() -> Control:
     from state.app_state import AppStateCtx
+    from state.controller_ctx import ControllerMethodsCtx
 
     state = ft.use_context(AppStateCtx)
+    controller = ft.use_context(ControllerMethodsCtx)
     page_idx, set_page_idx = ft.use_state(0)
 
     is_last = page_idx == len(_SLIDES) - 1
@@ -98,10 +102,14 @@ def OnboardingScreen() -> Control:
 
         page = context.page
         try:
-            from services.storage_service import StorageService
+            if controller.set_onboarding_done:
+                await controller.set_onboarding_done()
+            else:
+                from services.storage_service import StorageService
 
-            storage = StorageService(page)
-            await storage.set(STORAGE_ONBOARDING_DONE, "true")
+                storage = StorageService(page)
+                await storage.set(STORAGE_ONBOARDING_DONE, "true")
+                await storage.flush()
         except Exception:
             pass
         state.has_accepted_terms = True
@@ -141,70 +149,88 @@ def OnboardingScreen() -> Control:
 
     return ft.Container(
         expand=True,
-        content=ft.Column(
-            [
-                # Skip button
-                ft.Row(
-                    [
-                        ft.TextButton(
-                            "Skip",
-                            on_click=_on_skip,
-                            style=ft.ButtonStyle(
-                                color=ft.Colors.with_opacity(
-                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
-                                )
-                            ),
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.END,
-                ),
-                # Swipeable slide
-                ft.GestureDetector(
-                    content=ft.Container(
-                        content=_build_slide(_SLIDES[page_idx]),
-                        expand=True,
-                        padding=ft.Padding(tokens.SPACE_XL, 0, tokens.SPACE_XL, 0),
-                    ),
-                    on_horizontal_drag_end=_on_swipe,
-                ),
-                # Dots
-                ft.Row(
-                    controls=dots,
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=tokens.SPACE_SM,
-                ),
-                ft.Container(height=tokens.SPACE_XL),
-                # CTA button
-                ft.Container(
-                    content=ft.FilledButton(
-                        content=ft.Text(
-                            "Get Started" if is_last else "Next",
-                            size=tokens.FONT_MD,
-                            weight=ft.FontWeight.W_600,
-                        ),
-                        icon=ft.Icons.CHECK_ROUNDED
-                        if is_last
-                        else ft.Icons.ARROW_FORWARD_ROUNDED,
-                        on_click=_on_next,
-                        width=220,
-                        height=52,
-                        style=ft.ButtonStyle(
-                            shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_XL),
-                        ),
-                    ),
-                    alignment=ft.Alignment.CENTER,
-                ),
-                ft.Container(height=tokens.SPACE_XXXL),
-            ],
-            expand=True,
-            spacing=0,
-        ),
         gradient=ft.LinearGradient(
             begin=ft.Alignment.TOP_CENTER,
             end=ft.Alignment.BOTTOM_CENTER,
             colors=[
                 ft.Colors.SURFACE,
-                ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.PRIMARY),
+                ft.Colors.with_opacity(0.06, AppColors.PRIMARY),
+            ],
+        ),
+        content=ft.Column(
+            expand=True,
+            spacing=0,
+            controls=[
+                # Top bar — Skip button
+                ft.Container(
+                    padding=ft.Padding(
+                        tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, 0
+                    ),
+                    content=ft.Row(
+                        alignment=ft.MainAxisAlignment.END,
+                        controls=[
+                            ft.TextButton(
+                                "Skip",
+                                on_click=_on_skip,
+                                style=ft.ButtonStyle(
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+                # Middle — swipeable slide content fills all remaining space
+                ft.Container(
+                    expand=True,
+                    alignment=ft.Alignment.CENTER,
+                    content=ft.GestureDetector(
+                        content=ft.Container(
+                            content=_build_slide(_SLIDES[page_idx]),
+                            alignment=ft.Alignment.CENTER,
+                            padding=ft.Padding(tokens.SPACE_XL, 0, tokens.SPACE_XL, 0),
+                        ),
+                        on_horizontal_drag_end=_on_swipe,
+                    ),
+                ),
+                # Bottom — dots + CTA button pinned to bottom
+                ft.Container(
+                    padding=ft.Padding(
+                        tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_XXL
+                    ),
+                    content=ft.Column(
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=tokens.SPACE_LG,
+                        controls=[
+                            # Dot indicators
+                            ft.Row(
+                                controls=dots,
+                                alignment=ft.MainAxisAlignment.CENTER,
+                                spacing=tokens.SPACE_SM,
+                            ),
+                            # CTA button
+                            ft.FilledButton(
+                                content=ft.Text(
+                                    "Get Started" if is_last else "Next",
+                                    size=tokens.FONT_MD,
+                                    weight=ft.FontWeight.W_600,
+                                    font_family="Outfit",
+                                    color=ft.Colors.WHITE,
+                                ),
+                                icon=ft.Icons.CHECK_ROUNDED
+                                if is_last
+                                else ft.Icons.ARROW_FORWARD_ROUNDED,
+                                on_click=_on_next,
+                                width=220,
+                                height=52,
+                                style=ft.ButtonStyle(
+                                    shape=ft.RoundedRectangleBorder(
+                                        radius=tokens.RADIUS_XL
+                                    ),
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
             ],
         ),
     )

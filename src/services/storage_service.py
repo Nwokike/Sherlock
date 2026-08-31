@@ -1,4 +1,4 @@
-"""Platform-resilient key-value storage service."""
+"""Platform-resilient key-value storage service matching modern Flet .flet storage standard."""
 
 from __future__ import annotations
 
@@ -13,25 +13,56 @@ import flet as ft
 
 logger = logging.getLogger(__name__)
 
-storage_env = os.getenv("FLET_APP_STORAGE_DATA")
-if storage_env:
-    _STORAGE_DIR = Path(storage_env)
-else:
-    _STORAGE_DIR = Path.home() / ".sherlock"
-
-_STORAGE_FILE = _STORAGE_DIR / "storage.json"
 _WRITE_DEBOUNCE_SEC = 1.0
 
 
+def get_storage_dir() -> Path:
+    """Resolve durable storage directory — Flet's sandbox (.flet/storage/data) or env var.
+
+    FLET_APP_STORAGE_DATA points at .flet/storage/data during `flet run`
+    and at the device sandbox on mobile. Fallback is project_root/.flet/storage/data.
+    """
+    storage_env = os.getenv("FLET_APP_STORAGE_DATA")
+    if storage_env and Path(storage_env).is_absolute():
+        return Path(storage_env)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return project_root / ".flet" / "storage" / "data"
+
+
+def get_cache_dir() -> Path:
+    """Resolve regenerable cache directory — FLET_APP_STORAGE_CACHE or .flet/storage/cache."""
+    cache_env = os.getenv("FLET_APP_STORAGE_CACHE")
+    if cache_env and Path(cache_env).is_absolute():
+        return Path(cache_env)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return project_root / ".flet" / "storage" / "cache"
+
+
+def get_temp_dir() -> Path:
+    """Resolve temporary scratch directory — FLET_APP_STORAGE_TEMP or .flet/storage/temp."""
+    temp_env = os.getenv("FLET_APP_STORAGE_TEMP")
+    if temp_env and Path(temp_env).is_absolute():
+        return Path(temp_env)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return project_root / ".flet" / "storage" / "temp"
+
+
 class StorageService:
-    def __init__(self, page: ft.Page):
+    def __init__(self, page: ft.Page | None = None, data_dir: Path | str | None = None):
         self._page = page
         self._data: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._dirty = False
         self._last_write: float = 0.0
         self._pending_write_task: asyncio.Task | None = None
-        self._is_web = bool(getattr(page, "session_id", None))
+
+        if data_dir:
+            self._storage_dir = Path(data_dir)
+        else:
+            self._storage_dir = get_storage_dir()
+
+        self._storage_file = self._storage_dir / "storage.json"
+        self._is_web = bool(getattr(page, "session_id", None)) if page else False
 
         if self._is_web:
             self._load_web()
@@ -40,22 +71,24 @@ class StorageService:
 
     def _load_web(self) -> None:
         try:
-            cs = self._page.client_storage
-            raw = cs.get("sherlock_storage")
-            self._data = json.loads(raw) if raw else {}
+            if self._page and hasattr(self._page, "client_storage"):
+                cs = self._page.client_storage
+                raw = cs.get("sherlock_storage")
+                self._data = json.loads(raw) if raw else {}
         except Exception as e:
             logger.warning("StorageService._load_web failed: %s", e)
             self._data = {}
 
     def _load(self) -> None:
-        _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-        if _STORAGE_FILE.exists():
-            try:
-                self._data = json.loads(_STORAGE_FILE.read_text(encoding="utf-8"))
-            except Exception as e:
-                logger.warning("StorageService._load failed: %s", e)
+        try:
+            self._storage_dir.mkdir(parents=True, exist_ok=True)
+            if self._storage_file.exists():
+                raw = self._storage_file.read_text(encoding="utf-8")
+                self._data = json.loads(raw) if raw else {}
+            else:
                 self._data = {}
-        else:
+        except Exception as e:
+            logger.warning("StorageService._load failed: %s", e)
             self._data = {}
 
     def _save_now(self) -> None:
@@ -63,10 +96,13 @@ class StorageService:
             self._save_now_web()
             return
         try:
-            _STORAGE_FILE.write_text(
+            self._storage_dir.mkdir(parents=True, exist_ok=True)
+            tmp_file = self._storage_file.with_suffix(".tmp")
+            tmp_file.write_text(
                 json.dumps(self._data, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            tmp_file.replace(self._storage_file)
             self._dirty = False
             self._last_write = time.monotonic()
         except Exception as e:
@@ -74,8 +110,9 @@ class StorageService:
 
     def _save_now_web(self) -> None:
         try:
-            cs = self._page.client_storage
-            cs.set("sherlock_storage", json.dumps(self._data))
+            if self._page and hasattr(self._page, "client_storage"):
+                cs = self._page.client_storage
+                cs.set("sherlock_storage", json.dumps(self._data))
             self._dirty = False
             self._last_write = time.monotonic()
         except Exception as e:
@@ -84,10 +121,14 @@ class StorageService:
     def _schedule_write(self) -> None:
         if self._pending_write_task:
             return
-        self._pending_write_task = asyncio.get_event_loop().call_later(
-            _WRITE_DEBOUNCE_SEC,
-            lambda: asyncio.get_event_loop().create_task(self._flush_task()),
-        )
+        try:
+            loop = asyncio.get_running_loop()
+            self._pending_write_task = loop.call_later(
+                _WRITE_DEBOUNCE_SEC,
+                lambda: loop.create_task(self._flush_task()),
+            )
+        except RuntimeError:
+            self._save_now()
 
     async def _flush_task(self) -> None:
         try:
@@ -115,3 +156,29 @@ class StorageService:
         async with self._lock:
             if self._dirty:
                 self._save_now()
+
+
+def load_history_entries(raw: str | None) -> list[dict]:
+    """Decode stored history (oldest-first) → newest-first for display.
+
+    Shared by HomeScreen and AppController so the reversed contract lives
+    in one place. Returns empty list on bad/missing JSON.
+    """
+    if not raw:
+        return []
+    try:
+        entries = json.loads(raw)
+        if not isinstance(entries, list):
+            return []
+        return list(reversed(entries))
+    except Exception:
+        return []
+
+
+def encode_history_entries(entries: list[dict], new_entry: dict | None = None) -> str:
+    """Encode history as oldest-first JSON for storage. Keeps last 50."""
+    out = list(entries)
+    if new_entry is not None:
+        out.append(new_entry)
+        out = out[-50:]
+    return json.dumps(out)

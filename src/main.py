@@ -1,9 +1,10 @@
 """Sherlock — main entry point and AppController.
 
 `AppController` owns the long-lived services (storage, ads, sherlock
-search engine) and the AppState observable singleton. It also builds
-the `ControllerMethods` dataclass that bridges the controller layer to
-the React-style component tree (`AppShell` and its descendants).
+search engine, email OSINT, profile enrichment) and the AppState
+observable singleton. It also builds the `ControllerMethods` dataclass
+that bridges the controller layer to the React-style component tree
+(`AppShell` and its descendants).
 
 View navigation is handled inside `AppShell` via `use_state` + injected
 controller methods. `start_search` / `_apply_progress` only mutate the
@@ -24,26 +25,36 @@ from core.constants import (
     APP_NAME,
     APP_VERSION,
     ERR_GENERIC,
+    ERR_INVALID_EMAIL,
     ERR_NETWORK,
+    MODE_EMAIL,
+    MODE_USERNAME,
     MSG_OFFLINE,
     MSG_ONLINE,
     MSG_SEARCH_OFFLINE,
     STORAGE_CACHED_SITES,
+    STORAGE_EMAIL_TIMEOUT,
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
+    STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_ONBOARDING_DONE,
+    STORAGE_SEARCH_MODE,
     STORAGE_SELECTED_SITES,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
 )
 from core.state import state
 from core.theme import AppTheme
+from components.update_dialog import show_update_dialog
 from services.ad_service import AdService
+from services.email_service import EmailService
+from services.enrich_service import EnrichService
 from services.sherlock_service import SherlockService
 from services.storage_service import StorageService
+from services.update_service import UpdateService
 from state.controller_ctx import (
     ControllerMethods,
     ControllerMethodsCtx,
@@ -60,6 +71,9 @@ class AppController:
         self.storage: StorageService | None = None
         self.ad_service: AdService | None = None
         self.sherlock_service: SherlockService | None = None
+        self.email_service: EmailService | None = None
+        self.enrich_service: EnrichService | None = None
+        self.update_service: UpdateService | None = None
         self.connectivity: ft.Connectivity | None = None
         # Main-thread event loop, captured in init(). Worker threads
         # (the sherlock scan thread) bridge progress callbacks onto it
@@ -119,16 +133,26 @@ class AppController:
         self.storage = StorageService(self.page)
         self.ad_service = AdService(self.page)
         self.sherlock_service = SherlockService()
+        self.email_service = EmailService()
+        self.enrich_service = EnrichService()
+        self.update_service = UpdateService()
 
         # Load saved state
         await self._load_saved_state()
 
-        # Preload interstitial
-        self.page.run_task(self.ad_service.preload_interstitial)
+        # Gather UMP consent then preload interstitial (Play policy)
+        async def _consent_and_preload():
+            await self.ad_service.gather_consent()
+            await self.ad_service.preload_interstitial()
+
+        self.page.run_task(_consent_and_preload)
 
         # Load sites if sherlock is available
         if self.sherlock_service.is_available:
             self.page.run_task(self._load_and_cache_sites)
+
+        # Check for remote updates / announcements in background
+        self.page.run_task(self.check_for_updates)
 
         # Mount the React-style component tree
         from app_shell import AppShell
@@ -143,7 +167,12 @@ class AppController:
             refresh_sites=refresh_sites,
             start_search=self.start_search,
             cancel_search=self.cancel_search,
+            start_email_search=self.start_email_search,
+            cancel_email_search=self.cancel_email_search,
             save_selected_sites=self.save_selected_sites,
+            check_for_updates=self.check_for_updates,
+            open_update_dialog=self.open_update_dialog,
+            set_onboarding_done=self.set_onboarding_done,
         )
         self._controller_methods = methods
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
@@ -203,6 +232,19 @@ class AppController:
 
             manifest_raw = await self.storage.get(STORAGE_MANIFEST)
             state.custom_manifest = manifest_raw if manifest_raw else ""
+
+            # Email mode settings
+            search_mode_raw = await self.storage.get(STORAGE_SEARCH_MODE)
+            if search_mode_raw in (MODE_USERNAME, MODE_EMAIL):
+                state.search_mode = search_mode_raw
+
+            email_timeout_raw = await self.storage.get(STORAGE_EMAIL_TIMEOUT)
+            if email_timeout_raw:
+                state.email_timeout = int(email_timeout_raw)
+
+            no_pw_raw = await self.storage.get(STORAGE_NO_PASSWORD_RECOVERY)
+            if no_pw_raw is not None:
+                state.no_password_recovery = no_pw_raw == "true"
 
             onboarding_done = await self.storage.get(STORAGE_ONBOARDING_DONE)
             if onboarding_done == "true":
@@ -276,10 +318,39 @@ class AppController:
             }
             state.last_results_username = username
 
-            await self._save_to_history(username, len(result.found), result.total_sites)
+            await self._save_to_history(
+                username, len(result.found), result.total_sites, mode=MODE_USERNAME
+            )
 
             # Final progress apply
             await self._apply_progress(result)
+
+            # Auto-enrich claimed profiles with socid-extractor
+            if (
+                self.enrich_service
+                and self.enrich_service.is_available
+                and result.found
+            ):
+                claimed_urls = [r.url_user for r in result.found if r.url_user]
+                if claimed_urls:
+
+                    def _on_enriched_profile(url: str, data: dict):
+                        state.set_enrichment(url, data)
+                        state.progress_version += 1
+                        try:
+                            self.page.update()
+                        except Exception:
+                            pass
+
+                    async def _enrich_task():
+                        await self.enrich_service.batch_enrich(
+                            claimed_urls,
+                            timeout=6,
+                            on_result=_on_enriched_profile,
+                            max_concurrent=4,
+                        )
+
+                    self.page.run_task(_enrich_task)
         except Exception as e:
             logger.exception("Search failed")
             state.is_searching = False
@@ -335,6 +406,125 @@ class AppController:
         if self.sherlock_service:
             self.sherlock_service.cancel()
 
+    # --- Email Search -------------------------------------------------
+
+    async def start_email_search(self, email: str) -> None:
+        """Run a holehe email OSINT search with optional enrichment."""
+        if not self.email_service or not self.email_service.is_available:
+            self._show_snack("Email search is not available.")
+            return
+
+        # Offline gate
+        if not state.is_online:
+            logger.info("Email search blocked: device offline")
+            self._show_snack(MSG_SEARCH_OFFLINE, duration=10000)
+            return
+
+        # Validate email
+        from services.email_service import validate_email
+
+        if not validate_email(email.strip()):
+            self._show_snack(ERR_INVALID_EMAIL)
+            return
+
+        state.current_username = email.strip()
+        state.is_searching = True
+        state.search_error = None
+        state.email_results.clear()
+
+        # Preload interstitial
+        if self.ad_service:
+            with contextlib.suppress(Exception):
+                await self.ad_service.show_interstitial()
+
+        try:
+            result = await self.email_service.search(
+                email=email.strip(),
+                on_progress=self._email_progress_callback,
+                timeout=state.email_timeout,
+                skip_password_recovery=state.no_password_recovery,
+            )
+            state.is_searching = False
+
+            # Convert to result list for state
+            all_results = []
+            for r in result.found + result.not_found + result.rate_limited:
+                all_results.append(
+                    {
+                        "name": r.name,
+                        "domain": r.domain,
+                        "method": r.method,
+                        "exists": r.exists,
+                        "rateLimit": r.rate_limit,
+                        "frequent_rate_limit": r.frequent_rate_limit,
+                        "emailrecovery": r.email_recovery,
+                        "phoneNumber": r.phone_number,
+                        "others": r.others,
+                    }
+                )
+            state.email_results[:] = all_results
+            state.email_results_address = email.strip()
+            state.email_found_count = len(result.found)
+            state.email_not_found_count = len(result.not_found)
+            state.email_rate_limited_count = len(result.rate_limited)
+            state.email_total_modules = result.total_modules
+
+            # Email enrichment via socid-extractor is intentionally skipped:
+            # holehe `r.domain` is a bare domain (e.g. "twitter.com"), not a
+            # profile URL. Fetching https://{domain}/ would hit the homepage and
+            # never match a socid scheme — wasted batch at 0% hit rate. Keep
+            # enrichment only for username mode where we have real profile URLs.
+
+            await self._save_to_history(
+                email.strip(),
+                len(result.found),
+                result.total_modules,
+                mode=MODE_EMAIL,
+            )
+
+            # Final progress apply
+            await self._apply_progress(result)
+        except ValueError as ve:
+            state.is_searching = False
+            self._show_snack(str(ve))
+        except Exception as e:
+            logger.exception("Email search failed")
+            state.is_searching = False
+            state.search_error = str(e)
+            msg = (
+                ERR_NETWORK
+                if any(
+                    kw in str(e).lower()
+                    for kw in (
+                        "dns",
+                        "connect",
+                        "network",
+                        "offline",
+                        "unreachable",
+                        "timeout",
+                        "timed out",
+                    )
+                )
+                else ERR_GENERIC
+            )
+            self._show_snack(msg, duration=10000)
+
+    def _email_progress_callback(self, progress) -> None:
+        """Bridge email search progress to observable state."""
+        if not self._main_loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._apply_progress(progress), self._main_loop
+            )
+        except Exception:
+            pass
+
+    def cancel_email_search(self) -> None:
+        """Cancel a running email search (sync — called from UI)."""
+        if self.email_service:
+            self.email_service.cancel()
+
     async def save_selected_sites(self, sites: list[str]) -> None:
         """Persist the network-selection scope and update observable state.
 
@@ -352,13 +542,29 @@ class AppController:
         except Exception as e:
             logger.warning("Failed to persist site selection: %s", e)
 
-    async def _save_to_history(self, username: str, found: int, total: int) -> None:
+    async def set_onboarding_done(self) -> None:
+        """Mark onboarding complete in state and immediately flush to storage."""
+        state.has_accepted_terms = True
+        state.is_first_launch = False
+        if self.storage:
+            try:
+                await self.storage.set(STORAGE_ONBOARDING_DONE, "true")
+                await self.storage.flush()
+                logger.info("Onboarding state successfully persisted")
+            except Exception as e:
+                logger.warning("Failed to persist onboarding state: %s", e)
+
+    async def _save_to_history(
+        self, query: str, found: int, total: int, mode: str = MODE_USERNAME
+    ) -> None:
         """Append a search entry to persistent history and observable state."""
         if not self.storage:
             return
         try:
             entry = {
-                "username": username,
+                "query": query,
+                "username": query,  # backward compatibility
+                "mode": mode,
                 "found": found,
                 "total": total,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M"),
@@ -375,6 +581,31 @@ class AppController:
                 state.history[:] = state.history[:50]
         except Exception as e:
             logger.warning("Failed to save history: %s", e)
+
+    # --- Updates & Announcements --------------------------------------
+
+    def open_update_dialog(self) -> None:
+        """Open update or announcement dialog using data loaded from version.json."""
+        if state.update_available and state.update_data:
+            show_update_dialog(self.page, state.update_data)
+
+    async def check_for_updates(self, notify_if_latest: bool = False) -> None:
+        """Query version.json on GitHub for updates/announcements."""
+        if not self.update_service:
+            return
+        update_info = await self.update_service.check_for_update()
+        if update_info:
+            state.update_available = True
+            state.update_data = update_info
+            state.progress_version += 1
+            if update_info.get("mandatory"):
+                self.open_update_dialog()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+        elif notify_if_latest:
+            self._show_snack(f"Sherlock v{APP_VERSION} is up to date!")
 
     # --- Errors -------------------------------------------------------
 

@@ -7,16 +7,30 @@ feature cards, how it works, and trust banner.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 import flet as ft
 from flet import Control
 
+from components.app_header import AppHeader
 from components.banner_ad import build_banner_ad
 from components.targets_card import TargetsCard
 from core import tokens
-from core.constants import MSG_OFFLINE, APP_NAME, STORAGE_HISTORY, STORAGE_THEME
+from core.constants import (
+    APP_NAME,
+    APP_VERSION,
+    MODE_EMAIL,
+    MODE_USERNAME,
+    MSG_OFFLINE,
+    STORAGE_EMAIL_TIMEOUT,
+    STORAGE_EXCLUSIONS,
+    STORAGE_HISTORY,
+    STORAGE_LOCAL_DB,
+    STORAGE_NO_PASSWORD_RECOVERY,
+    STORAGE_NSFW,
+    STORAGE_SEARCH_MODE,
+    STORAGE_TIMEOUT,
+)
 from core.theme import (
     AppColors,
     AppStyles,
@@ -32,7 +46,7 @@ logger = logging.getLogger("HomeScreen")
 
 # ── Feature cards data ─────────────────────────────────────────────────
 
-_FEATURES = [
+_FEATURES_USERNAME = [
     {
         "icon": ft.Icons.PERSON_SEARCH_ROUNDED,
         "title": "Hunt Across 400+ Networks",
@@ -53,10 +67,37 @@ _FEATURES = [
     },
 ]
 
-_STEPS = [
+_FEATURES_EMAIL = [
+    {
+        "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+        "title": "Check 120+ Platforms",
+        "desc": "Discover where an email is registered — social media, shopping, forums, CRM, and more.",
+        "color": AppColors.PRIMARY,
+    },
+    {
+        "icon": ft.Icons.SECURITY_ROUNDED,
+        "title": "Recovery Data & Leaked Hints",
+        "desc": "Uncover masked recovery emails, phone numbers, full names, and account creation dates.",
+        "color": AppColors.PRIMARY_DARK,
+    },
+    {
+        "icon": ft.Icons.CATEGORY_ROUNDED,
+        "title": "23 Categories Covered",
+        "desc": "Social media, mail providers, programming, music, shopping, forums, jobs, and more.",
+        "color": AppColors.PRIMARY_LIGHT,
+    },
+]
+
+_STEPS_USERNAME = [
     ("1", "Enter", "Type a username to hunt across social networks"),
     ("2", "Scan", "Sherlock checks 400+ platforms simultaneously"),
     ("3", "Done", "View results, export reports, or open profiles in browser"),
+]
+
+_STEPS_EMAIL = [
+    ("1", "Enter", "Type an email address to investigate"),
+    ("2", "Scan", "Checks 120+ platforms for registrations"),
+    ("3", "Done", "View where the email is used, recovery hints, and more"),
 ]
 
 
@@ -71,13 +112,13 @@ def _category_chip(
     is_active: bool,
     on_click=None,
 ) -> ft.Container:
-    """Compact filter-chip style category selector."""
+    """Compact filter-chip style category / quick-setting selector."""
     return ft.Container(
         content=ft.Row(
             [
                 ft.Icon(
                     icon,
-                    size=16,
+                    size=15,
                     color=color if is_active else ft.Colors.ON_SURFACE_VARIANT,
                 ),
                 ft.Text(
@@ -88,10 +129,10 @@ def _category_chip(
                     font_family="Outfit",
                 ),
             ],
-            spacing=4,
+            spacing=5,
             tight=True,
         ),
-        padding=ft.Padding(12, 6, 12, 6),
+        padding=ft.Padding(10, 6, 12, 6),
         border_radius=20,
         border=ft.Border.all(
             1.5 if is_active else 1,
@@ -100,6 +141,7 @@ def _category_chip(
         bgcolor=ft.Colors.with_opacity(0.1, color)
         if is_active
         else ft.Colors.TRANSPARENT,
+        ink=True if on_click else False,
         on_click=on_click,
         animate=ft.Animation(tokens.ANIM_FAST, "easeOut"),
     )
@@ -107,26 +149,30 @@ def _category_chip(
 
 @ft.memo
 def _history_row(
-    username: str,
+    query: str,
     found: int,
     total: int,
     timestamp: str,
+    mode: str = MODE_USERNAME,
     on_click=None,
 ) -> ft.Container:
-    """Compact recent search row."""
+    """Compact recent search row with mode icon."""
+    is_email = mode == MODE_EMAIL or "@" in query
+    icon = (
+        ft.Icons.ALTERNATE_EMAIL_ROUNDED if is_email else ft.Icons.PERSON_SEARCH_ROUNDED
+    )
     return ft.Container(
         content=ft.Row(
             [
-                ft.Icon(
-                    ft.Icons.PERSON_SEARCH_ROUNDED, size=16, color=AppColors.PRIMARY
-                ),
+                ft.Icon(icon, size=16, color=AppColors.PRIMARY),
                 ft.Text(
-                    username,
+                    query,
                     size=12,
                     max_lines=1,
                     overflow=ft.TextOverflow.ELLIPSIS,
                     expand=True,
                     font_family="Outfit",
+                    weight=ft.FontWeight.W_500,
                 ),
                 ft.Text(
                     f"{found}/{total}",
@@ -255,40 +301,6 @@ def _step_row(number: str, title: str, desc: str) -> ft.Row:
     )
 
 
-def _make_compact_dropdown(label, icon, value, options, on_change, width=140):
-    return ft.Column(
-        [
-            ft.Row(
-                [
-                    ft.Icon(icon, size=14, color=ft.Colors.ON_SURFACE_VARIANT),
-                    ft.Text(
-                        label,
-                        size=tokens.FONT_XS,
-                        color=ft.Colors.ON_SURFACE_VARIANT,
-                        font_family="Outfit",
-                        weight=ft.FontWeight.W_500,
-                    ),
-                ],
-                spacing=4,
-                tight=True,
-            ),
-            ft.Dropdown(
-                value=value,
-                options=options,
-                on_select=on_change,
-                filled=True,
-                text_size=tokens.FONT_XS,
-                content_padding=ft.Padding(left=10, top=4, right=10, bottom=4),
-                border_radius=tokens.RADIUS_MD,
-                width=width,
-                height=36,
-            ),
-        ],
-        spacing=2,
-        tight=True,
-    )
-
-
 # ── Main screen ───────────────────────────────────────────────────────
 
 
@@ -299,9 +311,10 @@ def HomeScreen() -> Control:
     controller = ft.use_context(ControllerMethodsCtx)
 
     search_query, set_search_query = ft.use_state("")
-    active_chip, set_active_chip = ft.use_state("all")
-    tools_expanded, set_tools_expanded = ft.use_state(False)
     theme_version, set_theme_version = ft.use_state(0)
+
+    # Mode is driven by observable state so it persists across screens
+    is_email_mode = state.search_mode == MODE_EMAIL
 
     from flet import context as flet_context
 
@@ -310,6 +323,140 @@ def HomeScreen() -> Control:
 
     def _is_dark():
         return is_dark_mode(_get_page())
+
+    # ── Mode switcher ──
+
+    def _switch_mode(new_mode: str):
+        state.search_mode = new_mode
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_SEARCH_MODE, new_mode)
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
+    # ── Quick Setting Toggles ──
+
+    def _cycle_timeout(e):
+        timeouts = [5, 10, 15, 30, 60]
+        curr = state.timeout
+        next_val = (
+            timeouts[(timeouts.index(curr) + 1) % len(timeouts)]
+            if curr in timeouts
+            else 10
+        )
+        state.timeout = next_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_TIMEOUT, str(next_val))
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
+    def _cycle_email_timeout(e):
+        timeouts = [5, 10, 15, 30]
+        curr = state.email_timeout
+        next_val = (
+            timeouts[(timeouts.index(curr) + 1) % len(timeouts)]
+            if curr in timeouts
+            else 10
+        )
+        state.email_timeout = next_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_EMAIL_TIMEOUT, str(next_val))
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
+    def _toggle_local_db(e):
+        new_val = not state.use_local_db
+        state.use_local_db = new_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_LOCAL_DB, "true" if new_val else "false")
+                if controller.refresh_sites:
+                    await controller.refresh_sites()
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
+    def _toggle_nsfw(e):
+        new_val = not state.nsfw_enabled
+        state.nsfw_enabled = new_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_NSFW, "true" if new_val else "false")
+                if controller.refresh_sites:
+                    await controller.refresh_sites()
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
+    def _toggle_exclusions(e):
+        new_val = not state.ignore_exclusions
+        state.ignore_exclusions = new_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_EXCLUSIONS, "true" if new_val else "false")
+                if controller.refresh_sites:
+                    await controller.refresh_sites()
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
+    def _toggle_password_recovery(e):
+        new_val = not state.no_password_recovery
+        state.no_password_recovery = new_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(
+                    STORAGE_NO_PASSWORD_RECOVERY, "true" if new_val else "false"
+                )
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
 
     # ── Search logic ──
 
@@ -320,9 +467,22 @@ def HomeScreen() -> Control:
 
         async def _run():
             controller.show_results()
-            await controller.start_search(query)
+            if state.search_mode == MODE_EMAIL:
+                await controller.start_email_search(query)
+            else:
+                await controller.start_search(query)
 
         asyncio.create_task(_run())
+
+    def _on_input_change(e):
+        value = e.control.value or ""
+        set_search_query(value)
+
+    def _maybe_switch_to_email(value: str):
+        """Only auto-switch when pasted value is a clear email, not on typing."""
+        from services.email_service import validate_email
+        if state.search_mode == MODE_USERNAME and validate_email(value.strip()):
+            _switch_mode(MODE_EMAIL)
 
     def _on_paste(e):
         async def _paste():
@@ -330,67 +490,44 @@ def HomeScreen() -> Control:
                 clipboard = ft.Clipboard()
                 text = await clipboard.get()
                 if text:
-                    set_search_query(text.strip())
+                    value = text.strip()
+                    set_search_query(value)
+                    _maybe_switch_to_email(value)
             except Exception:
                 pass
 
         asyncio.create_task(_paste())
 
-    def _on_history_click(username: str):
-        set_search_query(username)
-        _on_search()
+    def _on_history_click(entry: dict):
+        query = entry.get("query") or entry.get("username") or ""
+        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
+        if not query:
+            return
+        if state.search_mode != mode:
+            _switch_mode(mode)
+        set_search_query(query)
+        controller.show_results()
 
-    # ── Theme toggle ──
+        async def _run_hist():
+            if mode == MODE_EMAIL:
+                await controller.start_email_search(query)
+            else:
+                await controller.start_search(query)
 
-    def _toggle_theme(e):
-        page = _get_page()
-        if page.theme_mode == ft.ThemeMode.DARK:
-            new_mode = ft.ThemeMode.LIGHT
-            theme_val = "light"
-        elif page.theme_mode == ft.ThemeMode.LIGHT:
-            new_mode = ft.ThemeMode.SYSTEM
-            theme_val = "system"
-        else:
-            new_mode = ft.ThemeMode.DARK
-            theme_val = "dark"
-        page.theme_mode = new_mode
-        state.theme_mode = new_mode
-        set_theme_version(theme_version + 1)
-
-        # Persist theme preference
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(page)
-                await storage.set(STORAGE_THEME, theme_val)
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
-
-    def _get_theme_icon():
-        page = _get_page()
-        if page.theme_mode == ft.ThemeMode.DARK:
-            return ft.Icons.DARK_MODE_ROUNDED
-        elif page.theme_mode == ft.ThemeMode.LIGHT:
-            return ft.Icons.LIGHT_MODE_ROUNDED
-        return ft.Icons.SETTINGS_SYSTEM_DAYDREAM_ROUNDED
+        asyncio.create_task(_run_hist())
 
     # ── Load history on mount ──
     def _load_history():
         async def _fetch():
             try:
-                from services.storage_service import StorageService
+                from services.storage_service import StorageService, load_history_entries
 
                 storage = StorageService(_get_page())
                 raw = await storage.get(STORAGE_HISTORY)
-                if raw:
-                    entries = json.loads(raw)
-                    # Contract: storage is oldest-first; observable
-                    # state.history is ALWAYS newest-first (display order).
+                entries = load_history_entries(raw)
+                if entries:
                     state.history.clear()
-                    state.history.extend(reversed(entries))
+                    state.history.extend(entries)
             except Exception:
                 pass
 
@@ -402,134 +539,161 @@ def HomeScreen() -> Control:
 
     is_dark = _is_dark()
 
-    # Category chips — real Sherlock settings
-    chips = [
-        _category_chip(
-            icon=ft.Icons.PUBLIC_ROUNDED,
-            label=f"{state.timeout}s Timeout",
-            color=AppColors.PRIMARY,
-            is_active=active_chip == "timeout",
-            on_click=lambda e: set_active_chip("timeout"),
-        ),
-        _category_chip(
-            icon=ft.Icons.FLASH_ON_ROUNDED,
-            label="Offline DB" if state.use_local_db else "Online Only",
-            color=AppColors.PRIMARY_LIGHT if state.use_local_db else AppColors.GREY,
-            is_active=active_chip == "offline",
-            on_click=lambda e: set_active_chip("offline"),
-        ),
-        _category_chip(
-            icon=ft.Icons.BLOCK_ROUNDED,
-            label="NSFW" if state.nsfw_enabled else "No NSFW",
-            color=AppColors.ERROR if state.nsfw_enabled else AppColors.GREY,
-            is_active=active_chip == "nsfw",
-            on_click=lambda e: set_active_chip("nsfw"),
-        ),
-        _category_chip(
-            icon=ft.Icons.SHIELD_ROUNDED,
-            label="Exclusions" if state.ignore_exclusions else "No Exclusions",
-            color=AppColors.WARNING if state.ignore_exclusions else AppColors.GREY,
-            is_active=active_chip == "exclusions",
-            on_click=lambda e: set_active_chip("exclusions"),
-        ),
-    ]
+    # Mode-aware category / quick settings chips
+    if is_email_mode:
+        chips = [
+            _category_chip(
+                icon=ft.Icons.TIMER_OUTLINED,
+                label=f"{state.email_timeout}s Timeout",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_email_timeout,
+            ),
+            _category_chip(
+                icon=ft.Icons.LOCK_RESET_ROUNDED
+                if not state.no_password_recovery
+                else ft.Icons.LOCK_OUTLINE_ROUNDED,
+                label="PW Recovery: ON"
+                if not state.no_password_recovery
+                else "PW Recovery: OFF",
+                color=AppColors.PRIMARY
+                if not state.no_password_recovery
+                else AppColors.GREY,
+                is_active=not state.no_password_recovery,
+                on_click=_toggle_password_recovery,
+            ),
+            _category_chip(
+                icon=ft.Icons.CATEGORY_ROUNDED,
+                label="121 Platforms (23 Categories)",
+                color=AppColors.PRIMARY_LIGHT,
+                is_active=False,
+                on_click=None,
+            ),
+        ]
+    else:
+        chips = [
+            _category_chip(
+                icon=ft.Icons.TIMER_OUTLINED,
+                label=f"{state.timeout}s Timeout",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_timeout,
+            ),
+            _category_chip(
+                icon=ft.Icons.FLASH_ON_ROUNDED,
+                label="Offline DB" if state.use_local_db else "Online DB",
+                color=AppColors.PRIMARY_LIGHT if state.use_local_db else AppColors.GREY,
+                is_active=state.use_local_db,
+                on_click=_toggle_local_db,
+            ),
+            _category_chip(
+                icon=ft.Icons.BLOCK_ROUNDED,
+                label="NSFW: ON" if state.nsfw_enabled else "NSFW: OFF",
+                color=AppColors.ERROR if state.nsfw_enabled else AppColors.GREY,
+                is_active=state.nsfw_enabled,
+                on_click=_toggle_nsfw,
+            ),
+            _category_chip(
+                icon=ft.Icons.SHIELD_ROUNDED,
+                label="Exclusions: Ignore"
+                if state.ignore_exclusions
+                else "Exclusions: Active",
+                color=AppColors.WARNING if state.ignore_exclusions else AppColors.GREY,
+                is_active=state.ignore_exclusions,
+                on_click=_toggle_exclusions,
+            ),
+        ]
 
     # Recent searches — read observable state directly (reactive), so
     # the three most recent sit on top.
     recent_rows = []
     if state.history:
         for entry in list(state.history[:3]):
-            username = entry.get("username", "")
+            q = entry.get("query") or entry.get("username", "")
             found = entry.get("found", 0)
             total = entry.get("total", 0)
             ts = entry.get("timestamp", "")
+            m = entry.get("mode", MODE_USERNAME)
             recent_rows.append(
                 _history_row(
-                    username=username,
+                    query=q,
                     found=found,
                     total=total,
                     timestamp=ts,
-                    on_click=lambda _, u=username: _on_history_click(u),
+                    mode=m,
+                    on_click=lambda _, e=entry: _on_history_click(e),
                 )
             )
 
-    # Search tools
-    tools_controls = [
-        _make_compact_dropdown(
-            "Timeout",
-            ft.Icons.TIMER_OUTLINED,
-            f"{state.timeout}s",
-            [
-                ft.DropdownOption("5", "5s"),
-                ft.DropdownOption("10", "10s"),
-                ft.DropdownOption("15", "15s"),
-                ft.DropdownOption("30", "30s"),
-                ft.DropdownOption("60", "60s"),
-            ],
-            lambda e: None,
-            width=90,
-        ),
-        _make_compact_dropdown(
-            "Offline DB",
-            ft.Icons.FLASH_ON_ROUNDED,
-            "On" if state.use_local_db else "Off",
-            [
-                ft.DropdownOption("On", "On"),
-                ft.DropdownOption("Off", "Off"),
-            ],
-            lambda e: None,
-            width=80,
-        ),
-    ]
+    # ── Version / Update Chip ──
+    is_announcement = (
+        state.update_available
+        and state.update_data
+        and state.update_data.get("type") == "announcement"
+    )
+    if state.update_available:
+        badge_color = AppColors.ACCENT if is_announcement else AppColors.PRIMARY
+        badge_text = "News" if is_announcement else "Update"
+        badge_icon = (
+            ft.Icons.CAMPAIGN_ROUNDED if is_announcement else ft.Icons.UPGRADE_ROUNDED
+        )
+        version_chip = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(badge_icon, size=13, color=badge_color),
+                    ft.Text(
+                        badge_text,
+                        size=11,
+                        weight=ft.FontWeight.W_700,
+                        color=badge_color,
+                        font_family="Outfit",
+                    ),
+                    ft.Container(
+                        width=6,
+                        height=6,
+                        border_radius=3,
+                        bgcolor=badge_color,
+                    ),
+                ],
+                spacing=4,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(7, 3, 7, 3),
+            border_radius=tokens.RADIUS_SM,
+            bgcolor=ft.Colors.with_opacity(0.12, badge_color),
+            border=ft.Border.all(1.2, badge_color),
+            ink=True,
+            tooltip="New update available — tap to view",
+            on_click=lambda e: controller.open_update_dialog(),
+        )
+    else:
+        version_chip = ft.Container(
+            content=ft.Text(
+                f"v{APP_VERSION}",
+                size=11,
+                weight=ft.FontWeight.W_500,
+                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                font_family="Outfit",
+            ),
+            padding=ft.Padding(6, 2, 6, 2),
+            border_radius=tokens.RADIUS_SM,
+            border=ft.Border.all(
+                1,
+                ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE),
+            ),
+        )
 
     # ── Assemble ──
 
     content = ft.Column(
         controls=[
             # Compact header
-            ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Row(
-                            [
-                                ft.Image(
-                                    src="icon.png",
-                                    width=28,
-                                    height=28,
-                                    color=AppColors.PRIMARY,
-                                ),
-                                ft.Text(
-                                    APP_NAME,
-                                    size=tokens.FONT_LG,
-                                    weight=ft.FontWeight.BOLD,
-                                    font_family="Outfit",
-                                ),
-                            ],
-                            spacing=8,
-                            tight=True,
-                        ),
-                        ft.Row(
-                            [
-                                ft.IconButton(
-                                    icon=_get_theme_icon(),
-                                    icon_size=20,
-                                    on_click=_toggle_theme,
-                                    tooltip="Toggle Theme",
-                                ),
-                                ft.IconButton(
-                                    icon=ft.Icons.SETTINGS_ROUNDED,
-                                    icon_size=20,
-                                    on_click=lambda e: controller.show_settings(),
-                                    tooltip="Settings",
-                                ),
-                            ],
-                            spacing=0,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
-                padding=ft.Padding(
-                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
+            AppHeader(
+                _get_page(),
+                title=APP_NAME,
+                extra_actions=[version_chip],
+                on_settings=lambda e: (
+                    controller.show_settings() if controller.show_settings else None
                 ),
             ),
             # Offline banner — reactively bound to state.is_online
@@ -557,14 +721,103 @@ def HomeScreen() -> Control:
                 bgcolor=ft.Colors.ERROR_CONTAINER,
                 visible=not state.is_online,
             ),
+            # ── Mode Switcher (Username / Email) ──
+            ft.Container(
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
+                ),
+                content=ft.Container(
+                    padding=ft.Padding(4, 4, 4, 4),
+                    border_radius=12,
+                    bgcolor=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE),
+                    border=ft.Border.all(
+                        1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)
+                    ),
+                    content=ft.Row(
+                        controls=[
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.PERSON_SEARCH_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if not is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Username",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if not is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if not is_email_mode
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=True,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                on_click=lambda e: _switch_mode(MODE_USERNAME),
+                            ),
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Email",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if is_email_mode
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=True,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                on_click=lambda e: _switch_mode(MODE_EMAIL),
+                            ),
+                        ],
+                        spacing=4,
+                    ),
+                ),
+            ),
             # Search field — modern SearchBar
             ft.Container(
                 alignment=ft.Alignment.CENTER,
                 content=ft.SearchBar(
                     value=search_query,
-                    bar_hint_text="Enter username to hunt across 400+ networks...",
+                    bar_hint_text=(
+                        "Enter email to check 120+ platforms..."
+                        if is_email_mode
+                        else "Enter username to hunt across 400+ networks..."
+                    ),
                     bar_leading=ft.Icon(
-                        ft.Icons.SEARCH_ROUNDED,
+                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                        if is_email_mode
+                        else ft.Icons.SEARCH_ROUNDED,
                         color=AppColors.PRIMARY,
                     ),
                     bar_trailing=[
@@ -601,21 +854,26 @@ def HomeScreen() -> Control:
                     ),
                     full_screen=True,
                     on_submit=lambda e: _on_search(),
-                    on_change=lambda e: set_search_query(e.control.value),
+                    on_change=_on_input_change,
                     autofocus=False,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
             ),
-            # ── Targets card — live network-scope summary ──
-            TargetsCard(
-                selected_count=len(state.selected_sites) if state.selected_sites else 0,
-                total_count=state.sites_total,
-                on_open=lambda e: controller.show_sites(),
-                page=_get_page(),
+            # ── Targets card — live network-scope summary (username mode only) ──
+            ft.Container(
+                content=TargetsCard(
+                    selected_count=len(state.selected_sites)
+                    if state.selected_sites
+                    else 0,
+                    total_count=state.sites_total,
+                    on_open=lambda e: controller.show_sites(),
+                    page=_get_page(),
+                ),
+                visible=not is_email_mode,
             ),
-            # Category chips (horizontal scroll)
+            # Category / Quick Setting Chips (horizontal scroll)
             ft.Container(
                 content=ft.Row(
                     chips,
@@ -628,117 +886,44 @@ def HomeScreen() -> Control:
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
             ),
-            # Tools toggle + search button
+            # Search button
             ft.Container(
-                content=ft.Column(
+                content=ft.Row(
                     [
-                        ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Row(
-                                        [
-                                            ft.Icon(
-                                                ft.Icons.TUNE_ROUNDED,
-                                                size=16,
-                                                color=AppColors.PRIMARY,
-                                            ),
-                                            ft.Text(
-                                                "Search Tools",
-                                                size=tokens.FONT_XS,
-                                                weight=ft.FontWeight.W_600,
-                                                color=AppColors.PRIMARY,
-                                                font_family="Outfit",
-                                            ),
-                                            ft.Icon(
-                                                ft.Icons.EXPAND_MORE_ROUNDED
-                                                if not tools_expanded
-                                                else ft.Icons.EXPAND_LESS_ROUNDED,
-                                                size=16,
-                                                color=AppColors.PRIMARY,
-                                            ),
-                                        ],
-                                        spacing=4,
-                                        alignment=ft.MainAxisAlignment.CENTER,
-                                        tight=True,
-                                    ),
-                                    on_click=lambda e: set_tools_expanded(
-                                        not tools_expanded
-                                    ),
-                                    padding=ft.Padding(12, 6, 12, 6),
-                                    border_radius=tokens.RADIUS_FULL,
-                                    border=ft.Border.all(
-                                        1,
-                                        ft.Colors.with_opacity(0.2, AppColors.PRIMARY),
-                                    ),
-                                    bgcolor=ft.Colors.with_opacity(
-                                        0.06, AppColors.PRIMARY
-                                    ),
-                                    animate=ft.Animation(
-                                        tokens.ANIM_FAST,
-                                        "easeOut",
-                                    ),
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.CENTER,
-                        ),
-                        # Tools panel
-                        ft.Container(
+                        ft.FilledButton(
                             content=ft.Row(
-                                controls=tools_controls,
-                                wrap=True,
-                                spacing=tokens.SPACE_MD,
-                                run_spacing=tokens.SPACE_SM,
-                                alignment=ft.MainAxisAlignment.CENTER,
-                            ),
-                            padding=ft.Padding(8, 10, 8, 10),
-                            border_radius=tokens.RADIUS_MD,
-                            bgcolor=ft.Colors.with_opacity(0.04, AppColors.PRIMARY),
-                            border=ft.Border.all(
-                                1, ft.Colors.with_opacity(0.08, AppColors.PRIMARY)
-                            ),
-                            visible=tools_expanded,
-                            animate=ft.Animation(
-                                tokens.ANIM_FAST,
-                                "easeOut",
-                            ),
-                        ),
-                        # Search button
-                        ft.Row(
-                            [
-                                ft.FilledButton(
-                                    content=ft.Row(
-                                        [
-                                            ft.Icon(
-                                                ft.Icons.SEARCH_ROUNDED,
-                                                size=tokens.ICON_MD,
-                                                color=ft.Colors.WHITE,
-                                            ),
-                                            ft.Text(
-                                                "Search Networks",
-                                                size=tokens.FONT_MD,
-                                                weight=ft.FontWeight.W_600,
-                                                color=ft.Colors.WHITE,
-                                                font_family="Outfit",
-                                            ),
-                                        ],
-                                        spacing=8,
-                                        tight=True,
+                                [
+                                    ft.Icon(
+                                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                        if is_email_mode
+                                        else ft.Icons.SEARCH_ROUNDED,
+                                        size=tokens.ICON_MD,
+                                        color=ft.Colors.WHITE,
                                     ),
-                                    on_click=lambda _: _on_search(),
-                                    style=ft.ButtonStyle(
-                                        shape=ft.RoundedRectangleBorder(
-                                            radius=tokens.RADIUS_FULL,
-                                        ),
-                                        bgcolor=AppColors.PRIMARY,
-                                        padding=ft.Padding(32, 14, 32, 14),
+                                    ft.Text(
+                                        "Search Emails"
+                                        if is_email_mode
+                                        else "Search Networks",
+                                        size=tokens.FONT_MD,
+                                        weight=ft.FontWeight.W_600,
+                                        color=ft.Colors.WHITE,
+                                        font_family="Outfit",
                                     ),
+                                ],
+                                spacing=8,
+                                tight=True,
+                            ),
+                            on_click=lambda _: _on_search(),
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(
+                                    radius=tokens.RADIUS_FULL,
                                 ),
-                            ],
-                            alignment=ft.MainAxisAlignment.CENTER,
+                                bgcolor=AppColors.PRIMARY,
+                                padding=ft.Padding(32, 14, 32, 14),
+                            ),
                         ),
                     ],
-                    spacing=tokens.SPACE_SM,
-                    horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                    alignment=ft.MainAxisAlignment.CENTER,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM
@@ -791,12 +976,14 @@ def HomeScreen() -> Control:
             ),
             # Banner ad (after recent searches) — DDGS placement
             build_banner_ad(),
-            # What Sherlock Can Do
+            # What Sherlock Can Do / Email Intelligence
             ft.Container(
                 content=ft.Column(
                     [
                         ft.Text(
-                            "What Sherlock Can Do",
+                            "What Sherlock Can Do"
+                            if not is_email_mode
+                            else "Email Intelligence",
                             size=tokens.FONT_SM,
                             weight=ft.FontWeight.W_600,
                             font_family="Outfit",
@@ -809,7 +996,9 @@ def HomeScreen() -> Control:
                                 ),
                                 margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
                             )
-                            for f in _FEATURES
+                            for f in (
+                                _FEATURES_EMAIL if is_email_mode else _FEATURES_USERNAME
+                            )
                         ],
                     ],
                     spacing=0,
@@ -831,7 +1020,12 @@ def HomeScreen() -> Control:
                             font_family="Outfit",
                         ),
                         ft.Container(height=tokens.SPACE_SM),
-                        *[_step_row(n, t, d) for n, t, d in _STEPS],
+                        *[
+                            _step_row(n, t, d)
+                            for n, t, d in (
+                                _STEPS_EMAIL if is_email_mode else _STEPS_USERNAME
+                            )
+                        ],
                     ],
                     spacing=tokens.SPACE_SM,
                 ),

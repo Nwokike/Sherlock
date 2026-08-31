@@ -11,10 +11,11 @@ import logging
 import flet as ft
 from flet import Control
 
+from components.app_header import AppHeader
 from components.banner_ad import build_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
-from core.constants import STORAGE_HISTORY
+from core.constants import MODE_EMAIL, MODE_USERNAME, STORAGE_HISTORY
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -25,26 +26,38 @@ logger = logging.getLogger("HistoryScreen")
 def HistoryScreen() -> Control:
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
+    from flet import context
+
+    page = context.page
     history = state.history if state.history else []
 
     def _on_clear_all():
         async def _clear():
             try:
                 from services.storage_service import StorageService
-                from flet import context
 
-                storage = StorageService(context.page)
+                storage = StorageService(page)
                 await storage.delete(STORAGE_HISTORY)
+                await storage.flush()
             except Exception:
                 pass
             state.history.clear()
 
         asyncio.create_task(_clear())
 
-    def _on_re_search(username: str):
+    def _on_re_search(entry: dict):
+        query = entry.get("query") or entry.get("username", "")
+        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
+        if not query:
+            return
+        state.search_mode = mode
+        controller.show_results()
+
         async def _search():
-            controller.show_results()
-            await controller.start_search(username)
+            if mode == MODE_EMAIL:
+                await controller.start_email_search(query)
+            else:
+                await controller.start_search(query)
 
         asyncio.create_task(_search())
 
@@ -60,17 +73,21 @@ def HistoryScreen() -> Control:
         # recent search sits on top regardless of how this session was
         # started (fresh load vs in-app searches).
         for entry in history:
-            username = entry.get("username", "")
+            query = entry.get("query") or entry.get("username", "")
+            mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
             found = entry.get("found", 0)
             total = entry.get("total", 0)
             ts = entry.get("timestamp", "")
+            is_email = mode == MODE_EMAIL
 
             tile = ft.Container(
                 content=ft.Row(
                     controls=[
                         ft.Container(
                             content=ft.Icon(
-                                ft.Icons.PERSON_SEARCH_ROUNDED,
+                                ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                if is_email
+                                else ft.Icons.PERSON_SEARCH_ROUNDED,
                                 size=tokens.ICON_MD,
                                 color=ft.Colors.PRIMARY,
                             ),
@@ -85,7 +102,7 @@ def HistoryScreen() -> Control:
                         ft.Column(
                             controls=[
                                 ft.Text(
-                                    username,
+                                    query,
                                     size=tokens.FONT_LG,
                                     weight=ft.FontWeight.W_600,
                                 ),
@@ -98,6 +115,20 @@ def HistoryScreen() -> Control:
                                                 tokens.OPACITY_DIM,
                                                 ft.Colors.ON_SURFACE,
                                             ),
+                                        ),
+                                        ft.Text(
+                                            "·",
+                                            size=tokens.FONT_SM,
+                                            color=ft.Colors.with_opacity(
+                                                tokens.OPACITY_MUTED,
+                                                ft.Colors.ON_SURFACE,
+                                            ),
+                                        ),
+                                        ft.Text(
+                                            "Email" if is_email else "Username",
+                                            size=tokens.FONT_XS,
+                                            color=ft.Colors.PRIMARY,
+                                            weight=ft.FontWeight.W_500,
                                         ),
                                         ft.Text(
                                             "·",
@@ -126,7 +157,7 @@ def HistoryScreen() -> Control:
                             icon=ft.Icons.REFRESH_ROUNDED,
                             tooltip="Search again",
                             icon_color=ft.Colors.PRIMARY,
-                            on_click=lambda e, u=username: _on_re_search(u),
+                            on_click=lambda e, ent=entry: _on_re_search(ent),
                         ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -146,6 +177,8 @@ def HistoryScreen() -> Control:
                     ),
                 ),
                 margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
+                ink=True,
+                on_click=lambda e, ent=entry: _on_re_search(ent),
             )
             items.append(tile)
 
@@ -158,8 +191,28 @@ def HistoryScreen() -> Control:
             ),
         )
 
+    header_actions = []
+    if history:
+        header_actions.append(
+            ft.IconButton(
+                icon=ft.Icons.DELETE_SWEEP_OUTLINED,
+                tooltip="Clear History",
+                icon_color=ft.Colors.ERROR,
+                on_click=lambda e: _on_clear_all(),
+            )
+        )
+
     return ft.Column(
         controls=[
+            AppHeader(
+                page,
+                title="History",
+                subtitle="Recent searches & targets",
+                on_settings=lambda e: (
+                    controller.show_settings() if controller.show_settings else None
+                ),
+                extra_actions=header_actions,
+            ),
             ft.Container(content=body, expand=True),
             build_banner_ad(),
         ],

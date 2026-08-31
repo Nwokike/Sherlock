@@ -152,30 +152,41 @@ class SherlockService:
         self._progress: SearchProgress | None = None
         self._site_data: dict | None = None
         self._collector: list = []
-        self._total_sites = 0
+        self._last_config: tuple | None = None
 
     @property
     def is_available(self) -> bool:
         return _SHERLOCK_AVAILABLE
 
-    async def load_sites(self) -> int:
+    async def load_sites(self, force: bool = False) -> int:
         """Load site data. Returns number of sites loaded."""
         if not _SHERLOCK_AVAILABLE:
             return 0
+
+        from core.state import state
+
+        config = (
+            state.custom_manifest.strip() if state.custom_manifest else "",
+            state.use_local_db,
+            state.ignore_exclusions,
+            state.nsfw_enabled,
+        )
+
+        if not force and self._site_data is not None and self._last_config == config:
+            return self._total_sites
+
         try:
             logger.info("Loading site data...")
             import os
-            from pathlib import Path
-
             import sherlock_project
-            from core.state import state
+            from services.storage_service import get_storage_dir
 
             if state.custom_manifest:
                 path_arg = state.custom_manifest.strip()
                 logger.info("Using custom manifest database: %s", path_arg)
             else:
                 # Determine local database path
-                synced_path = Path.home() / ".sherlock" / "synced_data.json"
+                synced_path = get_storage_dir() / "synced_data.json"
                 if synced_path.exists():
                     db_path = str(synced_path)
                     logger.info("Using synced database: %s", db_path)
@@ -201,6 +212,7 @@ class SherlockService:
             site_data = {site.name: site.information for site in sites}
             self._site_data = site_data
             self._total_sites = len(site_data)
+            self._last_config = config
 
             # Publish to observable state so SitesScreen / TargetsCard
             # re-render the moment names arrive. Populating the cache
@@ -237,14 +249,13 @@ class SherlockService:
 
         # Load fresh SitesInformation based on current manifest configuration
         import os
-        from pathlib import Path
-
         import sherlock_project
+        from services.storage_service import get_storage_dir
 
         if state.custom_manifest:
             path_arg = state.custom_manifest.strip()
         else:
-            synced_path = Path.home() / ".sherlock" / "synced_data.json"
+            synced_path = get_storage_dir() / "synced_data.json"
             if synced_path.exists():
                 db_path = str(synced_path)
             else:

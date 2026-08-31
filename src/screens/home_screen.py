@@ -16,7 +16,7 @@ from flet import Control
 from components.banner_ad import build_banner_ad
 from components.targets_card import TargetsCard
 from core import tokens
-from core.constants import MSG_OFFLINE, APP_NAME, STORAGE_HISTORY, STORAGE_THEME
+from core.constants import MSG_OFFLINE, APP_NAME, STORAGE_HISTORY, STORAGE_THEME, MODE_USERNAME, MODE_EMAIL, STORAGE_SEARCH_MODE
 from core.theme import (
     AppColors,
     AppStyles,
@@ -32,7 +32,7 @@ logger = logging.getLogger("HomeScreen")
 
 # ── Feature cards data ─────────────────────────────────────────────────
 
-_FEATURES = [
+_FEATURES_USERNAME = [
     {
         "icon": ft.Icons.PERSON_SEARCH_ROUNDED,
         "title": "Hunt Across 400+ Networks",
@@ -53,10 +53,37 @@ _FEATURES = [
     },
 ]
 
-_STEPS = [
+_FEATURES_EMAIL = [
+    {
+        "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+        "title": "Check 120+ Platforms",
+        "desc": "Discover where an email is registered — social media, shopping, forums, CRM, and more.",
+        "color": AppColors.PRIMARY,
+    },
+    {
+        "icon": ft.Icons.SECURITY_ROUNDED,
+        "title": "Recovery Data & Leaked Hints",
+        "desc": "Uncover masked recovery emails, phone numbers, full names, and account creation dates.",
+        "color": AppColors.PRIMARY_DARK,
+    },
+    {
+        "icon": ft.Icons.CATEGORY_ROUNDED,
+        "title": "23 Categories Covered",
+        "desc": "Social media, mail providers, programming, music, shopping, forums, jobs, and more.",
+        "color": AppColors.PRIMARY_LIGHT,
+    },
+]
+
+_STEPS_USERNAME = [
     ("1", "Enter", "Type a username to hunt across social networks"),
     ("2", "Scan", "Sherlock checks 400+ platforms simultaneously"),
     ("3", "Done", "View results, export reports, or open profiles in browser"),
+]
+
+_STEPS_EMAIL = [
+    ("1", "Enter", "Type an email address to investigate"),
+    ("2", "Scan", "Checks 120+ platforms for registrations"),
+    ("3", "Done", "View where the email is used, recovery hints, and more"),
 ]
 
 
@@ -303,6 +330,9 @@ def HomeScreen() -> Control:
     tools_expanded, set_tools_expanded = ft.use_state(False)
     theme_version, set_theme_version = ft.use_state(0)
 
+    # Mode is driven by observable state so it persists across screens
+    is_email_mode = state.search_mode == MODE_EMAIL
+
     from flet import context as flet_context
 
     def _get_page():
@@ -310,6 +340,21 @@ def HomeScreen() -> Control:
 
     def _is_dark():
         return is_dark_mode(_get_page())
+
+    # ── Mode switcher ──
+
+    def _switch_mode(new_mode: str):
+        state.search_mode = new_mode
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_SEARCH_MODE, new_mode)
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
 
     # ── Search logic ──
 
@@ -320,9 +365,22 @@ def HomeScreen() -> Control:
 
         async def _run():
             controller.show_results()
-            await controller.start_search(query)
+            if state.search_mode == MODE_EMAIL:
+                await controller.start_email_search(query)
+            else:
+                await controller.start_search(query)
 
         asyncio.create_task(_run())
+
+    def _on_input_change(e):
+        value = e.control.value or ""
+        set_search_query(value)
+        # Auto-detect email input and switch mode
+        if "@" in value and "." in value.split("@")[-1]:
+            if state.search_mode != MODE_EMAIL:
+                _switch_mode(MODE_EMAIL)
+        elif state.search_mode == MODE_EMAIL and "@" not in value:
+            _switch_mode(MODE_USERNAME)
 
     def _on_paste(e):
         async def _paste():
@@ -557,14 +615,101 @@ def HomeScreen() -> Control:
                 bgcolor=ft.Colors.ERROR_CONTAINER,
                 visible=not state.is_online,
             ),
+            # ── Mode Switcher (Username / Email) ──
+            ft.Container(
+                padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0),
+                content=ft.Container(
+                    padding=ft.Padding(4, 4, 4, 4),
+                    border_radius=12,
+                    bgcolor=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE),
+                    border=ft.Border.all(
+                        1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)
+                    ),
+                    content=ft.Row(
+                        controls=[
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.PERSON_SEARCH_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if not is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Username",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if not is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if not is_email_mode
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=True,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                on_click=lambda e: _switch_mode(MODE_USERNAME),
+                            ),
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Email",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if is_email_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if is_email_mode
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=True,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                on_click=lambda e: _switch_mode(MODE_EMAIL),
+                            ),
+                        ],
+                        spacing=4,
+                    ),
+                ),
+            ),
             # Search field — modern SearchBar
             ft.Container(
                 alignment=ft.Alignment.CENTER,
                 content=ft.SearchBar(
                     value=search_query,
-                    bar_hint_text="Enter username to hunt across 400+ networks...",
+                    bar_hint_text=(
+                        "Enter email to check 120+ platforms..."
+                        if is_email_mode
+                        else "Enter username to hunt across 400+ networks..."
+                    ),
                     bar_leading=ft.Icon(
-                        ft.Icons.SEARCH_ROUNDED,
+                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                        if is_email_mode
+                        else ft.Icons.SEARCH_ROUNDED,
                         color=AppColors.PRIMARY,
                     ),
                     bar_trailing=[
@@ -601,21 +746,24 @@ def HomeScreen() -> Control:
                     ),
                     full_screen=True,
                     on_submit=lambda e: _on_search(),
-                    on_change=lambda e: set_search_query(e.control.value),
+                    on_change=_on_input_change,
                     autofocus=False,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
             ),
-            # ── Targets card — live network-scope summary ──
-            TargetsCard(
-                selected_count=len(state.selected_sites) if state.selected_sites else 0,
-                total_count=state.sites_total,
-                on_open=lambda e: controller.show_sites(),
-                page=_get_page(),
+            # ── Targets card — live network-scope summary (username mode only) ──
+            ft.Container(
+                content=TargetsCard(
+                    selected_count=len(state.selected_sites) if state.selected_sites else 0,
+                    total_count=state.sites_total,
+                    on_open=lambda e: controller.show_sites(),
+                    page=_get_page(),
+                ),
+                visible=not is_email_mode,
             ),
-            # Category chips (horizontal scroll)
+            # Category chips (horizontal scroll — username mode only)
             ft.Container(
                 content=ft.Row(
                     chips,
@@ -627,6 +775,7 @@ def HomeScreen() -> Control:
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
+                visible=not is_email_mode,
             ),
             # Tools toggle + search button
             ft.Container(
@@ -709,12 +858,16 @@ def HomeScreen() -> Control:
                                     content=ft.Row(
                                         [
                                             ft.Icon(
-                                                ft.Icons.SEARCH_ROUNDED,
+                                                ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                                if is_email_mode
+                                                else ft.Icons.SEARCH_ROUNDED,
                                                 size=tokens.ICON_MD,
                                                 color=ft.Colors.WHITE,
                                             ),
                                             ft.Text(
-                                                "Search Networks",
+                                                "Search Emails"
+                                                if is_email_mode
+                                                else "Search Networks",
                                                 size=tokens.FONT_MD,
                                                 weight=ft.FontWeight.W_600,
                                                 color=ft.Colors.WHITE,
@@ -791,12 +944,14 @@ def HomeScreen() -> Control:
             ),
             # Banner ad (after recent searches) — DDGS placement
             build_banner_ad(),
-            # What Sherlock Can Do
+            # What Sherlock Can Do / Email Intelligence
             ft.Container(
                 content=ft.Column(
                     [
                         ft.Text(
-                            "What Sherlock Can Do",
+                            "What Sherlock Can Do"
+                            if not is_email_mode
+                            else "Email Intelligence",
                             size=tokens.FONT_SM,
                             weight=ft.FontWeight.W_600,
                             font_family="Outfit",
@@ -809,7 +964,9 @@ def HomeScreen() -> Control:
                                 ),
                                 margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
                             )
-                            for f in _FEATURES
+                            for f in (
+                                _FEATURES_EMAIL if is_email_mode else _FEATURES_USERNAME
+                            )
                         ],
                     ],
                     spacing=0,
@@ -831,7 +988,12 @@ def HomeScreen() -> Control:
                             font_family="Outfit",
                         ),
                         ft.Container(height=tokens.SPACE_SM),
-                        *[_step_row(n, t, d) for n, t, d in _STEPS],
+                        *[
+                            _step_row(n, t, d)
+                            for n, t, d in (
+                                _STEPS_EMAIL if is_email_mode else _STEPS_USERNAME
+                            )
+                        ],
                     ],
                     spacing=tokens.SPACE_SM,
                 ),

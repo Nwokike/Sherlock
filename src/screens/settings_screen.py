@@ -18,9 +18,11 @@ from core import tokens
 from core.constants import (
     APP_NAME,
     APP_VERSION,
+    STORAGE_EMAIL_TIMEOUT,
     STORAGE_EXCLUSIONS,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
+    STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
@@ -152,6 +154,16 @@ def SettingsScreen() -> Control:
         state.timeout = int(val)
         asyncio.create_task(_persist(STORAGE_TIMEOUT, val))
 
+    def _on_email_timeout_change(val: str):
+        state.email_timeout = int(val)
+        asyncio.create_task(_persist(STORAGE_EMAIL_TIMEOUT, val))
+
+    def _toggle_no_password_recovery(val: bool):
+        state.no_password_recovery = val
+        asyncio.create_task(
+            _persist(STORAGE_NO_PASSWORD_RECOVERY, "true" if val else "false")
+        )
+
     async def _persist(key: str, value: str):
         from flet import context
         from services.storage_service import StorageService
@@ -217,6 +229,47 @@ def SettingsScreen() -> Control:
                 ft.Switch(
                     value=state.ignore_exclusions,
                     on_change=lambda e: _toggle_exclusions(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
+                ),
+            ),
+        ]
+    )
+
+    # Email Intelligence
+    email_card = _settings_card(
+        [
+            _setting_row(
+                ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+                "Email Request Timeout",
+                "Max wait time per email check (holehe)",
+                ft.Dropdown(
+                    value=str(state.email_timeout),
+                    options=[
+                        ft.DropdownOption("5", "5s"),
+                        ft.DropdownOption("10", "10s"),
+                        ft.DropdownOption("15", "15s"),
+                        ft.DropdownOption("30", "30s"),
+                    ],
+                    width=80,
+                    height=44,
+                    text_size=tokens.FONT_SM,
+                    border_radius=tokens.RADIUS_SM,
+                    focused_border_color=ft.Colors.PRIMARY,
+                    on_select=lambda e: _on_email_timeout_change(e.control.value),
+                    content_padding=4,
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.PASSWORD_ROUNDED,
+                "Skip Password Recovery",
+                "Exclude password-recovery checks (faster, fewer hints)",
+                ft.Switch(
+                    value=state.no_password_recovery,
+                    on_change=lambda e: _toggle_no_password_recovery(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
             ),
@@ -366,7 +419,7 @@ def SettingsScreen() -> Control:
                         ),
                         ft.Container(height=tokens.SPACE_XS),
                         ft.Text(
-                            "A user-friendly UI for the\nopen-source Sherlock Project.",
+                            "A UI for Sherlock & holehe.\nUsername & Email OSINT made easy.",
                             size=tokens.FONT_SM,
                             color=ft.Colors.with_opacity(
                                 tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
@@ -397,6 +450,8 @@ def SettingsScreen() -> Control:
             scan_card,
             # Banner ad (mid-column) — DDGS placement
             build_banner_ad(),
+            SectionHeader("EMAIL INTELLIGENCE"),
+            email_card,
             SectionHeader("CONNECTION & SPEED"),
             performance_card,
             SectionHeader("CUSTOM MANIFEST"),

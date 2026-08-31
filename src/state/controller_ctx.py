@@ -46,6 +46,8 @@ class ControllerMethods:
     refresh_sites: Callable[[], Awaitable[None]] = _noop_async
     start_search: Callable[[str], Awaitable[None]] = _noop_search
     cancel_search: Callable[[], None] = _noop_sync
+    start_email_search: Callable[[str], Awaitable[None]] = _noop_search
+    cancel_email_search: Callable[[], None] = _noop_sync
     save_selected_sites: Callable[[list[str]], Awaitable[None]] = _noop_save_sites
 
     # AppShell-populated (view-local, sync closures)
@@ -60,3 +62,4 @@ class ControllerMethods:
 ControllerMethodsCtx = ft.create_context(ControllerMethods())
 
 __all__ = ["ControllerMethods", "ControllerMethodsCtx"]
+

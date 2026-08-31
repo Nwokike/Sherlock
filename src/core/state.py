@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import flet as ft
 
+from core.constants import MODE_USERNAME
+
 
 @ft.observable
 class AppState:
@@ -16,6 +18,10 @@ class AppState:
     # handlers in main.py mutate this — UI gates (offline banner, search
     # gate) re-render reactively when it flips.
     is_online: bool = True
+
+    # --- Search mode ---
+    # "username" (sherlock-project) or "email" (holehe)
+    search_mode: str = MODE_USERNAME
 
     # --- Current search ---
     current_username: str = ""
@@ -37,6 +43,19 @@ class AppState:
     not_found_count: int = 0
     error_count: int = 0
 
+    # --- Email OSINT results ---
+    # Stores list of holehe result dicts for the last email search
+    email_results: list | None = None
+    email_results_address: str = ""
+    email_found_count: int = 0
+    email_not_found_count: int = 0
+    email_rate_limited_count: int = 0
+    email_total_modules: int = 0
+
+    # --- Profile enrichment ---
+    # {url_or_site_name: {field: value, ...}} from socid-extractor
+    enrichments: dict | None = None
+
     # --- History ---
     history: list | None = None
 
@@ -44,6 +63,8 @@ class AppState:
     nsfw_enabled: bool = True
     ignore_exclusions: bool = False
     timeout: int = 30
+    email_timeout: int = 10
+    no_password_recovery: bool = False
     selected_sites: list[str] | None = None
     use_local_db: bool = True
     custom_manifest: str = ""
@@ -68,6 +89,8 @@ class AppState:
         self.search_targets = []
         self.target_results = {}
         self.sites_cache = []
+        self.email_results = []
+        self.enrichments = {}
         self.search_error = None
 
     def reset_search(self) -> None:
@@ -85,6 +108,9 @@ class AppState:
         self.is_online = True
         self.search_targets.clear()
         self.target_results.clear()
+        self.email_results.clear()
+        self.enrichments.clear()
 
 
 state = AppState()
+

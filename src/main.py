@@ -168,6 +168,7 @@ class AppController:
             save_selected_sites=self.save_selected_sites,
             check_for_updates=self.check_for_updates,
             open_update_dialog=self.open_update_dialog,
+            set_onboarding_done=self.set_onboarding_done,
         )
         self._controller_methods = methods
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
@@ -313,7 +314,9 @@ class AppController:
             }
             state.last_results_username = username
 
-            await self._save_to_history(username, len(result.found), result.total_sites)
+            await self._save_to_history(
+                username, len(result.found), result.total_sites, mode=MODE_USERNAME
+            )
 
             # Final progress apply
             await self._apply_progress(result)
@@ -335,14 +338,15 @@ class AppController:
                         except Exception:
                             pass
 
-                    self.page.run_task(
-                        lambda: self.enrich_service.batch_enrich(
+                    async def _enrich_task():
+                        await self.enrich_service.batch_enrich(
                             claimed_urls,
                             timeout=6,
                             on_result=_on_enriched_profile,
                             max_concurrent=4,
                         )
-                    )
+
+                    self.page.run_task(_enrich_task)
         except Exception as e:
             logger.exception("Search failed")
             state.is_searching = False
@@ -486,6 +490,7 @@ class AppController:
                 email.strip(),
                 len(result.found),
                 result.total_modules,
+                mode=MODE_EMAIL,
             )
 
             # Final progress apply
@@ -548,13 +553,29 @@ class AppController:
         except Exception as e:
             logger.warning("Failed to persist site selection: %s", e)
 
-    async def _save_to_history(self, username: str, found: int, total: int) -> None:
+    async def set_onboarding_done(self) -> None:
+        """Mark onboarding complete in state and immediately flush to storage."""
+        state.has_accepted_terms = True
+        state.is_first_launch = False
+        if self.storage:
+            try:
+                await self.storage.set(STORAGE_ONBOARDING_DONE, "true")
+                await self.storage.flush()
+                logger.info("Onboarding state successfully persisted")
+            except Exception as e:
+                logger.warning("Failed to persist onboarding state: %s", e)
+
+    async def _save_to_history(
+        self, query: str, found: int, total: int, mode: str = MODE_USERNAME
+    ) -> None:
         """Append a search entry to persistent history and observable state."""
         if not self.storage:
             return
         try:
             entry = {
-                "username": username,
+                "query": query,
+                "username": query,  # backward compatibility
+                "mode": mode,
                 "found": found,
                 "total": total,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M"),

@@ -6,8 +6,9 @@
 __pycache__/
 *.pyc
 
-# Local application storage database
+# Local application storage database & Flet dev state
 storage/
+.flet/
 
 # Build artifacts
 build/

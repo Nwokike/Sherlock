@@ -176,6 +176,8 @@ class TestProfileDetailDialog:
             page=page,
             site_name="GitHub",
             status="Claimed",
+            mode="username",
+            target_query="torvalds",
             url_user="https://github.com/torvalds",
             query_time=0.45,
             enrichment={
@@ -192,3 +194,52 @@ class TestProfileDetailDialog:
         assert any("GitHub" in (t.value or "") for t in texts)
         assert any("Linus Torvalds" in (t.value or "") for t in texts)
         assert any("Creator of Linux & Git" in (t.value or "") for t in texts)
+
+    def test_renders_email_dossier(self):
+        from components.profile_detail_dialog import show_profile_detail_dialog
+
+        class MockPage:
+            def __init__(self):
+                self.platform = ft.PagePlatform.ANDROID
+                self.dialog = None
+
+            def show_dialog(self, dlg):
+                self.dialog = dlg
+
+            def pop_dialog(self):
+                self.dialog = None
+
+        page = MockPage()
+        show_profile_detail_dialog(
+            page=page,
+            site_name="Instagram",
+            status="Claimed",
+            mode="email",
+            target_query="target@example.com",
+            url_main="https://instagram.com",
+            email_recovery="t***t@e***e.com",
+            phone_number="*******1234",
+            method="password recovery",
+        )
+        assert page.dialog is not None
+        assert isinstance(page.dialog, ft.AlertDialog)
+        texts = list(walk_texts(page.dialog))
+        assert any("Instagram" in (t.value or "") for t in texts)
+        assert any("target@example.com" in (t.value or "") for t in texts)
+        assert any("t***t@e***e.com" in (t.value or "") for t in texts)
+        assert any("*******1234" in (t.value or "") for t in texts)
+        assert any("Detection Vector" in (t.value or "") for t in texts)
+
+
+class TestAppHeader:
+    def test_renders_app_header(self):
+        from components.app_header import AppHeader
+
+        tree = AppHeader(
+            page=None,
+            title="History",
+            subtitle="Past searches",
+        )
+        texts = list(walk_texts(tree))
+        assert any("History" in (t.value or "") for t in texts)
+        assert any("Past searches" in (t.value or "") for t in texts)

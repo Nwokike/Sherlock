@@ -51,6 +51,7 @@ class ControllerMethods:
     save_selected_sites: Callable[[list[str]], Awaitable[None]] = _noop_save_sites
     check_for_updates: Callable[[], Awaitable[None]] = _noop_async
     open_update_dialog: Callable[[], None] = _noop_sync
+    set_onboarding_done: Callable[[], Awaitable[None]] = _noop_async
 
     # AppShell-populated (view-local, sync closures)
     show_results: Callable[[], None] = _noop_sync

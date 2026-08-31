@@ -354,21 +354,25 @@ def AppShell() -> Control:
             return
 
         # Dashboard: show the navigation bar
-        destinations = [
-            ft.NavigationBarDestination(icon=icon, label=label)
-            for icon, label in zip(_TAB_ICONS, _TAB_NAMES, strict=True)
-        ]
+        current_nav = page.views[0].navigation_bar
+        if isinstance(current_nav, ft.NavigationBar):
+            current_nav.selected_index = active_tab
+        else:
+            destinations = [
+                ft.NavigationBarDestination(icon=icon, label=label)
+                for icon, label in zip(_TAB_ICONS, _TAB_NAMES, strict=True)
+            ]
 
-        def _on_tab_change(e):
-            idx = e.control.selected_index
-            logger.info("Navigated to tab '%s' (index %d)", _TAB_NAMES[idx], idx)
-            set_active_tab(idx)
+            def _on_tab_change(e):
+                idx = e.control.selected_index
+                logger.info("Navigated to tab '%s' (index %d)", _TAB_NAMES[idx], idx)
+                set_active_tab(idx)
 
-        page.views[0].navigation_bar = ft.NavigationBar(
-            destinations=destinations,
-            selected_index=active_tab,
-            on_change=_on_tab_change,
-        )
+            page.views[0].navigation_bar = ft.NavigationBar(
+                destinations=destinations,
+                selected_index=active_tab,
+                on_change=_on_tab_change,
+            )
         try:
             page.update()
         except Exception:

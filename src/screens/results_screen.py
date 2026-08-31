@@ -80,6 +80,8 @@ def ResultsScreen() -> Control:
             page=page,
             site_name=r.site_name,
             status=r.status,
+            mode="username",
+            target_query=state.current_username or state.last_results_username,
             url_user=r.url_user,
             url_main=r.url_main,
             query_time=r.query_time,
@@ -93,17 +95,15 @@ def ResultsScreen() -> Control:
         if not page:
             return
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
-        enrich = (
-            state.enrichments.get(domain_url, None)
-            if state.enrichments and domain_url
-            else None
-        )
         show_profile_detail_dialog(
             page=page,
             site_name=r.get("name", "unknown"),
             status="Claimed"
             if r.get("exists")
             else ("Error" if r.get("rateLimit") else "Available"),
+            mode="email",
+            target_query=state.email_results_address
+            or (active_progress.email if hasattr(active_progress, "email") else None),
             url_user=None,
             url_main=domain_url,
             email_recovery=r.get("emailrecovery"),
@@ -112,7 +112,6 @@ def ResultsScreen() -> Control:
             method=r.get("method", ""),
             rate_limit=r.get("rateLimit", False),
             frequent_rate_limit=r.get("frequent_rate_limit", False),
-            enrichment=enrich,
         )
 
     # ── Username mode ─────────────────────────────────────────────────
@@ -219,11 +218,6 @@ def ResultsScreen() -> Control:
                     method=r.get("method", ""),
                     rate_limit=r.get("rateLimit", False),
                     frequent_rate_limit=r.get("frequent_rate_limit", False),
-                    enrichment=state.enrichments.get(
-                        f"https://{r.get('domain', '')}", None
-                    )
-                    if state.enrichments
-                    else None,
                 )
                 for r in items
             ],
@@ -234,28 +228,67 @@ def ResultsScreen() -> Control:
 
     # ── Build content based on mode ───────────────────────────────────
     if is_email_mode:
-        # Email results from state.email_results
-        all_email = list(state.email_results) if state.email_results else []
+        # Live Email streaming: if active_progress has data, read directly from it!
+        if active_progress and hasattr(active_progress, "checked_modules"):
+            raw_found = [
+                {
+                    "name": r.name,
+                    "domain": r.domain,
+                    "method": r.method,
+                    "exists": r.exists,
+                    "rateLimit": r.rate_limit,
+                    "frequent_rate_limit": r.frequent_rate_limit,
+                    "emailrecovery": r.email_recovery,
+                    "phoneNumber": r.phone_number,
+                    "others": r.others,
+                }
+                for r in active_progress.found
+            ]
+            raw_not_found = [
+                {
+                    "name": r.name,
+                    "domain": r.domain,
+                    "method": r.method,
+                    "exists": r.exists,
+                    "rateLimit": r.rate_limit,
+                    "frequent_rate_limit": r.frequent_rate_limit,
+                    "emailrecovery": r.email_recovery,
+                    "phoneNumber": r.phone_number,
+                    "others": r.others,
+                }
+                for r in active_progress.not_found
+            ]
+            raw_rate_limited = [
+                {
+                    "name": r.name,
+                    "domain": r.domain,
+                    "method": r.method,
+                    "exists": r.exists,
+                    "rateLimit": r.rate_limit,
+                    "frequent_rate_limit": r.frequent_rate_limit,
+                    "emailrecovery": r.email_recovery,
+                    "phoneNumber": r.phone_number,
+                    "others": r.others,
+                }
+                for r in active_progress.rate_limited
+            ]
+            total = active_progress.total_modules or state.email_total_modules or 121
+            checked = active_progress.checked_modules
+        else:
+            all_email = list(state.email_results) if state.email_results else []
+            raw_found = [
+                r for r in all_email if r.get("exists") and not r.get("rateLimit")
+            ]
+            raw_not_found = [
+                r for r in all_email if not r.get("exists") and not r.get("rateLimit")
+            ]
+            raw_rate_limited = [r for r in all_email if r.get("rateLimit")]
+            total = state.email_total_modules or len(all_email) or 121
+            checked = total if all_email else 0
 
-        email_found_raw = _filter_email_items(
-            [r for r in all_email if r.get("exists") and not r.get("rateLimit")]
-        )
-        email_not_found_raw = _filter_email_items(
-            [r for r in all_email if not r.get("exists") and not r.get("rateLimit")]
-        )
-        email_rate_limited_raw = _filter_email_items(
-            [r for r in all_email if r.get("rateLimit")]
-        )
-
-        total = state.email_total_modules or (len(all_email) if all_email else 0)
-
-        # Progress: use EmailSearchProgress from search_progress if available
-        email_progress = active_progress
-        checked = 0
-        if email_progress and hasattr(email_progress, "checked_modules"):
-            checked = email_progress.checked_modules
-        elif email_progress and hasattr(email_progress, "checked_sites"):
-            checked = email_progress.checked_sites
+        email_found_filtered = _filter_email_items(raw_found)
+        email_not_found_filtered = _filter_email_items(raw_not_found)
+        email_rate_limited_filtered = _filter_email_items(raw_rate_limited)
 
         tabs = ft.Tabs(
             selected_index=0,
@@ -264,10 +297,12 @@ def ResultsScreen() -> Control:
                 [
                     ft.TabBar(
                         tabs=[
-                            ft.Tab(label=f"Found ({len(email_found_raw)})"),
-                            ft.Tab(label=f"Not Found ({len(email_not_found_raw)})"),
+                            ft.Tab(label=f"Found ({len(email_found_filtered)})"),
                             ft.Tab(
-                                label=f"Rate Limited ({len(email_rate_limited_raw)})"
+                                label=f"Not Found ({len(email_not_found_filtered)})"
+                            ),
+                            ft.Tab(
+                                label=f"Rate Limited ({len(email_rate_limited_filtered)})"
                             ),
                         ],
                         scrollable=False,
@@ -285,10 +320,12 @@ def ResultsScreen() -> Control:
                     ),
                     ft.TabBarView(
                         controls=[
-                            _build_email_result_list(email_found_raw, "found"),
-                            _build_email_result_list(email_not_found_raw, "not_found"),
+                            _build_email_result_list(email_found_filtered, "found"),
                             _build_email_result_list(
-                                email_rate_limited_raw, "rate_limited"
+                                email_not_found_filtered, "not_found"
+                            ),
+                            _build_email_result_list(
+                                email_rate_limited_filtered, "rate_limited"
                             ),
                         ],
                         expand=True,
@@ -302,22 +339,21 @@ def ResultsScreen() -> Control:
 
         stats_row = ft.Row(
             controls=[
-                StatCard("Found", str(len(email_found_raw)), AppColors.SUCCESS),
+                StatCard("Found", str(len(raw_found)), AppColors.SUCCESS),
                 StatCard(
                     "Not Found",
-                    str(len(email_not_found_raw)),
+                    str(len(raw_not_found)),
                     ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
                 ),
-                StatCard(
-                    "Rate Ltd", str(len(email_rate_limited_raw)), AppColors.WARNING
-                ),
+                StatCard("Rate Ltd", str(len(raw_rate_limited)), AppColors.WARNING),
                 StatCard("Total", str(total), ft.Colors.PRIMARY),
             ],
             spacing=tokens.SPACE_SM,
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
         )
 
-        progress_label = f"Checking {checked}/{total} platforms..."
+        pct = int(checked / max(total, 1) * 100)
+        progress_label = f"Checking {checked}/{total} platforms ({pct}%)..."
 
         def cancel_callback(e):
             controller.cancel_email_search()
@@ -333,7 +369,14 @@ def ResultsScreen() -> Control:
         error_items = (
             _filter_username_items(active_progress.errors) if active_progress else []
         )
-        total = active_progress.total_sites if active_progress else 0
+        total = (
+            active_progress.total_sites if active_progress else state.sites_total or 400
+        )
+        checked = (
+            active_progress.checked_sites
+            if active_progress
+            else (total if state.last_results else 0)
+        )
 
         tabs = ft.Tabs(
             selected_index=0,
@@ -397,8 +440,8 @@ def ResultsScreen() -> Control:
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
         )
 
-        checked = active_progress.checked_sites if active_progress else 0
-        progress_label = f"Checking {checked}/{total} sites..."
+        pct = int(checked / max(total, 1) * 100)
+        progress_label = f"Checking {checked}/{total} sites ({pct}%)..."
 
         def cancel_callback(e):
             controller.cancel_search()
@@ -456,6 +499,7 @@ def ResultsScreen() -> Control:
             content=ft.Column(
                 controls=[
                     ft.ProgressBar(
+                        value=None,
                         color=ft.Colors.PRIMARY,
                         bgcolor=ft.Colors.with_opacity(
                             tokens.OPACITY_LIGHT, ft.Colors.PRIMARY

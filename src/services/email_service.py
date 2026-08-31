@@ -140,9 +140,8 @@ class EmailService:
         self._progress = progress
         on_progress(progress)
 
-        # Shared output list — each module appends its result dict
-        out: list[dict] = []
         last_update_time = time.monotonic()
+        progress_lock = asyncio.Lock()
 
         import httpx
 
@@ -154,12 +153,12 @@ class EmailService:
                 return
 
             name = module.__name__
+            local_out: list[dict] = []
             try:
-                await module(email, client, out)
+                await module(email, client, local_out)
             except Exception as exc:
                 logger.debug("Module %s failed: %s", name, exc)
-                # Append fallback error result (matches holehe's launch_module)
-                out.append(
+                local_out.append(
                     {
                         "name": name,
                         "domain": f"{name}.com",
@@ -171,23 +170,31 @@ class EmailService:
                     }
                 )
 
-            # Process the latest result added to out
-            if out:
-                raw = out[-1]
-                result = EmailResult(
-                    name=raw.get("name", name),
-                    domain=raw.get("domain", ""),
-                    method=raw.get("method", ""),
-                    exists=raw.get("exists"),
-                    rate_limit=raw.get("rateLimit", False),
-                    frequent_rate_limit=raw.get("frequent_rate_limit", False),
-                    email_recovery=raw.get("emailrecovery"),
-                    phone_number=raw.get("phoneNumber"),
-                    others=raw.get("others"),
+            if not local_out:
+                local_out.append(
+                    {
+                        "name": name,
+                        "domain": f"{name}.com",
+                        "rateLimit": False,
+                        "exists": False,
+                    }
                 )
 
-                progress.checked_modules += 1
+            raw = local_out[0]
+            result = EmailResult(
+                name=raw.get("name", name),
+                domain=raw.get("domain", ""),
+                method=raw.get("method", ""),
+                exists=raw.get("exists"),
+                rate_limit=raw.get("rateLimit", False),
+                frequent_rate_limit=raw.get("frequent_rate_limit", False),
+                email_recovery=raw.get("emailrecovery"),
+                phone_number=raw.get("phoneNumber"),
+                others=raw.get("others"),
+            )
 
+            async with progress_lock:
+                progress.checked_modules += 1
                 if result.rate_limit:
                     progress.rate_limited.append(result)
                 elif result.exists:
@@ -195,22 +202,33 @@ class EmailService:
                 else:
                     progress.not_found.append(result)
 
-                # Throttle progress updates to 250ms (4 per second)
                 now = time.monotonic()
-                if (
-                    now - last_update_time >= 0.25
-                ) or progress.checked_modules == total:
+                should_notify = (
+                    now - last_update_time >= 0.20
+                ) or progress.checked_modules == total
+                if should_notify:
                     last_update_time = now
-                    try:
-                        on_progress(progress)
-                    except Exception:
-                        pass
+
+            if should_notify:
+                try:
+                    on_progress(progress)
+                except Exception:
+                    pass
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                # Run all modules concurrently using asyncio tasks with
-                # a semaphore to avoid overwhelming the event loop
-                sem = asyncio.Semaphore(20)
+            # Use standard browser headers for httpx to reduce false-positive blocks
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            async with httpx.AsyncClient(
+                timeout=timeout, headers=headers, follow_redirects=True
+            ) as client:
+                sem = asyncio.Semaphore(15)
 
                 async def _bounded(module):
                     async with sem:

@@ -89,8 +89,10 @@ def _build_slide(s: dict) -> ft.Column:
 @ft.component
 def OnboardingScreen() -> Control:
     from state.app_state import AppStateCtx
+    from state.controller_ctx import ControllerMethodsCtx
 
     state = ft.use_context(AppStateCtx)
+    controller = ft.use_context(ControllerMethodsCtx)
     page_idx, set_page_idx = ft.use_state(0)
 
     is_last = page_idx == len(_SLIDES) - 1
@@ -100,10 +102,14 @@ def OnboardingScreen() -> Control:
 
         page = context.page
         try:
-            from services.storage_service import StorageService
+            if controller.set_onboarding_done:
+                await controller.set_onboarding_done()
+            else:
+                from services.storage_service import StorageService
 
-            storage = StorageService(page)
-            await storage.set(STORAGE_ONBOARDING_DONE, "true")
+                storage = StorageService(page)
+                await storage.set(STORAGE_ONBOARDING_DONE, "true")
+                await storage.flush()
         except Exception:
             pass
         state.has_accepted_terms = True

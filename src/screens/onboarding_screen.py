@@ -14,13 +14,15 @@ from flet import Control
 
 from core import tokens
 from core.constants import STORAGE_ONBOARDING_DONE
-from core.theme import AppColors
+from core.theme import AppColors, is_dark_mode
+from flet import context as flet_context
 
 logger = logging.getLogger("OnboardingScreen")
 
 _SLIDES = [
     {
-        "icon": ft.Icons.PERSON_SEARCH_ROUNDED,
+        "use_app_icon": True,
+        "icon": None,
         "color": AppColors.PRIMARY,
         "title": "Hunt Across\n400+ Networks",
         "body": (
@@ -52,14 +54,26 @@ _SLIDES = [
 
 
 def _build_slide(s: dict) -> ft.Column:
+    is_dark = is_dark_mode(flet_context.page)
+    if s.get("use_app_icon"):
+        icon_content = ft.Image(
+            src="/icon.svg",
+            width=tokens.ICON_FEATURE,
+            height=tokens.ICON_FEATURE,
+            color=ft.Colors.WHITE if is_dark else None,
+        )
+        bg_color = ft.Colors.with_opacity(0.10, ft.Colors.WHITE if is_dark else AppColors.PRIMARY)
+    else:
+        icon_content = ft.Icon(s["icon"], size=tokens.ICON_FEATURE, color=s["color"])
+        bg_color = ft.Colors.with_opacity(tokens.OPACITY_LIGHT, s["color"])
     return ft.Column(
         [
             ft.Container(
-                content=ft.Icon(s["icon"], size=tokens.ICON_FEATURE, color=s["color"]),
+                content=icon_content,
                 width=tokens.ICON_FEATURE + 54,
                 height=tokens.ICON_FEATURE + 54,
                 border_radius=(tokens.ICON_FEATURE + 54) // 2,
-                bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, s["color"]),
+                bgcolor=bg_color,
                 alignment=ft.Alignment.CENTER,
             ),
             ft.Container(height=tokens.SPACE_XL),

@@ -43,7 +43,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _copy_urls(e):
             try:
-                ft.HapticFeedback().medium_impact()
+                asyncio.create_task(ft.HapticFeedback().medium_impact())
             except Exception:
                 pass
 
@@ -77,7 +77,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _share_urls(e):
             try:
-                ft.HapticFeedback().light_impact()
+                asyncio.create_task(ft.HapticFeedback().light_impact())
             except Exception:
                 pass
 
@@ -111,6 +111,17 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 page.pop_dialog()
                 progress = app_state.search_progress
                 if not progress:
+                    return
+                is_email = getattr(progress, "email", None) is not None
+                if is_email:
+                    # Email export not supported via username Excel/CSV path — use email results view export
+                    from core.notify import show_snack
+
+                    show_snack(
+                        page,
+                        "Email exports use the Results copy/share actions.",
+                        bgcolor=AppColors.ERROR,
+                    )
                     return
                 username = app_state.last_results_username or "unknown"
 
@@ -438,7 +449,7 @@ def AppShell() -> Control:
 
     ft.use_effect(
         _sync_chrome,
-        [active_tab, active_view, state.has_accepted_terms],
+        [active_tab, active_view, state.has_accepted_terms, state.theme_mode, state.progress_version],
     )
 
     # --- Branching ---

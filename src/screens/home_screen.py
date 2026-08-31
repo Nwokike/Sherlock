@@ -459,7 +459,7 @@ def HomeScreen() -> Control:
             return
 
         try:
-            ft.HapticFeedback().medium_impact()
+            asyncio.create_task(ft.HapticFeedback().medium_impact())
         except Exception:
             pass
 
@@ -720,11 +720,12 @@ def HomeScreen() -> Control:
                 bgcolor=ft.Colors.ERROR_CONTAINER,
                 visible=not state.is_online,
             ),
-            # ── Mode Switcher — Material 3 SegmentedButton ──
+            # ── Mode Switcher — Material 3 SegmentedButton (centered) ──
             ft.Container(
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
                 ),
+                alignment=ft.Alignment.CENTER,
                 content=ft.SegmentedButton(
                     segments=[
                         ft.Segment(
@@ -831,14 +832,15 @@ def HomeScreen() -> Control:
                 ),
                 visible=not is_email_mode,
             ),
-            # Category / Quick Setting Chips (horizontal scroll)
+            # Category / Quick Setting Chips (horizontal scroll, wrap on narrow)
             ft.Container(
                 content=ft.Row(
                     chips,
-                    wrap=False,
+                    wrap=True,
                     scroll=ft.ScrollMode.AUTO,
                     spacing=tokens.SPACE_SM,
-                    alignment=ft.MainAxisAlignment.CENTER,
+                    alignment=ft.MainAxisAlignment.START,
+                    run_spacing=tokens.SPACE_SM,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0

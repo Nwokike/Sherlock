@@ -303,6 +303,12 @@ class AppController:
         if not self.sherlock_service:
             return
 
+        # Cancel any lingering email scan before starting username scan
+        if state.is_searching:
+            self.cancel_search()
+            self.cancel_email_search()
+            await asyncio.sleep(0.15)
+
         # Offline gate — don't launch a 400-site scan that can only
         # produce timeouts. History/settings still work offline.
         if not state.is_online:
@@ -433,6 +439,12 @@ class AppController:
         if not self.email_service or not self.email_service.is_available:
             self._show_snack("Email search is not available.")
             return
+
+        # Cancel any lingering username scan before starting email scan
+        if state.is_searching:
+            self.cancel_search()
+            self.cancel_email_search()
+            await asyncio.sleep(0.15)
 
         # Offline gate
         if not state.is_online:

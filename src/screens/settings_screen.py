@@ -33,7 +33,7 @@ from core.constants import (
     STORAGE_THEME,
     STORAGE_TIMEOUT,
 )
-from core.theme import AppColors
+from core.theme import AppColors, is_dark_mode
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -586,10 +586,10 @@ def SettingsScreen() -> Control:
                 content=ft.Column(
                     controls=[
                         ft.Image(
-                            src="icon.png",
+                            src="/icon.svg",
                             width=48,
                             height=48,
-                            border_radius=tokens.RADIUS_MD,
+                            color=ft.Colors.WHITE if is_dark_mode(page) else None,
                         ),
                         ft.Container(height=tokens.SPACE_SM),
                         ft.Text(

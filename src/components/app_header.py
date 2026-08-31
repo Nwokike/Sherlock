@@ -14,7 +14,7 @@ import flet as ft
 
 from core import tokens
 from core.constants import STORAGE_THEME
-from core.theme import AppColors
+from core.theme import is_dark_mode
 
 logger = logging.getLogger("AppHeader")
 
@@ -52,6 +52,14 @@ def AppHeader(
             mode_str = "dark"
 
         page.theme_mode = new_mode
+        # Bump observable so AppShell chrome re-syncs greedily (Asase pattern)
+        try:
+            from core.state import state
+
+            state.theme_mode = new_mode
+            state.progress_version += 1
+        except Exception:
+            pass
 
         async def _persist():
             try:
@@ -68,19 +76,16 @@ def AppHeader(
         except Exception:
             pass
 
-    # Left: icon + optional title column
+    # Left: icon + optional title column (KTV Player: use SVG everywhere, MarkItDown: tint white on dark)
+    is_dark = is_dark_mode(page)
     left_controls: list[ft.Control] = [
         ft.Container(
             content=ft.Image(
-                src="icon.png",
-                width=28,
-                height=28,
+                src="/icon.svg",
+                width=32,
+                height=32,
+                color=ft.Colors.WHITE if is_dark else None,
                 fit=ft.BoxFit.CONTAIN,
-                error_content=ft.Icon(
-                    ft.Icons.PERSON_SEARCH_ROUNDED,
-                    size=24,
-                    color=AppColors.PRIMARY,
-                ),
             ),
             width=32,
             height=32,

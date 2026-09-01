@@ -126,32 +126,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 username = app_state.last_results_username or "unknown"
 
                 try:
-                    if format_type == "xlsx":
-                        import io
-                        import pandas as pd
-
-                        output = io.BytesIO()
-                        all_results = (
-                            progress.found + progress.not_found + progress.errors
-                        )
-                        df_data = {
-                            "username": [progress.username] * len(all_results),
-                            "name": [r.site_name for r in all_results],
-                            "url_main": [r.url_main for r in all_results],
-                            "url_user": [r.url_user or r.url_main for r in all_results],
-                            "exists": [r.status for r in all_results],
-                            "http_status": [r.http_status for r in all_results],
-                            "response_time_s": [
-                                f"{r.query_time:.2f}" if r.query_time else ""
-                                for r in all_results
-                            ],
-                        }
-                        df = pd.DataFrame(df_data)
-                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                            df.to_excel(writer, index=False, sheet_name="sheet1")
-                        report_bytes = output.getvalue()
-
-                    elif format_type == "csv":
+                    if format_type == "csv":
                         import csv
                         import io
 
@@ -159,44 +134,73 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         writer = csv.writer(output)
                         writer.writerow(
                             [
-                                "Username",
-                                "Site Name",
-                                "Profile URL",
-                                "Status",
-                                "Query Time (s)",
+                                "username",
+                                "name",
+                                "url_main",
+                                "url_user",
+                                "exists",
+                                "http_status",
+                                "response_time_s",
                             ]
                         )
-                        for r in progress.found:
+                        all_results = (
+                            progress.found + progress.not_found + progress.errors
+                        )
+                        for r in all_results:
                             writer.writerow(
                                 [
                                     progress.username,
                                     r.site_name,
-                                    r.url_user,
-                                    r.status,
-                                    f"{r.query_time:.2f}" if r.query_time else "",
-                                ]
-                            )
-                        for r in progress.not_found:
-                            writer.writerow(
-                                [
-                                    progress.username,
-                                    r.site_name,
+                                    r.url_main,
                                     r.url_user or r.url_main,
                                     r.status,
-                                    f"{r.query_time:.2f}" if r.query_time else "",
-                                ]
-                            )
-                        for r in progress.errors:
-                            writer.writerow(
-                                [
-                                    progress.username,
-                                    r.site_name,
-                                    r.url_user or r.url_main,
-                                    r.status,
+                                    r.http_status,
                                     f"{r.query_time:.2f}" if r.query_time else "",
                                 ]
                             )
                         report_bytes = output.getvalue().encode("utf-8")
+
+                    elif format_type == "json":
+                        import json
+
+                        data = {
+                            "username": progress.username,
+                            "total_sites": progress.total_sites,
+                            "checked_sites": progress.checked_sites,
+                            "found": [
+                                {
+                                    "name": r.site_name,
+                                    "url_main": r.url_main,
+                                    "url_user": r.url_user,
+                                    "status": r.status,
+                                    "http_status": r.http_status,
+                                    "response_time_s": r.query_time,
+                                    "tags": getattr(r, "tags", []),
+                                }
+                                for r in progress.found
+                            ],
+                            "not_found": [
+                                {
+                                    "name": r.site_name,
+                                    "url_main": r.url_main,
+                                    "url_user": r.url_user or r.url_main,
+                                    "status": r.status,
+                                }
+                                for r in progress.not_found
+                            ],
+                            "errors": [
+                                {
+                                    "name": r.site_name,
+                                    "url_main": r.url_main,
+                                    "url_user": r.url_user or r.url_main,
+                                    "status": r.status,
+                                    "context": getattr(r, "context", None),
+                                }
+                                for r in progress.errors
+                            ],
+                        }
+                        report_bytes = json.dumps(data, indent=2).encode("utf-8")
+
                     else:
                         output = []
                         for r in progress.found:
@@ -259,24 +263,11 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     [
                         ft.ListTile(
                             title=ft.Text(
-                                "Excel Spreadsheet (.xlsx)", weight=ft.FontWeight.W_600
-                            ),
-                            subtitle=ft.Text("Full report with all columns"),
-                            leading=ft.Icon(
-                                ft.Icons.TABLE_CHART_ROUNDED, color=AppColors.PRIMARY
-                            ),
-                            on_click=lambda e: (
-                                page.pop_dialog(),
-                                _on_export_click("xlsx"),
-                            ),
-                        ),
-                        ft.ListTile(
-                            title=ft.Text(
                                 "CSV Spreadsheet (.csv)", weight=ft.FontWeight.W_600
                             ),
-                            subtitle=ft.Text("Spreadsheet compatible"),
+                            subtitle=ft.Text("Spreadsheet compatible data"),
                             leading=ft.Icon(
-                                ft.Icons.GRID_ON_ROUNDED, color=AppColors.PRIMARY
+                                ft.Icons.TABLE_CHART_ROUNDED, color=AppColors.PRIMARY
                             ),
                             on_click=lambda e: (
                                 page.pop_dialog(),
@@ -285,9 +276,22 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         ),
                         ft.ListTile(
                             title=ft.Text(
+                                "JSON Data (.json)", weight=ft.FontWeight.W_600
+                            ),
+                            subtitle=ft.Text("Structured JSON export"),
+                            leading=ft.Icon(
+                                ft.Icons.DATA_OBJECT_ROUNDED, color=AppColors.PRIMARY
+                            ),
+                            on_click=lambda e: (
+                                page.pop_dialog(),
+                                _on_export_click("json"),
+                            ),
+                        ),
+                        ft.ListTile(
+                            title=ft.Text(
                                 "Plain Text List (.txt)", weight=ft.FontWeight.W_600
                             ),
-                            subtitle=ft.Text("URLs only"),
+                            subtitle=ft.Text("Discovered URLs only"),
                             leading=ft.Icon(
                                 ft.Icons.ARTICLE_ROUNDED, color=AppColors.PRIMARY
                             ),

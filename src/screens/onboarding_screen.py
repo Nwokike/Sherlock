@@ -24,7 +24,7 @@ _SLIDES = [
         "use_app_icon": True,
         "icon": None,
         "color": AppColors.PRIMARY,
-        "title": "Hunt Across\n400+ Networks",
+        "title": "Hunt Across\n3,300+ Networks",
         "body": (
             "Scan major social platforms simultaneously — GitHub, X, "
             "Instagram, TikTok, Reddit, Spotify, and more — to find active "

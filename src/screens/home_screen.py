@@ -49,7 +49,7 @@ logger = logging.getLogger("HomeScreen")
 _FEATURES_USERNAME = [
     {
         "icon": ft.Icons.PERSON_SEARCH_ROUNDED,
-        "title": "Hunt Across 400+ Networks",
+        "title": "Hunt Across 3,300+ Networks",
         "desc": "Scan GitHub, X, Instagram, TikTok, Reddit, Spotify, and more — simultaneously.",
         "color": AppColors.PRIMARY,
     },
@@ -90,7 +90,7 @@ _FEATURES_EMAIL = [
 
 _STEPS_USERNAME = [
     ("1", "Enter", "Type a username to hunt across social networks"),
-    ("2", "Scan", "Sherlock checks 400+ platforms simultaneously"),
+    ("2", "Scan", "Sherlock checks 3,300+ platforms simultaneously"),
     ("3", "Done", "View results, export reports, or open profiles in browser"),
 ]
 

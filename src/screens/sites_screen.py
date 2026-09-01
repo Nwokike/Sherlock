@@ -241,7 +241,12 @@ def SitesScreen() -> Control:
     )
 
     body = (
-        ft.ListView(controls=items, spacing=0, expand=True)
+        ft.ListView(
+            controls=items,
+            spacing=0,
+            expand=True,
+            build_controls_on_demand=True,
+        )
         if checked_states
         else ft.Container(
             content=EmptyState(

@@ -62,7 +62,7 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
         found = list(progress.found)
         not_found = list(progress.not_found)
         errors = list(progress.errors)
-        total = progress.total_sites or state.sites_total or 400
+        total = progress.total_sites or state.sites_total or 3300
         checked = progress.checked_sites
         is_cancelled = bool(getattr(progress, "is_cancelled", False))
         is_running = bool(getattr(progress, "is_running", False))
@@ -82,7 +82,7 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
             for r in last.values()
             if getattr(r, "status", "") not in ("Claimed", "Available", "Illegal")
         ]
-        total = state.sites_total or len(last) or 400
+        total = state.sites_total or len(last) or 3300
         checked = len(last)
         is_cancelled = False
         is_running = False

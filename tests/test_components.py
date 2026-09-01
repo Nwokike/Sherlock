@@ -129,7 +129,7 @@ class TestTargetsCard:
     def test_fallback_label_when_total_unknown(self):
         tree = TargetsCard(selected_count=0, total_count=0, on_open=lambda: None)
         texts = list(walk_texts(tree))
-        assert any("400+" in (t.value or "") for t in texts)
+        assert any("3,300+" in (t.value or "") for t in texts)
 
     def test_tap_triggers_on_open(self):
         fired = []

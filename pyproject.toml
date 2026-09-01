@@ -1,18 +1,14 @@
 [project]
 name = "sherlock"
 version = "2.0.0"
-description = "Sherlock: Hunt down social media accounts by username across 400+ networks."
+description = "Sherlock: Hunt down social media accounts by username across 3,300+ networks."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "flet>=0.86.5",
     "flet-ads>=0.86.5",
-    # Pinned on purpose: sherlock-project requires stem (>=1.8.0,<2.0.0)
-    # but PyPI ships no wheel for Android cross-builds — CI precompiles
-    # this exact version and installs it via PIP_FIND_LINKS.
-    "stem==1.8.1",
-    "sherlock-project>=0.16.0",
     "holehe>=1.61",
+    "maigret>=0.6.5",
     "socid-extractor>=0.1.1",
 ]
 
@@ -29,6 +25,7 @@ startup_message = "Initializing Sherlock..."
 
 [tool.flet.android]
 bundle_id = "ng.kiri.sherlock"
+target_arch = ["arm64-v8a", "x86_64"]
 
 [tool.flet.android.manifest_application]
 usesCleartextTraffic = "true"

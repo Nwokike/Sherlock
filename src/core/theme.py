@@ -24,6 +24,10 @@ class AppColors:
     ERROR = "#D32F2F"  # Red
     GREY = "#9E9E9E"  # Neutral grey for inactive chips
 
+    # ─── LOG TERMINAL (Diagnostic Activity) ──────────────────────────────────
+    TERMINAL_BG = "#0D0D0D"  # Monospace terminal background
+    TERMINAL_GREEN = "#A6E22E"  # Monokai green terminal text
+
     # ─── DARK MODE (Premium Neutral Slate) ──────────────────────────────────
     DARK_BG_1 = "#0F1114"  # Deep Slate-Black
     DARK_BG_2 = "#121518"  # Slate Surface

@@ -7,6 +7,7 @@ Premium settings with grouped cards, modern switches, and clear hierarchy.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import flet as ft
@@ -16,6 +17,8 @@ from components.app_header import AppHeader
 from components.banner_ad import build_banner_ad
 from components.section_header import SectionHeader
 from core import tokens
+from core.logger_handler import in_memory_log_handler
+from core.notify import show_snack
 from core.constants import (
     APP_NAME,
     APP_VERSION,
@@ -677,6 +680,123 @@ def SettingsScreen() -> Control:
         ]
     )
 
+    def _open_terminal():
+        if page.dialog is not None:
+            with contextlib.suppress(Exception):
+                page.pop_dialog()
+
+        logs_list = in_memory_log_handler.get_logs()
+        log_text = ft.Text(
+            value="\n".join(logs_list)
+            if logs_list
+            else "No activity recorded yet.\nEngine, network, and UI logs will appear here.",
+            size=tokens.FONT_XS,
+            font_family="Courier New",
+            color=AppColors.TERMINAL_GREEN,
+            selectable=True,
+        )
+
+        async def _copy_logs(e):
+            try:
+                cb = ft.Clipboard()
+                current_logs = "\n".join(in_memory_log_handler.get_logs())
+                await cb.set(current_logs)
+                show_snack(page, "Logs copied to clipboard", bgcolor=AppColors.SUCCESS)
+            except Exception as exc:
+                logger.warning("Failed to copy logs: %s", exc)
+
+        def _clear_logs(e):
+            in_memory_log_handler.clear_logs()
+            log_text.value = "Logs cleared.\nNew activity will appear here."
+            page.update()
+
+        def _dismiss(e):
+            page.pop_dialog()
+
+        terminal_dlg = ft.AlertDialog(
+            modal=False,
+            title=ft.Row(
+                [
+                    ft.Icon(
+                        ft.Icons.TERMINAL_ROUNDED,
+                        color=AppColors.PRIMARY,
+                        size=tokens.ICON_MD,
+                    ),
+                    ft.Text(
+                        "Live Activity Terminal",
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.BOLD,
+                        font_family="Outfit",
+                        color=AppColors.PRIMARY,
+                    ),
+                ],
+                spacing=tokens.SPACE_SM,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            content=ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Text(
+                            "Real-time engine execution, network status, and diagnostic logs.",
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Container(height=tokens.SPACE_XS),
+                        ft.Container(
+                            content=ft.Column(
+                                [log_text],
+                                scroll=ft.ScrollMode.AUTO,
+                            ),
+                            bgcolor=AppColors.TERMINAL_BG,
+                            border=ft.Border.all(
+                                1,
+                                ft.Colors.with_opacity(
+                                    tokens.OPACITY_LIGHT, ft.Colors.WHITE
+                                ),
+                            ),
+                            border_radius=tokens.RADIUS_SM,
+                            padding=tokens.SPACE_MD,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=0,
+                ),
+                width=tokens.DIALOG_WIDTH_LG,
+                height=tokens.DIALOG_HEIGHT_LG,
+            ),
+            actions=[
+                ft.TextButton(
+                    "Copy Logs",
+                    icon=ft.Icons.COPY_ROUNDED,
+                    on_click=lambda e: asyncio.create_task(_copy_logs(e)),
+                ),
+                ft.TextButton(
+                    "Clear",
+                    icon=ft.Icons.DELETE_SWEEP_ROUNDED,
+                    on_click=_clear_logs,
+                ),
+                ft.TextButton("Close", on_click=_dismiss),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.show_dialog(terminal_dlg)
+
+    log_count = len(in_memory_log_handler.get_logs())
+    logs_card = _settings_card(
+        [
+            _setting_row(
+                ft.Icons.TERMINAL_ROUNDED,
+                "Live Activity Terminal",
+                f"{log_count} entries recorded · Real-time engine diagnostics",
+                ft.FilledButton(
+                    "Open Terminal",
+                    icon=ft.Icons.TERMINAL_ROUNDED,
+                    on_click=lambda e: _open_terminal(),
+                ),
+            ),
+        ]
+    )
+
     content = ft.ListView(
         controls=[
             ft.Container(height=tokens.SPACE_SM),
@@ -695,6 +815,8 @@ def SettingsScreen() -> Control:
             performance_card,
             SectionHeader("CUSTOM MANIFEST"),
             manifest_card,
+            SectionHeader("TROUBLESHOOTING & LOGS"),
+            logs_card,
             SectionHeader("ABOUT"),
             about_card,
             build_banner_ad(),

@@ -75,6 +75,8 @@ MESSAGE_MAX_WIDTH = 320
 BORDER_WIDTH_THIN = 0.5
 BORDER_WIDTH_DEFAULT = 1
 BORDER_WIDTH_FOCUS = 2
+DIALOG_WIDTH_LG = 420
+DIALOG_HEIGHT_LG = 480
 
 # ─── OPACITY ────────────────────────────────────────────────────────────────
 OPACITY_SUBTLE = 0.05

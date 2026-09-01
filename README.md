@@ -53,49 +53,47 @@
 
 ## Screenshots
 
-### Mobile Experience — Gold Detective Theme
-
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/home_username_dark_mobile.png" width="100%" alt="Home Dashboard — Username Mode" /></td>
-    <td width="50%"><img src="screenshots/home_email_dark_mobile.png" width="100%" alt="Home Dashboard — Email Mode" /></td>
+    <td width="50%"><img src="screenshots/home_username_search.png" width="100%" alt="Home - Username Search" /></td>
+    <td width="50%"><img src="screenshots/home_email_search.png" width="100%" alt="Home - Email Search" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Home (Username Mode) — Gold pill toggle, quick-setting chips (Timeout, Online DB, NSFW, Exclusions), and recent search typeahead.</em></td>
-    <td align="center"><em>Home (Email Mode) — Switches to email intelligence: 120+ platform scan with Timeout and Password-Recovery chips.</em></td>
+    <td align="center"><em>Username search across 400+ social networks with quick scan options.</em></td>
+    <td align="center"><em>Email lookup across 120+ platforms with password recovery checks.</em></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/results_username_dark_mobile.png" width="100%" alt="Live Username Scan Results" /></td>
-    <td width="50%"><img src="screenshots/results_email_dark_mobile.png" width="100%" alt="Email Intelligence Results" /></td>
+    <td width="50%"><img src="screenshots/results_export.png" width="100%" alt="Scan Results and Export" /></td>
+    <td width="50%"><img src="screenshots/profile_dossier.png" width="100%" alt="Social Profile Dossier" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Live Username Scan — Enriched result cards stream in real time: avatars, real names, and follower metrics populate as sites are claimed.</em></td>
-    <td align="center"><em>Email Intelligence Results — Claimed platforms with detection-method badges and masked recovery email hints.</em></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="50%"><img src="screenshots/dossier_profile_dark_mobile.png" width="100%" alt="Social Profile Dossier" /></td>
-    <td width="50%"><img src="screenshots/dossier_email_dark_mobile.png" width="100%" alt="Email Intelligence Dossier" /></td>
-  </tr>
-  <tr>
-    <td align="center"><em>Social Profile Dossier — Tap any claimed result for the full OSINT modal: avatar, bio, follower metrics, and deep links.</em></td>
-    <td align="center"><em>Email Dossier — Detection vector, masked recovery email, and recovery phone hints per platform.</em></td>
+    <td align="center"><em>Live results stream with Excel, CSV, and TXT export.</em></td>
+    <td align="center"><em>Enriched profile dossier with bio, follower count, and links.</em></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/platforms_select_dark_mobile.png" width="100%" alt="Site Platform Selection" /></td>
-    <td width="50%"><img src="screenshots/history_dark_mobile.png" width="100%" alt="Search History" /></td>
+    <td width="50%"><img src="screenshots/email_dossier.png" width="100%" alt="Email Intelligence Dossier" /></td>
+    <td width="50%"><img src="screenshots/search_history.png" width="100%" alt="Search History" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Site Platform Switcher — Prune scan scope across 400+ networks with per-site toggles.</em></td>
-    <td align="center"><em>Search History — Dual-mode entries (username & email) with swipe-to-delete, timestamps, and result counts.</em></td>
+    <td align="center"><em>Email dossier with account status and leaked recovery hints.</em></td>
+    <td align="center"><em>Search history with past results and quick re-run.</em></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/settings_preferences.png" width="100%" alt="Settings and Preferences" /></td>
+    <td width="50%"><img src="screenshots/activity_terminal.png" width="100%" alt="Live Activity Terminal" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Settings for theme, scan options, and request timeouts.</em></td>
+    <td align="center"><em>Live activity terminal showing real-time network logs.</em></td>
   </tr>
 </table>
 

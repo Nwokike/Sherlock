@@ -56,9 +56,9 @@ from core.state import state
 from core.theme import AppTheme
 from components.update_dialog import show_update_dialog
 from services.ad_service import AdService
-from services.email_service import EmailService
+from services.email_service import EmailSearchProgress, EmailService
 from services.enrich_service import EnrichService
-from services.sherlock_service import SherlockService
+from services.sherlock_service import SearchProgress, SherlockService
 from services.storage_service import StorageService
 from services.update_service import UpdateService
 from state.controller_ctx import (
@@ -96,8 +96,59 @@ class AppController:
         self._enrich_queue: asyncio.Queue[str] | None = None
         self._enriched_seen: set[str] = set()
         self._enrich_worker_task: asyncio.Task | None = None
+        # Handle of the in-flight search task (the home-screen `_run`
+        # task awaiting start_search/start_email_search) — cancelled
+        # instantly when a new search supersedes it.
+        self._search_task: asyncio.Task | None = None
 
     # --- Lifecycle ----------------------------------------------------
+
+    def _kill_all_activity(self, reason: str) -> None:
+        """Instantly kill every running search activity.
+
+        Called whenever a new search starts: the new search is the
+        priority, so both engines, their in-flight tasks and the
+        enrichment worker die regardless of `state.is_searching` (which
+        can lie — a task hung mid-await leaves it stale-True, a finished
+        scan leaves it False while background work drains). Cancelling
+        the task also means the old search's results/history tail can
+        never run and clobber the new search's state.
+
+        Note: the sherlock scan runs on a worker thread whose queued
+        HTTP requests cannot be interrupted (sherlock-project submits all
+        site checks upfront) — the drain continues in background, but the
+        collector stops ticking the moment the cancel event is set, so
+        no state or UI is affected.
+        """
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+
+        killed = []
+        if self._enrich_worker_task and not self._enrich_worker_task.done():
+            self._enrich_worker_task.cancel()
+            killed.append("enrich-worker")
+        self._enrich_queue = None
+        if hasattr(self.sherlock_service, "cancel"):
+            self.sherlock_service.cancel()
+            killed.append("sherlock-engine")
+        if hasattr(self.email_service, "cancel"):
+            self.email_service.cancel()
+            killed.append("email-engine")
+        if (
+            self._search_task
+            and self._search_task is not current
+            and not self._search_task.done()
+        ):
+            self._search_task.cancel()
+            killed.append("search-task")
+        state.is_searching = False
+        logger.info("KILL %s → cancelled: %s", reason, ", ".join(killed) or "nothing")
+
+    def _register_search_task(self) -> None:
+        """Register the calling task as the active search (killable)."""
+        self._search_task = asyncio.current_task()
 
     async def init(self) -> None:
         """Configure the page, init services, load state, mount AppShell."""
@@ -325,11 +376,10 @@ class AppController:
         if not self.sherlock_service:
             return
 
-        # Cancel any lingering email scan before starting username scan
-        if state.is_searching:
-            self.cancel_search()
-            self.cancel_email_search()
-            await asyncio.sleep(0.15)
+        # NEW SEARCH = PRIORITY: kill any prior activity instantly,
+        # whether it is still running or just draining its tail.
+        self._kill_all_activity(f"username-search[{username}]")
+        self._register_search_task()
 
         # Offline gate — don't launch a 400-site scan that can only
         # produce timeouts. History/settings still work offline.
@@ -341,6 +391,16 @@ class AppController:
         state.current_username = username
         state.is_searching = True
         state.search_error = None
+        # Reset to a fresh USERNAME-typed progress immediately: the UI
+        # switches to ResultsScreen before the first scan tick, and a
+        # stale EmailSearchProgress here crashes username-mode render.
+        username_progress = SearchProgress(username=username, is_running=True)
+        state.search_progress = username_progress
+        state.progress_version += 1
+        logger.info(
+            "WATCHDOG: username search START %r (total_sites pending)",
+            username,
+        )
 
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
@@ -350,16 +410,14 @@ class AppController:
         # Initialize streaming real-time enrichment queue & worker task
         self._enriched_seen.clear()
         self._enrich_queue = asyncio.Queue()
-        if self._enrich_worker_task and not self._enrich_worker_task.done():
-            self._enrich_worker_task.cancel()
         if self.enrich_service and self.enrich_service.is_available:
             self._enrich_worker_task = asyncio.create_task(self._drain_enrich_queue())
 
         # Make sure sites are loaded before searching
         try:
             await self.sherlock_service.load_sites()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("load_sites failed before scan: %s", e)
 
         # Bridge the thread-shed progress callbacks onto the main loop
         try:
@@ -375,9 +433,12 @@ class AppController:
                 or state.search_mode != MODE_USERNAME
             ):
                 logger.info(
-                    "Username scan for %s cancelled/superseded — ignoring results",
+                    "WATCHDOG: username search %r cancelled/superseded — ignoring results",
                     username,
                 )
+                state.is_searching = False
+                username_progress.is_running = False
+                state.progress_version += 1
                 return
 
             state.is_searching = False
@@ -386,6 +447,13 @@ class AppController:
                 for r in (result.found + result.not_found + result.errors)
             }
             state.last_results_username = username
+            logger.info(
+                "WATCHDOG: username search COMPLETE %r — %d/%d checked, %d found",
+                username,
+                result.checked_sites,
+                result.total_sites,
+                len(result.found),
+            )
 
             await self._save_to_history(
                 username, len(result.found), result.total_sites, mode=MODE_USERNAME
@@ -393,10 +461,15 @@ class AppController:
 
             # Final progress apply (enqueues any remaining found URLs)
             await self._apply_progress(result)
+        except asyncio.CancelledError:
+            logger.info("WATCHDOG: username search %r killed mid-flight", username)
+            raise
         except Exception as e:
             if getattr(state, "current_username", None) == username:
                 logger.exception("Search failed")
                 state.is_searching = False
+                username_progress.is_running = False
+                state.progress_version += 1
                 state.search_error = str(e)
                 # Surface the failure — without this a hard crash renders as
                 # silently empty results. Keyword heuristic mirrors DDGS.
@@ -490,7 +563,36 @@ class AppController:
             logger.warning("Progress dispatch failed: %s", e)
 
     async def _apply_progress(self, progress) -> None:
-        """Push a search-progress snapshot into observable state."""
+        """Push a search-progress snapshot into observable state.
+
+        Ticks from killed/superseded scans are dropped: a dying scan's
+        late callbacks (e.g. its finally-block tick) must never clobber
+        the current search's progress slot. Cross-mode ticks are always
+        dropped; same-mode ticks are dropped when their target is not
+        the active search's target.
+        """
+        is_email_progress = hasattr(progress, "checked_modules")
+        if is_email_progress and state.search_mode != MODE_EMAIL:
+            logger.debug(
+                "Dropping email progress tick while in %s mode", state.search_mode
+            )
+            return
+        if not is_email_progress and state.search_mode != MODE_USERNAME:
+            logger.debug(
+                "Dropping username progress tick while in %s mode", state.search_mode
+            )
+            return
+        if is_email_progress:
+            if getattr(progress, "email", None) != state.current_username:
+                logger.debug("Dropping stale email progress tick — superseded scan")
+                return
+        elif (
+            state.search_targets
+            and state.is_searching
+            and getattr(progress, "username", None) not in state.search_targets
+        ):
+            logger.debug("Dropping stale username progress tick — superseded scan")
+            return
         state.search_progress = progress
         state.progress_version += 1
 
@@ -509,11 +611,8 @@ class AppController:
 
     def cancel_search(self) -> None:
         """Cancel a running search (sync — called from UI)."""
-        if self._enrich_worker_task and not self._enrich_worker_task.done():
-            self._enrich_worker_task.cancel()
-        self._enrich_queue = None
-        if self.sherlock_service:
-            self.sherlock_service.cancel()
+        logger.info("CANCEL requested by user (username mode)")
+        self._kill_all_activity("user-cancel[username]")
 
     # --- Email Search -------------------------------------------------
 
@@ -523,11 +622,10 @@ class AppController:
             self._show_snack("Email search is not available.")
             return
 
-        # Cancel any lingering username scan before starting email scan
-        if state.is_searching:
-            self.cancel_search()
-            self.cancel_email_search()
-            await asyncio.sleep(0.15)
+        # NEW SEARCH = PRIORITY: kill any prior activity instantly,
+        # whether it is still running or just draining its tail.
+        self._kill_all_activity(f"email-search[{email}]")
+        self._register_search_task()
 
         # Offline gate
         if not state.is_online:
@@ -546,6 +644,13 @@ class AppController:
         state.is_searching = True
         state.search_error = None
         state.email_results.clear()
+        # Reset to a fresh EMAIL-typed progress immediately: the UI
+        # switches to ResultsScreen before the first scan tick, and a
+        # stale SearchProgress here crashes email-mode render.
+        email_progress = EmailSearchProgress(email=email.strip(), is_running=True)
+        state.search_progress = email_progress
+        state.progress_version += 1
+        logger.info("WATCHDOG: email search START %r", email)
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:
@@ -567,11 +672,22 @@ class AppController:
                 or state.search_mode != MODE_EMAIL
             ):
                 logger.info(
-                    "Email scan for %s cancelled/superseded — ignoring results", email
+                    "WATCHDOG: email search %r cancelled/superseded — ignoring results",
+                    email,
                 )
+                state.is_searching = False
+                email_progress.is_running = False
+                state.progress_version += 1
                 return
 
             state.is_searching = False
+            logger.info(
+                "WATCHDOG: email search COMPLETE %r — %d/%d checked, %d found",
+                email,
+                result.checked_modules,
+                result.total_modules,
+                len(result.found),
+            )
 
             # Convert to result list for state
             all_results = []
@@ -611,12 +727,20 @@ class AppController:
 
             # Final progress apply
             await self._apply_progress(result)
+        except asyncio.CancelledError:
+            logger.info("WATCHDOG: email search %r killed mid-flight", email)
+            raise
         except ValueError as ve:
             state.is_searching = False
+            email_progress.is_running = False
+            state.progress_version += 1
+            logger.warning("Email search rejected: %s", ve)
             self._show_snack(str(ve))
         except Exception as e:
             logger.exception("Email search failed")
             state.is_searching = False
+            email_progress.is_running = False
+            state.progress_version += 1
             state.search_error = str(e)
             msg = (
                 ERR_NETWORK
@@ -639,18 +763,19 @@ class AppController:
     def _email_progress_callback(self, progress) -> None:
         """Bridge email search progress to observable state."""
         if not self._main_loop:
+            logger.warning("Email progress tick dropped — no main loop captured")
             return
         try:
             asyncio.run_coroutine_threadsafe(
                 self._apply_progress(progress), self._main_loop
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Email progress dispatch failed: %s", e)
 
     def cancel_email_search(self) -> None:
         """Cancel a running email search (sync — called from UI)."""
-        if self.email_service:
-            self.email_service.cancel()
+        logger.info("CANCEL requested by user (email mode)")
+        self._kill_all_activity("user-cancel[email]")
 
     async def save_selected_sites(self, sites: list[str]) -> None:
         """Persist the network-selection scope and update observable state.

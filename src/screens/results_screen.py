@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import NamedTuple
 
 import flet as ft
 from flet import Control
@@ -29,6 +30,75 @@ from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
 logger = logging.getLogger("ResultsScreen")
+
+
+class _UsernameViewData(NamedTuple):
+    """Normalized snapshot for username-mode rendering.
+
+    Shields the render path from cross-mode progress objects: a stale
+    EmailSearchProgress must never be dereferenced as SearchProgress
+    (total_sites/checked_sites/site_name AttributeErrors during render
+    kill Flet's updates scheduler task, freezing the whole UI with no
+    visible log — the v2.0.0 email→username hang).
+    """
+
+    found: list
+    not_found: list
+    errors: list
+    total: int
+    checked: int
+    has_progress: bool
+    is_cancelled: bool
+    is_running: bool
+    username: str
+
+
+def _resolve_username_view_data(state) -> _UsernameViewData:
+    """Read username-mode data without ever raising during render."""
+    progress = state.search_progress
+    has_progress = progress is not None and hasattr(progress, "total_sites")
+
+    if has_progress:
+        found = list(progress.found)
+        not_found = list(progress.not_found)
+        errors = list(progress.errors)
+        total = progress.total_sites or state.sites_total or 400
+        checked = progress.checked_sites
+        is_cancelled = bool(getattr(progress, "is_cancelled", False))
+        is_running = bool(getattr(progress, "is_running", False))
+        username = getattr(progress, "username", "") or state.current_username
+    else:
+        # Fall back to the last completed username scan (dict of
+        # site_name → SiteResult), or an empty idle view.
+        last = state.last_results or {}
+        found = [r for r in last.values() if getattr(r, "status", "") == "Claimed"]
+        not_found = [
+            r
+            for r in last.values()
+            if getattr(r, "status", "") in ("Available", "Illegal")
+        ]
+        errors = [
+            r
+            for r in last.values()
+            if getattr(r, "status", "") not in ("Claimed", "Available", "Illegal")
+        ]
+        total = state.sites_total or len(last) or 400
+        checked = len(last)
+        is_cancelled = False
+        is_running = False
+        username = state.last_results_username or state.current_username
+
+    return _UsernameViewData(
+        found=found,
+        not_found=not_found,
+        errors=errors,
+        total=total,
+        checked=checked,
+        has_progress=has_progress,
+        is_cancelled=is_cancelled,
+        is_running=is_running,
+        username=username,
+    )
 
 
 def _build_result_list(
@@ -68,7 +138,14 @@ def ResultsScreen() -> Control:
     debounced_filter = use_debounce(filter_query, 250)
 
     active_progress = state.search_progress
-    is_running = active_progress.is_running if active_progress else False
+    # Typed snapshot for username mode — never dereference the raw
+    # progress object for username rendering (see _resolve_username_view_data).
+    username_view = _resolve_username_view_data(state)
+    is_running = (
+        active_progress.is_running
+        if (active_progress is not None and hasattr(active_progress, "is_running"))
+        else False
+    )
 
     def _open_url(url: str):
         async def _launch():
@@ -323,29 +400,16 @@ def ResultsScreen() -> Control:
                 else None,
             )
 
-        found_items = (
-            _filter_by_name(active_progress.found, lambda r: r.site_name)
-            if active_progress
-            else []
-        )
-        notfound_items = (
-            _filter_by_name(active_progress.not_found, lambda r: r.site_name)
-            if active_progress
-            else []
-        )
-        error_items = (
-            _filter_by_name(active_progress.errors, lambda r: r.site_name)
-            if active_progress
-            else []
-        )
-        total = (
-            active_progress.total_sites if active_progress else state.sites_total or 400
-        )
-        checked = (
-            active_progress.checked_sites
-            if active_progress
-            else (total if state.last_results else 0)
-        )
+        # _resolve_username_view_data guarantees these are always
+        # username-scan shaped — a stale EmailSearchProgress (left in
+        # state.search_progress after an email search, before the first
+        # username tick lands) used to raise AttributeError mid-render,
+        # killing Flet's updates scheduler and freezing the whole UI.
+        found_items = _filter_by_name(username_view.found, lambda r: r.site_name)
+        notfound_items = _filter_by_name(username_view.not_found, lambda r: r.site_name)
+        error_items = _filter_by_name(username_view.errors, lambda r: r.site_name)
+        total = username_view.total
+        checked = username_view.checked
 
         tabs = ft.Tabs(
             selected_index=0,
@@ -411,27 +475,19 @@ def ResultsScreen() -> Control:
         )
         stats_row = ft.Row(
             controls=[
-                StatCard(
-                    "Found",
-                    str(len(found_items) if active_progress else 0),
-                    AppColors.SUCCESS,
-                ),
+                StatCard("Found", str(len(found_items)), AppColors.SUCCESS),
                 StatCard(
                     "Not Found",
-                    str(len(notfound_items) if active_progress else 0),
+                    str(len(notfound_items)),
                     ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
                 ),
-                StatCard(
-                    "Errors",
-                    str(len(error_items) if active_progress else 0),
-                    AppColors.WARNING,
-                ),
+                StatCard("Errors", str(len(error_items)), AppColors.WARNING),
                 StatCard("Total", str(total), ft.Colors.PRIMARY),
             ],
             spacing=tokens.SPACE_SM,
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
         )
-        if active_progress and getattr(active_progress, "is_cancelled", False):
+        if username_view.is_cancelled:
             progress_label = f"Cancelled — {checked}/{total} checked"
         else:
             pct = int(checked / max(total, 1) * 100)

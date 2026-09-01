@@ -474,9 +474,16 @@ def HomeScreen() -> Control:
         except Exception:
             pass
 
+        from services.email_service import validate_email
+
+        target_mode = state.search_mode
+        if state.search_mode == MODE_EMAIL and not validate_email(query):
+            target_mode = MODE_USERNAME
+            _switch_mode(MODE_USERNAME)
+
         async def _run():
             controller.show_results()
-            if state.search_mode == MODE_EMAIL:
+            if target_mode == MODE_EMAIL:
                 await controller.start_email_search(query)
             else:
                 await controller.start_search(query)
@@ -487,12 +494,17 @@ def HomeScreen() -> Control:
         value = e.control.value or ""
         set_search_query(value)
 
-    def _maybe_switch_to_email(value: str):
-        """Only auto-switch when pasted value is a clear email, not on typing."""
+    def _maybe_switch_mode(value: str):
+        """Auto-switch mode on paste: email -> Email mode, plain username -> Username mode."""
         from services.email_service import validate_email
 
-        if state.search_mode == MODE_USERNAME and validate_email(value.strip()):
+        val = value.strip()
+        if not val:
+            return
+        if state.search_mode == MODE_USERNAME and validate_email(val):
             _switch_mode(MODE_EMAIL)
+        elif state.search_mode == MODE_EMAIL and "@" not in val:
+            _switch_mode(MODE_USERNAME)
 
     def _on_paste(e):
         async def _paste():
@@ -502,7 +514,7 @@ def HomeScreen() -> Control:
                 if text:
                     value = text.strip()
                     set_search_query(value)
-                    _maybe_switch_to_email(value)
+                    _maybe_switch_mode(value)
             except Exception:
                 pass
 

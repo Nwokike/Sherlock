@@ -368,6 +368,18 @@ class AppController:
                 on_progress=self._progress_from_thread,
                 timeout=state.timeout,
             )
+            # If this scan was cancelled or superseded by another search, do not clobber state
+            if (
+                getattr(result, "is_cancelled", False)
+                or state.current_username != username
+                or state.search_mode != MODE_USERNAME
+            ):
+                logger.info(
+                    "Username scan for %s cancelled/superseded — ignoring results",
+                    username,
+                )
+                return
+
             state.is_searching = False
             state.last_results = {
                 r.site_name: r
@@ -382,28 +394,29 @@ class AppController:
             # Final progress apply (enqueues any remaining found URLs)
             await self._apply_progress(result)
         except Exception as e:
-            logger.exception("Search failed")
-            state.is_searching = False
-            state.search_error = str(e)
-            # Surface the failure — without this a hard crash renders as
-            # silently empty results. Keyword heuristic mirrors DDGS.
-            msg = (
-                ERR_NETWORK
-                if any(
-                    kw in str(e).lower()
-                    for kw in (
-                        "dns",
-                        "connect",
-                        "network",
-                        "offline",
-                        "unreachable",
-                        "timeout",
-                        "timed out",
+            if getattr(state, "current_username", None) == username:
+                logger.exception("Search failed")
+                state.is_searching = False
+                state.search_error = str(e)
+                # Surface the failure — without this a hard crash renders as
+                # silently empty results. Keyword heuristic mirrors DDGS.
+                msg = (
+                    ERR_NETWORK
+                    if any(
+                        kw in str(e).lower()
+                        for kw in (
+                            "dns",
+                            "connect",
+                            "network",
+                            "offline",
+                            "unreachable",
+                            "timeout",
+                            "timed out",
+                        )
                     )
+                    else ERR_GENERIC
                 )
-                else ERR_GENERIC
-            )
-            self._show_snack(msg, duration=10000)
+                self._show_snack(msg, duration=10000)
 
     async def _drain_enrich_queue(self) -> None:
         """Stream profile enrichment in real-time as sites are found."""
@@ -547,6 +560,17 @@ class AppController:
                 skip_password_recovery=state.no_password_recovery,
                 concurrency=getattr(state, "email_concurrency", 15),
             )
+            # If this scan was cancelled or superseded by another search, do not clobber state
+            if (
+                getattr(result, "is_cancelled", False)
+                or state.current_username != email.strip()
+                or state.search_mode != MODE_EMAIL
+            ):
+                logger.info(
+                    "Email scan for %s cancelled/superseded — ignoring results", email
+                )
+                return
+
             state.is_searching = False
 
             # Convert to result list for state

@@ -92,7 +92,7 @@ def ResultsScreen() -> Control:
         if not page:
             return
         with contextlib.suppress(Exception):
-            ft.HapticFeedback().light_impact()
+            asyncio.create_task(ft.HapticFeedback().light_impact())
         with contextlib.suppress(Exception):
             page.pop_dialog()
         enrich = (
@@ -119,7 +119,7 @@ def ResultsScreen() -> Control:
         if not page:
             return
         with contextlib.suppress(Exception):
-            ft.HapticFeedback().light_impact()
+            asyncio.create_task(ft.HapticFeedback().light_impact())
         with contextlib.suppress(Exception):
             page.pop_dialog()
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None

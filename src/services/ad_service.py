@@ -142,7 +142,7 @@ class AdService:
             await self.preload_interstitial(on_close=self._on_close)
 
     async def show_interstitial(self) -> bool:
-        """Show a preloaded interstitial. Frequency is gated by the caller (every 3rd search)."""
+        """Show a preloaded interstitial — on every search (original behavior)."""
         if self.interstitial and self._can_request_ads:
             try:
                 await self.interstitial.show()

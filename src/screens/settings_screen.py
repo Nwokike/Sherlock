@@ -681,9 +681,8 @@ def SettingsScreen() -> Control:
     )
 
     def _open_terminal():
-        if page.dialog is not None:
-            with contextlib.suppress(Exception):
-                page.pop_dialog()
+        with contextlib.suppress(Exception):
+            page.pop_dialog()
 
         logs_list = in_memory_log_handler.get_logs()
         log_text = ft.Text(

@@ -93,9 +93,8 @@ def ResultsScreen() -> Control:
             return
         with contextlib.suppress(Exception):
             ft.HapticFeedback().light_impact()
-        if page.dialog is not None:
-            with contextlib.suppress(Exception):
-                page.pop_dialog()
+        with contextlib.suppress(Exception):
+            page.pop_dialog()
         enrich = (
             state.enrichments.get(r.url_user or r.url_main or "", None)
             if state.enrichments
@@ -121,9 +120,8 @@ def ResultsScreen() -> Control:
             return
         with contextlib.suppress(Exception):
             ft.HapticFeedback().light_impact()
-        if page.dialog is not None:
-            with contextlib.suppress(Exception):
-                page.pop_dialog()
+        with contextlib.suppress(Exception):
+            page.pop_dialog()
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
         show_profile_detail_dialog(
             page=page,

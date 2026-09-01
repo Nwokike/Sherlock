@@ -17,6 +17,34 @@ from core.theme import AppColors
 logger = logging.getLogger("ProfileDetailDialog")
 
 
+def _stringify(value) -> str:
+    """Render any enrichment value as display text.
+
+    socid-extractor's extract() can return non-string values (its final dict
+    keeps lists/dicts as-is), so a plain `str()`/`join()` explodes on shapes
+    like a list of link dicts — which killed the dossier modal mid-build on
+    rich results.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                for key in ("url", "link", "href", "value"):
+                    if isinstance(item.get(key), str):
+                        parts.append(item[key])
+                        break
+                else:
+                    parts.append(str(item))
+            else:
+                parts.append(str(item))
+        return ", ".join(parts)
+    return str(value)
+
+
 def _dossier_row(
     page: ft.Page,
     icon: ft.IconData,
@@ -375,7 +403,7 @@ def _username_dossier(
 
     enrich = enrichment or {}
     avatar_url = enrich.get("image") or enrich.get("avatar") or enrich.get("photo")
-    display_name = (
+    display_name = _stringify(
         enrich.get("name")
         or enrich.get("fullname")
         or others.get("FullName")
@@ -619,7 +647,9 @@ def _username_dossier(
         )
     if location:
         items.append(
-            _dossier_row(page, ft.Icons.LOCATION_ON_OUTLINED, "Location", str(location))
+            _dossier_row(
+                page, ft.Icons.LOCATION_ON_OUTLINED, "Location", _stringify(location)
+            )
         )
     if uid:
         items.append(
@@ -627,7 +657,7 @@ def _username_dossier(
                 page,
                 ft.Icons.BADGE_OUTLINED,
                 "Account UID / ID",
-                str(uid),
+                _stringify(uid),
                 can_copy=True,
             )
         )
@@ -637,11 +667,11 @@ def _username_dossier(
                 page,
                 ft.Icons.CALENDAR_TODAY_ROUNDED,
                 "Account Created / Joined",
-                str(join_date),
+                _stringify(join_date),
             )
         )
     if links:
-        link_str = ", ".join(links) if isinstance(links, list) else str(links)
+        link_str = _stringify(links)
         items.append(
             _dossier_row(
                 page,
@@ -745,30 +775,44 @@ def show_profile_detail_dialog(
         return
     others = others or {}
     enrichment = enrichment or {}
-    if mode == "email":
-        _email_dossier(
-            page,
-            site_name,
-            status,
-            target_query,
-            url_main,
-            query_time,
-            email_recovery,
-            phone_number,
-            others,
-            method,
-            rate_limit,
-            frequent_rate_limit,
+    try:
+        if mode == "email":
+            _email_dossier(
+                page,
+                site_name,
+                status,
+                target_query,
+                url_main,
+                query_time,
+                email_recovery,
+                phone_number,
+                others,
+                method,
+                rate_limit,
+                frequent_rate_limit,
+            )
+        else:
+            _username_dossier(
+                page,
+                site_name,
+                status,
+                target_query,
+                url_user,
+                url_main,
+                query_time,
+                others,
+                enrichment,
+            )
+    except Exception:
+        # Never fail silently — a mid-build crash here leaves the tap doing
+        # nothing on device. Log the full traceback and tell the user.
+        logger.exception(
+            "Dossier dialog failed to build (mode=%s, site=%s)", mode, site_name
         )
-    else:
-        _username_dossier(
+        from core.notify import show_snack
+
+        show_snack(
             page,
-            site_name,
-            status,
-            target_query,
-            url_user,
-            url_main,
-            query_time,
-            others,
-            enrichment,
+            "Couldn't open details. The error was logged.",
+            bgcolor=AppColors.ERROR,
         )

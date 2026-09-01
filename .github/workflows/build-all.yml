@@ -34,7 +34,7 @@ jobs:
       RELEASE_NAME: ${{ steps.tag_info.outputs.RELEASE_NAME }}
       IS_PRERELEASE: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Generate Release Tag & Name
         id: tag_info
         run: |
@@ -50,7 +50,7 @@ jobs:
           fi
       - name: Create GitHub Release Placeholder
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag_info.outputs.TAG_NAME }}
           name: ${{ steps.tag_info.outputs.RELEASE_NAME }}
@@ -68,12 +68,12 @@ jobs:
     needs: [prepare-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17
@@ -96,7 +96,7 @@ jobs:
         run: uv run flet build apk --python-version 3.12 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
       - name: Upload directly to GitHub Release
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
           files: build/apk/*.apk
@@ -108,12 +108,12 @@ jobs:
     needs: [prepare-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17
@@ -136,7 +136,7 @@ jobs:
         run: uv run flet build aab --python-version 3.12 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
       - name: Upload directly to GitHub Release
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
           files: build/aab/*.aab
@@ -148,8 +148,8 @@ jobs:
     needs: [prepare-release]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
 
       - name: Build Windows Portable
         run: uv run flet build windows --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
@@ -201,7 +201,7 @@ jobs:
 
       - name: Upload directly to GitHub Release
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
           files: build/installer/Sherlock_Setup.exe
@@ -213,8 +213,8 @@ jobs:
     needs: [prepare-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
       - name: Install Linux Build Dependencies & Packaging Tools
         run: |
           sudo apt-get update
@@ -302,7 +302,7 @@ jobs:
 
       - name: Upload directly to GitHub Release
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
           files: build/dist/*

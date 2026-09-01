@@ -53,61 +53,49 @@
 
 ## Screenshots
 
-### Widescreen & Tablet Experience
-
-<p align="center">
-  <img src="screenshots/Desktop_Light.png" width="90%" alt="Widescreen Search Interface — Light Mode" />
-</p>
-<p align="center"><em>Widescreen Search Interface (Light Mode) — Pure white parchment background optimized for high contrast, clean typography, and instant clipboard pasting on tablets or widescreen Android devices.</em></p>
-
-<p align="center">
-  <img src="screenshots/Desktop_Dark.png" width="90%" alt="Widescreen Scan Results — Dark Mode" />
-</p>
-<p align="center"><em>Widescreen Scan Results (Dark Mode) — Classic Monokai earth-charcoal theme featuring active status breakdowns and live filtering on tablets or widescreen Android devices.</em></p>
-
-### Mobile Experience
+### Mobile Experience — Gold Detective Theme
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/homepage_showing_history_light_mobile.png" width="100%" alt="Home Dashboard Light" /></td>
-    <td width="50%"><img src="screenshots/homepage_showing_history_dark_mobile.png" width="100%" alt="Home Dashboard Dark" /></td>
+    <td width="50%"><img src="screenshots/home_username_dark_mobile.png" width="100%" alt="Home Dashboard — Username Mode" /></td>
+    <td width="50%"><img src="screenshots/home_email_dark_mobile.png" width="100%" alt="Home Dashboard — Email Mode" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Home Dashboard (Light) — Material 3 `SegmentedButton` + `Chip` filters + `Banner` offline strip + history typeahead.</em></td>
-    <td align="center"><em>Home Dashboard (Dark) — Monokai-optimized interface with quick-theme header toggle.</em></td>
+    <td align="center"><em>Home (Username Mode) — Gold pill toggle, quick-setting chips (Timeout, Online DB, NSFW, Exclusions), and recent search typeahead.</em></td>
+    <td align="center"><em>Home (Email Mode) — Switches to email intelligence: 120+ platform scan with Timeout and Password-Recovery chips.</em></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/search_commence_1_result_yet_light_mobile.png" width="100%" alt="Search Ticking" /></td>
-    <td width="50%"><img src="screenshots/search_done_list_28_found_light_mobile.png" width="100%" alt="Scan Complete" /></td>
+    <td width="50%"><img src="screenshots/results_username_dark_mobile.png" width="100%" alt="Live Username Scan Results" /></td>
+    <td width="50%"><img src="screenshots/results_email_dark_mobile.png" width="100%" alt="Email Intelligence Results" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Live Search Ticking — Fluid progress counter with cancellation action.</em></td>
-    <td align="center"><em>Scan Complete — Segmented tabs + method-filter `Chip` bar + `SelectionArea` long-press + haptic feedback.</em></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="50%"><img src="screenshots/customize_view_select_deselect_social_light_mobile.png" width="100%" alt="Social Network Selection" /></td>
-    <td width="50%"><img src="screenshots/history_dark_mobile.png" width="100%" alt="Search History Logs" /></td>
-  </tr>
-  <tr>
-    <td align="center"><em>Selective Site Switcher — Custom toggle checks to prune search scope.</em></td>
-    <td align="center"><em>Recent History Log — `Dismissible` swipe-to-delete + `ListView` virtualization.</em></td>
+    <td align="center"><em>Live Username Scan — Enriched result cards stream in real time: avatars, real names, and follower metrics populate as sites are claimed.</em></td>
+    <td align="center"><em>Email Intelligence Results — Claimed platforms with detection-method badges and masked recovery email hints.</em></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/select_Nwokike_from_result_dark_mobile.png" width="100%" alt="Claimed Profile Highlight" /></td>
-    <td width="50%"><img src="screenshots/GitHub_Nwokike_selected_from_result.png" width="100%" alt="Direct Browser Launcher" /></td>
+    <td width="50%"><img src="screenshots/dossier_profile_dark_mobile.png" width="100%" alt="Social Profile Dossier" /></td>
+    <td width="50%"><img src="screenshots/dossier_email_dark_mobile.png" width="100%" alt="Email Intelligence Dossier" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Detailed View Card — Highlighted bronze-gold outline matching logo.</em></td>
-    <td align="center"><em>Browser Integration — Tap any found result to open the live profile directly in your device's browser.</em></td>
+    <td align="center"><em>Social Profile Dossier — Tap any claimed result for the full OSINT modal: avatar, bio, follower metrics, and deep links.</em></td>
+    <td align="center"><em>Email Dossier — Detection vector, masked recovery email, and recovery phone hints per platform.</em></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/platforms_select_dark_mobile.png" width="100%" alt="Site Platform Selection" /></td>
+    <td width="50%"><img src="screenshots/history_dark_mobile.png" width="100%" alt="Search History" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Site Platform Switcher — Prune scan scope across 400+ networks with per-site toggles.</em></td>
+    <td align="center"><em>Search History — Dual-mode entries (username & email) with swipe-to-delete, timestamps, and result counts.</em></td>
   </tr>
 </table>
 

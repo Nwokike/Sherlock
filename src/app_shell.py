@@ -126,7 +126,35 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 username = app_state.last_results_username or "unknown"
 
                 try:
-                    if format_type == "csv":
+                    if format_type == "pdf":
+                        from services.report_service import generate_pdf_dossier
+
+                        pdf_bytes = generate_pdf_dossier(
+                            username=username,
+                            found=list(progress.found),
+                            not_found=list(progress.not_found),
+                            errors=list(progress.errors),
+                            enrichments=dict(app_state.enrichments or {}),
+                            total_sites=progress.total_sites or 3302,
+                            checked_sites=progress.checked_sites or len(progress.found),
+                        )
+                        if not pdf_bytes:
+                            raise RuntimeError("PDF generation returned empty output")
+                        report_bytes = pdf_bytes
+
+                    elif format_type == "xmind":
+                        from services.report_service import generate_xmind_case
+
+                        xmind_path = generate_xmind_case(
+                            username=username,
+                            found=list(progress.found),
+                            enrichments=dict(app_state.enrichments or {}),
+                        )
+                        if not xmind_path or not xmind_path.exists():
+                            raise RuntimeError("XMind generation returned empty output")
+                        report_bytes = xmind_path.read_bytes()
+
+                    elif format_type == "csv":
                         import csv
                         import io
 
@@ -261,6 +289,33 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             sheet = ft.BottomSheet(
                 content=ft.Column(
                     [
+                        ft.ListTile(
+                            title=ft.Text(
+                                "PDF Intelligence Dossier (.pdf)",
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            subtitle=ft.Text("Gold-branded printable report"),
+                            leading=ft.Icon(
+                                ft.Icons.PICTURE_AS_PDF_ROUNDED, color=AppColors.PRIMARY
+                            ),
+                            on_click=lambda e: (
+                                page.pop_dialog(),
+                                _on_export_click("pdf"),
+                            ),
+                        ),
+                        ft.ListTile(
+                            title=ft.Text(
+                                "XMind Mind Map (.xmind)", weight=ft.FontWeight.W_600
+                            ),
+                            subtitle=ft.Text("Visual intelligence case file"),
+                            leading=ft.Icon(
+                                ft.Icons.HUB_ROUNDED, color=AppColors.PRIMARY
+                            ),
+                            on_click=lambda e: (
+                                page.pop_dialog(),
+                                _on_export_click("xmind"),
+                            ),
+                        ),
                         ft.ListTile(
                             title=ft.Text(
                                 "CSV Spreadsheet (.csv)", weight=ft.FontWeight.W_600

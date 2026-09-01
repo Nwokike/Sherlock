@@ -398,6 +398,7 @@ def ResultsScreen() -> Control:
                 enrichment=state.enrichments.get(r.url_user or r.url_main or "", None)
                 if state.enrichments
                 else None,
+                tags=getattr(r, "tags", []),
             )
 
         # _resolve_username_view_data guarantees these are always

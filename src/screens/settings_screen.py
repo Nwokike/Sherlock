@@ -17,7 +17,7 @@ from components.app_header import AppHeader
 from components.banner_ad import build_banner_ad
 from components.section_header import SectionHeader
 from core import tokens
-from core.logger_handler import in_memory_log_handler
+from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
 from core.notify import show_snack
 from core.constants import (
     APP_NAME,
@@ -735,6 +735,19 @@ def SettingsScreen() -> Control:
             content=ft.Container(
                 content=ft.Column(
                     controls=[
+                        ft.Container(
+                            content=ft.Text(
+                                get_telemetry_snapshot(),
+                                size=11,
+                                font_family="Courier New",
+                                color=AppColors.PRIMARY,
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            padding=ft.Padding(8, 4, 8, 4),
+                            border_radius=tokens.RADIUS_SM,
+                            bgcolor=ft.Colors.with_opacity(0.08, AppColors.PRIMARY),
+                            margin=ft.Margin(0, 0, 0, tokens.SPACE_XS),
+                        ),
                         ft.Text(
                             "Real-time engine execution, network status, and diagnostic logs.",
                             size=tokens.FONT_XS,

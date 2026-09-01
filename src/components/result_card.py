@@ -17,6 +17,7 @@ import flet as ft
 from flet import Control
 
 from core import tokens
+from core.geo_utils import get_site_country, resolve_location
 from core.theme import AppColors
 
 
@@ -67,6 +68,7 @@ def ResultCard(
     frequent_rate_limit: bool = False,
     # Enrichment extras (socid-extractor fields)
     enrichment: dict | None = None,
+    tags: list[str] | tuple[str, ...] | None = None,
 ) -> Control:
     """Build a single result tile for the results tabs."""
     icon, icon_color = _status_icon_and_color(status)
@@ -208,6 +210,10 @@ def ResultCard(
             )
         location = enrichment.get("location")
         if location:
+            geo = resolve_location(str(location))
+            loc_display = (
+                f"{geo.flag} {location}" if (geo and geo.flag) else str(location)
+            )
             extra_lines.append(
                 ft.Row(
                     [
@@ -217,7 +223,7 @@ def ResultCard(
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.Text(
-                            location,
+                            loc_display,
                             size=tokens.FONT_XS,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
@@ -375,6 +381,17 @@ def ResultCard(
             expand=True,
         ),
     ]
+
+    site_geo = get_site_country(tuple(tags)) if tags else None
+    if site_geo and site_geo.flag:
+        name_row_controls.append(
+            ft.Text(
+                site_geo.flag,
+                size=tokens.FONT_SM,
+                tooltip=f"{site_geo.flag} {site_geo.name}",
+            )
+        )
+
     if query_time is not None:
         name_row_controls.append(
             ft.Text(

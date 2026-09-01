@@ -12,6 +12,7 @@ import flet as ft
 
 from core import tokens
 from core.constants import ERR_OPEN_URL
+from core.geo_utils import resolve_location
 from core.theme import AppColors
 
 logger = logging.getLogger("ProfileDetailDialog")
@@ -646,10 +647,11 @@ def _username_dossier(
             )
         )
     if location:
+        loc_text = _stringify(location)
+        geo = resolve_location(loc_text)
+        loc_display = f"{geo.flag} {loc_text}" if (geo and geo.flag) else loc_text
         items.append(
-            _dossier_row(
-                page, ft.Icons.LOCATION_ON_OUTLINED, "Location", _stringify(location)
-            )
+            _dossier_row(page, ft.Icons.LOCATION_ON_OUTLINED, "Location", loc_display)
         )
     if uid:
         items.append(

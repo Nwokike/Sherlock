@@ -51,6 +51,7 @@ from core.constants import (
     STORAGE_THEME,
     STORAGE_TIMEOUT,
 )
+from core.logger_handler import in_memory_log_handler
 from core.state import state
 from core.theme import AppTheme
 from components.update_dialog import show_update_dialog
@@ -91,6 +92,10 @@ class AppController:
         # navigation closures in-place; we hand AppShell a reference so
         # our own methods (start_search, etc.) can invoke them too.
         self._controller_methods: ControllerMethods | None = None
+        # Streaming real-time enrichment queue & task
+        self._enrich_queue: asyncio.Queue[str] | None = None
+        self._enriched_seen: set[str] = set()
+        self._enrich_worker_task: asyncio.Task | None = None
 
     # --- Lifecycle ----------------------------------------------------
 
@@ -342,6 +347,14 @@ class AppController:
             with contextlib.suppress(Exception):
                 await self.ad_service.show_interstitial()
 
+        # Initialize streaming real-time enrichment queue & worker task
+        self._enriched_seen.clear()
+        self._enrich_queue = asyncio.Queue()
+        if self._enrich_worker_task and not self._enrich_worker_task.done():
+            self._enrich_worker_task.cancel()
+        if self.enrich_service and self.enrich_service.is_available:
+            self._enrich_worker_task = asyncio.create_task(self._drain_enrich_queue())
+
         # Make sure sites are loaded before searching
         try:
             await self.sherlock_service.load_sites()
@@ -366,39 +379,8 @@ class AppController:
                 username, len(result.found), result.total_sites, mode=MODE_USERNAME
             )
 
-            # Final progress apply
+            # Final progress apply (enqueues any remaining found URLs)
             await self._apply_progress(result)
-
-            # Auto-enrich claimed profiles with socid-extractor
-            if (
-                self.enrich_service
-                and self.enrich_service.is_available
-                and result.found
-            ):
-                claimed_urls = [r.url_user for r in result.found if r.url_user]
-                if claimed_urls:
-
-                    def _on_enriched_profile(url: str, data: dict):
-                        state.set_enrichment(url, data)
-                        state.progress_version += 1
-                        try:
-                            self.page.update()
-                        except Exception:
-                            pass
-
-                    async def _enrich_task():
-                        use_mutations = (
-                            getattr(state, "enrichment_mode", "basic") == "full"
-                        )
-                        await self.enrich_service.batch_enrich(
-                            claimed_urls,
-                            timeout=8 if use_mutations else 6,
-                            on_result=_on_enriched_profile,
-                            max_concurrent=3 if use_mutations else 4,
-                            use_mutations=use_mutations,
-                        )
-
-                    self.page.run_task(_enrich_task)
         except Exception as e:
             logger.exception("Search failed")
             state.is_searching = False
@@ -422,6 +404,56 @@ class AppController:
                 else ERR_GENERIC
             )
             self._show_snack(msg, duration=10000)
+
+    async def _drain_enrich_queue(self) -> None:
+        """Stream profile enrichment in real-time as sites are found."""
+        if not self.enrich_service or not self.enrich_service.is_available:
+            return
+
+        use_mutations = getattr(state, "enrichment_mode", "basic") == "full"
+        concurrency = 3 if use_mutations else 4
+        semaphore = asyncio.Semaphore(concurrency)
+        pending_tasks: set[asyncio.Task] = set()
+
+        async def _enrich_single(url: str) -> None:
+            async with semaphore:
+                try:
+                    fn = (
+                        self.enrich_service.enrich_url_with_mutations
+                        if use_mutations
+                        else self.enrich_service.enrich_url
+                    )
+                    data = await fn(url, timeout=8 if use_mutations else 6)
+                    if data:
+                        state.set_enrichment(url, data)
+                        state.progress_version += 1
+                        with contextlib.suppress(Exception):
+                            self.page.update()
+                except Exception as exc:
+                    logger.warning("Streaming enrichment error for %s: %s", url, exc)
+
+        while (
+            state.is_searching
+            or (self._enrich_queue and not self._enrich_queue.empty())
+            or pending_tasks
+        ):
+            # Clean up completed tasks
+            done = {t for t in pending_tasks if t.done()}
+            pending_tasks.difference_update(done)
+
+            if self._enrich_queue and not self._enrich_queue.empty():
+                try:
+                    url = self._enrich_queue.get_nowait()
+                    t = asyncio.create_task(_enrich_single(url))
+                    pending_tasks.add(t)
+                except Exception:
+                    pass
+            else:
+                await asyncio.sleep(0.1)
+
+        # Final wait for in-flight tasks when scan completes
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
 
     def _progress_from_thread(self, progress) -> None:
         """Bridge a scan-worker progress tick onto the main event loop.
@@ -449,8 +481,24 @@ class AppController:
         state.search_progress = progress
         state.progress_version += 1
 
+        # Stream newly discovered found URLs into the enrichment queue
+        if (
+            self.enrich_service
+            and self.enrich_service.is_available
+            and self._enrich_queue is not None
+            and getattr(progress, "found", None)
+        ):
+            for r in list(progress.found):
+                url = getattr(r, "url_user", None) or getattr(r, "url_main", None)
+                if url and url not in self._enriched_seen:
+                    self._enriched_seen.add(url)
+                    self._enrich_queue.put_nowait(url)
+
     def cancel_search(self) -> None:
         """Cancel a running search (sync — called from UI)."""
+        if self._enrich_worker_task and not self._enrich_worker_task.done():
+            self._enrich_worker_task.cancel()
+        self._enrich_queue = None
         if self.sherlock_service:
             self.sherlock_service.cancel()
 
@@ -723,6 +771,9 @@ async def main(page: ft.Page) -> None:
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    root_logger = logging.getLogger()
+    if in_memory_log_handler not in root_logger.handlers:
+        root_logger.addHandler(in_memory_log_handler)
 
     controller = AppController(page)
     await controller.init()

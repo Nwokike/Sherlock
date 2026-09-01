@@ -388,29 +388,25 @@ def ResultCard(
     if method_badge:
         name_row_controls.append(method_badge)
 
-    detail_column = ft.SelectionArea(
-        content=ft.Column(
-            controls=[
-                ft.Row(
-                    controls=name_row_controls,
-                    spacing=tokens.SPACE_SM,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                ft.Text(
-                    display_url,
-                    size=tokens.FONT_XS,
-                    color=ft.Colors.with_opacity(
-                        tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
-                    ),
-                    no_wrap=False,
-                    max_lines=1,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                ),
-                *extra_lines,
-            ],
-            spacing=tokens.SPACE_XXS,
-            expand=True,
-        ),
+    detail_column = ft.Column(
+        controls=[
+            ft.Row(
+                controls=name_row_controls,
+                spacing=tokens.SPACE_SM,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Text(
+                display_url,
+                size=tokens.FONT_XS,
+                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                no_wrap=False,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            ),
+            *extra_lines,
+        ],
+        spacing=tokens.SPACE_XXS,
+        expand=True,
     )
 
     is_clickable = (

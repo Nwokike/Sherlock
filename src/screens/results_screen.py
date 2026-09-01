@@ -11,6 +11,7 @@ Both modes support: filter bar, stat cards, cancel, export.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import flet as ft
@@ -90,6 +91,11 @@ def ResultsScreen() -> Control:
         page = context.page
         if not page:
             return
+        with contextlib.suppress(Exception):
+            ft.HapticFeedback().light_impact()
+        if page.dialog is not None:
+            with contextlib.suppress(Exception):
+                page.pop_dialog()
         enrich = (
             state.enrichments.get(r.url_user or r.url_main or "", None)
             if state.enrichments
@@ -113,6 +119,11 @@ def ResultsScreen() -> Control:
         page = context.page
         if not page:
             return
+        with contextlib.suppress(Exception):
+            ft.HapticFeedback().light_impact()
+        if page.dialog is not None:
+            with contextlib.suppress(Exception):
+                page.pop_dialog()
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
         show_profile_detail_dialog(
             page=page,

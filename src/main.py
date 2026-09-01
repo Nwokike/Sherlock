@@ -46,6 +46,7 @@ from core.constants import (
     STORAGE_NSFW,
     STORAGE_ONBOARDING_DONE,
     STORAGE_PROXY_URL,
+    STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_MODE,
     STORAGE_SELECTED_SITES,
     STORAGE_THEME,
@@ -339,6 +340,10 @@ class AppController:
             no_pw_raw = await self.storage.get(STORAGE_NO_PASSWORD_RECOVERY)
             if no_pw_raw is not None:
                 state.no_password_recovery = no_pw_raw == "true"
+
+            scan_depth_raw = await self.storage.get(STORAGE_SCAN_DEPTH)
+            if scan_depth_raw in ("all", "1000", "500"):
+                state.scan_depth = scan_depth_raw
 
             onboarding_done = await self.storage.get(STORAGE_ONBOARDING_DONE)
             if onboarding_done == "true":

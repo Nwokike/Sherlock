@@ -44,6 +44,22 @@ POPULAR_SITES = {
     "medium",
 }
 
+# Tag categories from Maigret's database (75 tags)
+CATEGORY_TAGS = [
+    ("all", "All Networks"),
+    ("social", "Social"),
+    ("coding", "Coding"),
+    ("gaming", "Gaming"),
+    ("forum", "Forums"),
+    ("crypto", "Crypto"),
+    ("video", "Media"),
+    ("us", "US 🇺🇸"),
+    ("ng", "NG 🇳🇬"),
+    ("ru", "RU 🇷🇺"),
+    ("de", "DE 🇩🇪"),
+    ("cn", "CN 🇨🇳"),
+]
+
 
 @ft.component
 def SitesScreen() -> Control:
@@ -54,6 +70,7 @@ def SitesScreen() -> Control:
     _ = state.sites_version
 
     search_query, set_search_query = ft.use_state("")
+    selected_tag, set_selected_tag = ft.use_state("all")
     checked_states, set_checked_states = ft.use_state({})
 
     def _init_states():
@@ -121,10 +138,15 @@ def SitesScreen() -> Control:
 
     # Build filtered list
     query = search_query.strip().lower()
+    tags_map = getattr(state, "sites_tags_map", {}) or {}
     items = []
     for name, is_checked in sorted(checked_states.items()):
         if query and query not in name.lower():
             continue
+        if selected_tag != "all":
+            site_tags = [t.lower() for t in tags_map.get(name, [])]
+            if selected_tag.lower() not in site_tags:
+                continue
         items.append(
             ft.Container(
                 content=ft.Row(
@@ -163,6 +185,29 @@ def SitesScreen() -> Control:
                 on_click=lambda e, n=name: _toggle_row(n),
             )
         )
+
+    # Category filter chips
+    category_chips = ft.Container(
+        content=ft.Row(
+            controls=[
+                ft.Chip(
+                    label=ft.Text(label, size=11, font_family="Outfit"),
+                    selected=selected_tag == tag_key,
+                    show_checkmark=False,
+                    on_select=lambda e, k=tag_key: set_selected_tag(k),
+                )
+                for tag_key, label in CATEGORY_TAGS
+            ],
+            scroll=ft.ScrollMode.HIDDEN,
+            spacing=tokens.SPACE_XS,
+        ),
+        padding=ft.Padding(
+            left=tokens.SPACE_XL,
+            right=tokens.SPACE_XL,
+            top=tokens.SPACE_XS,
+            bottom=tokens.SPACE_XS,
+        ),
+    )
 
     # Search bar
     search_bar = ft.Container(
@@ -261,6 +306,7 @@ def SitesScreen() -> Control:
     return ft.Column(
         controls=[
             search_bar,
+            category_chips,
             bulk_actions,
             stats_header,
             body,

@@ -278,6 +278,210 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
             asyncio.create_task(_do_export())
 
+        def _show_graph_analysis_dialog(progress, app_state):
+            from flet import context
+
+            page = context.page
+            if not page:
+                return
+
+            from services.graph_service import (
+                build_identity_graph,
+                export_cytoscape_json,
+                get_graph_analytics,
+            )
+
+            username = app_state.last_results_username or getattr(
+                progress, "username", "target"
+            )
+            G = build_identity_graph(
+                username=username,
+                found_accounts=list(progress.found),
+                enrichments=dict(app_state.enrichments or {}),
+                email_results=list(app_state.email_results or []),
+            )
+            analytics = get_graph_analytics(G)
+            cy_data = export_cytoscape_json(G)
+
+            metric_row = ft.Row(
+                controls=[
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    str(analytics["nodes"]),
+                                    size=tokens.FONT_LG,
+                                    weight=ft.FontWeight.BOLD,
+                                    color=AppColors.PRIMARY,
+                                ),
+                                ft.Text(
+                                    "Entities",
+                                    size=tokens.FONT_XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=0,
+                        ),
+                        expand=True,
+                    ),
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    str(analytics["edges"]),
+                                    size=tokens.FONT_LG,
+                                    weight=ft.FontWeight.BOLD,
+                                    color=AppColors.PRIMARY,
+                                ),
+                                ft.Text(
+                                    "Connections",
+                                    size=tokens.FONT_XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=0,
+                        ),
+                        expand=True,
+                    ),
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    str(analytics["components"]),
+                                    size=tokens.FONT_LG,
+                                    weight=ft.FontWeight.BOLD,
+                                    color=AppColors.SUCCESS,
+                                ),
+                                ft.Text(
+                                    "Clusters",
+                                    size=tokens.FONT_XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=0,
+                        ),
+                        expand=True,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+            )
+
+            hub_rows = []
+            for item in analytics.get("top_canonical_nodes", []):
+                hub_rows.append(
+                    ft.Row(
+                        [
+                            ft.Icon(
+                                ft.Icons.HUB_ROUNDED, size=14, color=AppColors.PRIMARY
+                            ),
+                            ft.Text(
+                                item["label"],
+                                size=tokens.FONT_SM,
+                                weight=ft.FontWeight.W_500,
+                                expand=True,
+                            ),
+                            ft.Text(
+                                f"Rank: {item['centrality']}",
+                                size=tokens.FONT_XS,
+                                color=AppColors.PRIMARY,
+                            ),
+                        ],
+                        spacing=tokens.SPACE_SM,
+                    )
+                )
+
+            async def _copy_cytoscape():
+                import json
+
+                try:
+                    cb = ft.Clipboard()
+                    if cy_data:
+                        await cb.set(json.dumps(cy_data, indent=2))
+                        from core.notify import show_snack
+
+                        show_snack(
+                            page,
+                            "Cytoscape JSON copied to clipboard!",
+                            bgcolor=AppColors.SUCCESS,
+                        )
+                except Exception as exc:
+                    logger.warning("Failed to copy cytoscape json: %s", exc)
+
+            dlg = ft.AlertDialog(
+                modal=False,
+                title=ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.ACCOUNT_TREE_ROUNDED,
+                            color=AppColors.PRIMARY,
+                            size=tokens.ICON_MD,
+                        ),
+                        ft.Text(
+                            "Identity Network Analysis",
+                            size=tokens.FONT_MD,
+                            weight=ft.FontWeight.BOLD,
+                            font_family="Outfit",
+                            color=AppColors.PRIMARY,
+                        ),
+                    ],
+                    spacing=tokens.SPACE_SM,
+                ),
+                content=ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Text(
+                                f"Graph clustering and canonical hubs for {username}",
+                                size=tokens.FONT_XS,
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                            ft.Container(height=tokens.SPACE_XS),
+                            ft.Container(
+                                content=metric_row,
+                                padding=tokens.SPACE_MD,
+                                border_radius=tokens.RADIUS_MD,
+                                bgcolor=ft.Colors.with_opacity(0.08, AppColors.PRIMARY),
+                            ),
+                            ft.Container(height=tokens.SPACE_SM),
+                            ft.Text(
+                                "Top Canonical Accounts / Hubs",
+                                size=tokens.FONT_XS,
+                                weight=ft.FontWeight.BOLD,
+                                color=AppColors.PRIMARY,
+                            ),
+                            ft.Container(
+                                content=ft.Column(
+                                    controls=hub_rows
+                                    if hub_rows
+                                    else [
+                                        ft.Text(
+                                            "No hubs identified.", size=tokens.FONT_XS
+                                        )
+                                    ],
+                                    spacing=4,
+                                ),
+                                padding=ft.Padding(0, 4, 0, 4),
+                            ),
+                        ],
+                        tight=True,
+                        spacing=0,
+                    ),
+                    width=380,
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Copy Cytoscape JSON",
+                        icon=ft.Icons.COPY_ROUNDED,
+                        on_click=lambda e: asyncio.create_task(_copy_cytoscape()),
+                    ),
+                    ft.TextButton("Close", on_click=lambda e: page.pop_dialog()),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+            page.show_dialog(dlg)
+
         def _show_export_dialog(e):
             from flet import context
 
@@ -289,6 +493,22 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             sheet = ft.BottomSheet(
                 content=ft.Column(
                     [
+                        ft.ListTile(
+                            title=ft.Text(
+                                "Identity Network Analysis",
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            subtitle=ft.Text("Graph clustering & hub analytics"),
+                            leading=ft.Icon(
+                                ft.Icons.ACCOUNT_TREE_ROUNDED, color=AppColors.PRIMARY
+                            ),
+                            on_click=lambda e: (
+                                page.pop_dialog(),
+                                _show_graph_analysis_dialog(
+                                    app_state.search_progress, app_state
+                                ),
+                            ),
+                        ),
                         ft.ListTile(
                             title=ft.Text(
                                 "PDF Intelligence Dossier (.pdf)",

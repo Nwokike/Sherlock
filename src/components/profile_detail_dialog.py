@@ -6,6 +6,7 @@ Extracted helpers: EmailDossier + UsernameDossier share DossierRow.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import flet as ft
@@ -690,6 +691,55 @@ def _username_dossier(
                 ft.Icons.TIMER_OUTLINED,
                 "Response Time",
                 f"{query_time:.2f} seconds",
+            )
+        )
+
+    # Raw OSINT metadata payload preview
+    raw_payload = {}
+    if enrich:
+        raw_payload["enrichment"] = enrich
+    if others:
+        raw_payload["others"] = others
+    if raw_payload:
+        json_str = json.dumps(raw_payload, indent=2, ensure_ascii=False)
+        items.append(
+            ft.ExpansionTile(
+                title=ft.Text(
+                    "Raw OSINT Indicators / JSON",
+                    size=tokens.FONT_SM,
+                    weight=ft.FontWeight.W_600,
+                    color=AppColors.PRIMARY,
+                ),
+                leading=ft.Icon(
+                    ft.Icons.CODE_ROUNDED, size=16, color=AppColors.PRIMARY
+                ),
+                controls=[
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    json_str,
+                                    size=10,
+                                    font_family="Courier New",
+                                    color=AppColors.TERMINAL_GREEN,
+                                    selectable=True,
+                                )
+                            ],
+                            scroll=ft.ScrollMode.AUTO,
+                        ),
+                        bgcolor=AppColors.TERMINAL_BG,
+                        border=ft.Border.all(
+                            1,
+                            ft.Colors.with_opacity(
+                                tokens.OPACITY_LIGHT, ft.Colors.WHITE
+                            ),
+                        ),
+                        border_radius=tokens.RADIUS_SM,
+                        padding=tokens.SPACE_SM,
+                        margin=ft.Margin(0, tokens.SPACE_XS, 0, tokens.SPACE_SM),
+                        height=160,
+                    )
+                ],
             )
         )
 

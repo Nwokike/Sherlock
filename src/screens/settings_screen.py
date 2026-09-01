@@ -33,6 +33,7 @@ from core.constants import (
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_PROXY_URL,
+    STORAGE_SCAN_DEPTH,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
 )
@@ -252,6 +253,11 @@ def SettingsScreen() -> Control:
             _persist(STORAGE_NO_PASSWORD_RECOVERY, "true" if val else "false")
         )
 
+    def _on_scan_depth_change(val: str):
+        state.scan_depth = val
+        asyncio.create_task(_persist(STORAGE_SCAN_DEPTH, val))
+        asyncio.create_task(controller.refresh_sites())
+
     async def _persist(key: str, value: str):
         from flet import context
         from services.storage_service import StorageService
@@ -434,6 +440,27 @@ def SettingsScreen() -> Control:
     # Performance
     performance_card = _settings_card(
         [
+            _setting_row(
+                ft.Icons.TRAVEL_EXPLORE_ROUNDED,
+                "Scan Scope & Depth",
+                "Choose between full sweep or top Alexa-ranked networks",
+                ft.SegmentedButton(
+                    segments=[
+                        ft.Segment(value="all", label=ft.Text("All 3.3k", size=10)),
+                        ft.Segment(value="1000", label=ft.Text("Top 1k", size=10)),
+                        ft.Segment(value="500", label=ft.Text("Top 500", size=10)),
+                    ],
+                    selected={state.scan_depth or "all"},
+                    on_change=lambda e: _on_scan_depth_change(
+                        list(e.control.selected)[0]
+                    ),
+                    show_selected_icon=False,
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
             _setting_row(
                 ft.Icons.FLASH_ON_ROUNDED,
                 "Fast Offline Scan",

@@ -76,6 +76,7 @@ class AppState:
     selected_sites: list[str] | None = None
     use_local_db: bool = True
     custom_manifest: str = ""
+    scan_depth: str = "all"
 
     # --- Site database ---
     # Total sites in the active site database (0 until first load lands).
@@ -86,6 +87,8 @@ class AppState:
     # Warm copy of site names persisted to storage — lets the Sites
     # screen render before (or if) a fresh load finishes.
     sites_cache: list | None = None
+    # Map of site_name -> list of category/country tags
+    sites_tags_map: dict | None = None
 
     # --- Update & Announcement ---
     update_available: bool = False
@@ -101,6 +104,7 @@ class AppState:
         self.search_targets = []
         self.target_results = {}
         self.sites_cache = []
+        self.sites_tags_map = {}
         self.email_results = []
         self.enrichments = {}
         self.update_data = None

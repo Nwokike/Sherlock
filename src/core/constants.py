@@ -1,8 +1,8 @@
 """Application-wide constants."""
 
 APP_NAME = "Sherlock"
-APP_VERSION = "2.0.0"
-APP_BUILD_NUMBER = 9
+APP_VERSION = "2.1.0"
+APP_BUILD_NUMBER = 10
 
 # ── Update & Distribution URLs ─────────────────────────────────────────
 UPDATE_CONFIG_URL = (
@@ -30,6 +30,7 @@ STORAGE_EMAIL_METHOD_FILTER = "sherlock_email_method_filter"
 STORAGE_PROXY_URL = "sherlock_proxy_url"
 STORAGE_ENRICHMENT_MODE = "sherlock_enrichment_mode"
 STORAGE_NO_PASSWORD_RECOVERY = "sherlock_no_pw_recovery"
+STORAGE_SCAN_DEPTH = "sherlock_scan_depth"
 
 # ── Search modes ──────────────────────────────────────────────────────
 MODE_USERNAME = "username"

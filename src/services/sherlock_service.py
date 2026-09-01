@@ -282,9 +282,15 @@ class SherlockService:
 
             self._db = await asyncio.to_thread(_load_db)
 
-            # Build sites dict according to NSFW & exclusion settings
+            # Build sites dict according to NSFW & exclusion settings and scan depth
             excluded_tags = [] if state.nsfw_enabled else ["nsfw"]
+            top_limit = (
+                500
+                if state.scan_depth == "500"
+                else (1000 if state.scan_depth == "1000" else 9223372036854775807)
+            )
             sites_dict = self._db.ranked_sites_dict(
+                top=top_limit,
                 disabled=state.ignore_exclusions,
                 excluded_tags=excluded_tags,
                 id_type="username",
@@ -296,6 +302,9 @@ class SherlockService:
             # Populate reactive state
             state.sites_total = self._total_sites
             state.sites_cache = sorted(sites_dict.keys(), key=str.lower)
+            state.sites_tags_map = {
+                k: list(getattr(v, "tags", [])) for k, v in sites_dict.items()
+            }
             state.sites_version += 1
 
             logger.info("Loaded %d Maigret sites", self._total_sites)

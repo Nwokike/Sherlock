@@ -102,9 +102,21 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
 
 
 def _build_result_list(
-    items, empty_title: str, empty_msg: str, build_card, debounced_filter: str = ""
+    items,
+    empty_title: str,
+    empty_msg: str,
+    build_card,
+    debounced_filter: str = "",
+    live_cap: int = 0,
 ) -> Control:
-    """Shared list builder with virtualization for large result sets."""
+    """Shared list builder with virtualization for large result sets.
+
+    `live_cap` bounds how many cards get BUILT while a scan is running:
+    every card is ~12-15 controls, and Flet re-renders + re-diffs this
+    whole list on each ~2Hz progress tick, so an uncapped list of hundreds
+    of cards saturated the main loop (the scan freeze). The overflow is
+    shown as a footer; the full list renders when the scan completes.
+    """
     if not items:
         from components.empty_state import EmptyState
 
@@ -115,9 +127,27 @@ def _build_result_list(
             else empty_msg,
             icon=ft.Icons.SEARCH_OFF_ROUNDED,
         )
+    shown = items
+    footer = None
+    if live_cap and len(items) > live_cap:
+        shown = items[:live_cap]
+        footer = ft.Container(
+            content=ft.Text(
+                f"+ {len(items) - live_cap} more — scan in progress",
+                size=12,
+                italic=True,
+                color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE),
+                text_align=ft.TextAlign.CENTER,
+            ),
+            padding=ft.Padding(0, 10, 0, 14),
+            alignment=ft.Alignment.CENTER,
+        )
+    shown_controls = [build_card(r) for r in shown]
+    if footer:
+        shown_controls.append(footer)
     # Use ListView with build_controls_on_demand for virtualization on large lists (400+).
     return ft.ListView(
-        controls=[build_card(r) for r in items],
+        controls=shown_controls,
         spacing=0,
         expand=True,
         build_controls_on_demand=True,
@@ -236,6 +266,7 @@ def ResultsScreen() -> Control:
                     "method": r.method,
                     "exists": r.exists,
                     "rateLimit": r.rate_limit,
+                    "unavailable": r.unavailable,
                     "frequent_rate_limit": r.frequent_rate_limit,
                     "emailrecovery": r.email_recovery,
                     "phoneNumber": r.phone_number,
@@ -245,6 +276,7 @@ def ResultsScreen() -> Control:
             raw_found = [_to_dict(r) for r in active_progress.found]
             raw_not_found = [_to_dict(r) for r in active_progress.not_found]
             raw_rate_limited = [_to_dict(r) for r in active_progress.rate_limited]
+            raw_unavailable = [_to_dict(r) for r in active_progress.unavailable]
             total = active_progress.total_modules or state.email_total_modules or 121
             checked = active_progress.checked_modules
         else:
@@ -253,18 +285,31 @@ def ResultsScreen() -> Control:
                 r for r in all_email if r.get("exists") and not r.get("rateLimit")
             ]
             raw_not_found = [
-                r for r in all_email if not r.get("exists") and not r.get("rateLimit")
+                r
+                for r in all_email
+                if not r.get("exists")
+                and not r.get("rateLimit")
+                and not r.get("unavailable")
             ]
-            raw_rate_limited = [r for r in all_email if r.get("rateLimit")]
+            raw_rate_limited = [
+                r for r in all_email if r.get("rateLimit") and not r.get("unavailable")
+            ]
+            raw_unavailable = [r for r in all_email if r.get("unavailable")]
             total = state.email_total_modules or len(all_email) or 121
             checked = total if all_email else 0
 
         def _make_email_card(r):
+            if r.get("exists"):
+                status = "Claimed"
+            elif r.get("rateLimit"):
+                status = "Error"
+            elif r.get("unavailable"):
+                status = "Unavailable"
+            else:
+                status = "Available"
             return ResultCard(
                 site_name=r.get("name", "unknown"),
-                status="Claimed"
-                if r.get("exists")
-                else ("Error" if r.get("rateLimit") else "Available"),
+                status=status,
                 url_user=None,
                 url_main=f"https://{r.get('domain', '')}" if r.get("domain") else None,
                 on_open=lambda url: _open_url(url),
@@ -290,6 +335,7 @@ def ResultsScreen() -> Control:
         raw_found = _apply_email_extras(raw_found)
         raw_not_found = [] if only_found else _apply_email_extras(raw_not_found)
         raw_rate_limited = [] if only_found else _apply_email_extras(raw_rate_limited)
+        raw_unavailable = [] if only_found else _apply_email_extras(raw_unavailable)
 
         email_found_filtered = _filter_by_name(
             raw_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
@@ -300,10 +346,13 @@ def ResultsScreen() -> Control:
         email_rate_limited_filtered = _filter_by_name(
             raw_rate_limited, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
         )
+        email_unavailable_filtered = _filter_by_name(
+            raw_unavailable, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+        )
 
         tabs = ft.Tabs(
             selected_index=0,
-            length=3,
+            length=4,
             content=ft.Column(
                 [
                     ft.TabBar(
@@ -314,6 +363,9 @@ def ResultsScreen() -> Control:
                             ),
                             ft.Tab(
                                 label=f"Rate Limited ({len(email_rate_limited_filtered)})"
+                            ),
+                            ft.Tab(
+                                label=f"Unavailable ({len(email_unavailable_filtered)})"
                             ),
                         ],
                         scrollable=False,
@@ -337,6 +389,7 @@ def ResultsScreen() -> Control:
                                 "No platforms matched this email address.",
                                 _make_email_card,
                                 debounced_filter,
+                                live_cap=60 if is_running else 0,
                             ),
                             _build_result_list(
                                 email_not_found_filtered,
@@ -344,6 +397,7 @@ def ResultsScreen() -> Control:
                                 "Every platform confirmed this email is registered.",
                                 _make_email_card,
                                 debounced_filter,
+                                live_cap=60 if is_running else 0,
                             ),
                             _build_result_list(
                                 email_rate_limited_filtered,
@@ -351,6 +405,15 @@ def ResultsScreen() -> Control:
                                 "All checks completed without rate limiting.",
                                 _make_email_card,
                                 debounced_filter,
+                                live_cap=60 if is_running else 0,
+                            ),
+                            _build_result_list(
+                                email_unavailable_filtered,
+                                "No unavailable platforms",
+                                "Every platform check is currently supported.",
+                                _make_email_card,
+                                debounced_filter,
+                                live_cap=60 if is_running else 0,
                             ),
                         ],
                         expand=True,
@@ -370,7 +433,7 @@ def ResultsScreen() -> Control:
                     ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
                 ),
                 StatCard("Rate Ltd", str(len(raw_rate_limited)), AppColors.WARNING),
-                StatCard("Total", str(total), ft.Colors.PRIMARY),
+                StatCard("Unavail", str(len(raw_unavailable)), AppColors.ERROR),
             ],
             spacing=tokens.SPACE_SM,
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
@@ -462,6 +525,7 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
+                                live_cap=60 if is_running else 0,
                             ),
                             _build_result_list(
                                 notfound_items,
@@ -471,6 +535,7 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
+                                live_cap=60 if is_running else 0,
                             ),
                             _build_result_list(
                                 error_items,
@@ -480,6 +545,7 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
+                                live_cap=60 if is_running else 0,
                             ),
                         ],
                         expand=True,

@@ -11,7 +11,6 @@ Supports rich profile previews:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 
 import flet as ft
@@ -32,6 +31,10 @@ def _status_icon_and_color(status: str) -> tuple[str, str]:
         )
     elif status == "WAF":
         return ft.Icons.SHIELD_ROUNDED, AppColors.WARNING
+    elif status == "Unavailable":
+        return ft.Icons.HIDE_SOURCE_ROUNDED, ft.Colors.with_opacity(
+            tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
+        )
     else:
         return ft.Icons.ERROR_OUTLINE_ROUNDED, AppColors.WARNING
 
@@ -338,11 +341,12 @@ def ResultCard(
         avatar_url and isinstance(avatar_url, str) and avatar_url.startswith("http")
     )
     if has_valid_avatar:
-        from services.cache_service import (
-            ensure_cached_avatar,
-            schedule_avatar_download,
-        )
+        from services.cache_service import ensure_cached_avatar
 
+        # NOTE: no background download here — this renders per card per
+        # progress tick; spawning an httpx task per render was a task storm
+        # contributing to the scan freeze. The cache is warmed by the
+        # dossier dialog when the user opens details.
         leading_control = ft.Image(
             src=ensure_cached_avatar(avatar_url),
             width=36,
@@ -358,12 +362,6 @@ def ResultCard(
                 alignment=ft.Alignment.CENTER,
             ),
         )
-        # Warm the on-device avatar cache in the background — the image is
-        # shown from the remote URL now, but instantly on the next render.
-        try:
-            asyncio.create_task(schedule_avatar_download(avatar_url))
-        except RuntimeError:
-            pass  # no running loop (e.g. test render) — cache warms later
     else:
         leading_control = ft.Container(
             content=ft.Icon(icon, size=tokens.RESULT_ICON, color=icon_color),

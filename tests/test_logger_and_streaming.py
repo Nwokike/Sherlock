@@ -60,6 +60,8 @@ def test_streaming_enrichment_queues_and_processes():
     controller._enrich_queue = asyncio.Queue()
 
     async def run_test():
+        # Start render-budget flusher (applies _pending_enrichments batches)
+        flusher_task = asyncio.create_task(controller._render_flusher())
         # Start worker task
         worker_task = asyncio.create_task(controller._drain_enrich_queue())
 
@@ -86,6 +88,10 @@ def test_streaming_enrichment_queues_and_processes():
 
         if not worker_task.done():
             worker_task.cancel()
+
+        # Allow the flusher window to land the batched enrichment in state
+        await asyncio.sleep(0.9)
+        flusher_task.cancel()
 
         # Verify enrichment was applied to state
         assert "https://github.com/testuser" in state.enrichments

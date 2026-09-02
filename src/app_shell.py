@@ -781,6 +781,11 @@ def AppShell() -> Control:
         except Exception:
             pass
 
+    # NOTE: progress_version deliberately NOT in deps — the reactive patch
+    # already pushes scan progress to the UI; adding it here forced a second
+    # full page.update() serialization per progress tick and saturated the
+    # main loop (the scan freeze). Chrome only needs to sync on branch,
+    # auth, or theme changes.
     ft.use_effect(
         _sync_chrome,
         [
@@ -788,7 +793,6 @@ def AppShell() -> Control:
             active_view,
             state.has_accepted_terms,
             state.theme_mode,
-            state.progress_version,
         ],
     )
 

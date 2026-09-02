@@ -41,4 +41,4 @@ def test_email_search_progress_live_accumulation():
 def test_email_service_cancellation():
     service = EmailService()
     service.cancel()
-    assert service._cancel_event.is_set() is True
+    assert service._thread_cancel.is_set() is True

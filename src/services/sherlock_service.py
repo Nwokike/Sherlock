@@ -33,6 +33,40 @@ except ImportError as err:
     QueryNotifyPrint = object
 
 
+if _MAIGRET_AVAILABLE:
+
+    class _SilentBar:
+        """Drop-in replacement for alive_progress's alive_bar handle.
+
+        maigret constructs an alive_bar unconditionally (checking.py calls
+        it even with disable=True). alive_progress initializes its text
+        engine at construction, and the grapheme package it depends on
+        loads its data with a raw open() inside site-packages — which on
+        Android is the sitepackages.zip FILE, so the path open() raises
+        [Errno 20] Not a directory and every scan dies before starting.
+        We never render the bar (we drive progress through our own notify
+        bridge with no_progressbar=True), so a silent handle is
+        behavior-identical on every platform and sidesteps the zip trap.
+        """
+
+        def __call__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def text(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> "_SilentBar":
+            return self
+
+        def __exit__(self, *args: Any) -> bool:
+            return False
+
+    def _silent_alive_bar(*args: Any, **kwargs: Any) -> "_SilentBar":
+        return _SilentBar()
+
+    maigret.checking.alive_bar = _silent_alive_bar
+
+
 def _resolve_local_db() -> str:
     """Return a real filesystem path to the site database.
 

@@ -114,6 +114,15 @@ class AppController:
         self._last_progress_emit: float = 0.0
         self._pending_progress: Any | None = None
         self._progress_emit_scheduled: bool = False
+        # Single render-budget flusher: ALL scan-time observable mutations
+        # (progress ticks + enrichment batches) funnel through one task that
+        # bumps progress_version at most ~2x/sec. Every bump re-renders the
+        # whole tree on the main loop (Flet has no internal batching), so
+        # per-URL enrichment bumps and 5Hz ticks were saturating the loop —
+        # the scan freeze. Completions/cancellations bump directly.
+        self._render_dirty: bool = False
+        self._pending_enrichments: dict[str, dict] = {}
+        self._render_flush_task: asyncio.Task | None = None
 
     # --- Lifecycle ----------------------------------------------------
 
@@ -144,6 +153,10 @@ class AppController:
             self._enrich_worker_task.cancel()
             killed.append("enrich-worker")
         self._enrich_queue = None
+        if self._render_flush_task and not self._render_flush_task.done():
+            self._render_flush_task.cancel()
+            killed.append("render-flusher")
+        self._render_flush_task = None
         if hasattr(self.sherlock_service, "cancel"):
             self.sherlock_service.cancel()
             killed.append("sherlock-engine")
@@ -163,6 +176,47 @@ class AppController:
     def _register_search_task(self) -> None:
         """Register the calling task as the active search (killable)."""
         self._search_task = asyncio.current_task()
+        self._start_render_flusher()
+
+    def _start_render_flusher(self) -> None:
+        """Start the single render-budget flusher for this search cycle."""
+        if self._render_flush_task and not self._render_flush_task.done():
+            return
+        self._render_dirty = False
+        self._pending_enrichments = {}
+        self._render_flush_task = asyncio.create_task(self._render_flusher())
+
+    async def _render_flusher(self) -> None:
+        """The ONLY progress_version bumper during a scan (~2Hz max).
+
+        Every bump invalidates every use_context(AppStateCtx) component and
+        re-renders + re-diffs + re-encodes the whole tree on the main loop —
+        Flet 0.86.5 has zero internal batching (session.py __updates_scheduler
+        drains per wake, MessagePack encode inline). Funneling all scan-time
+        mutations through this one window keeps the loop free for socket
+        receive and click dispatch.
+        """
+        try:
+            while True:
+                await asyncio.sleep(0.5)
+                if not self._render_dirty:
+                    continue
+                self._render_dirty = False
+                if self._pending_enrichments:
+                    batch = self._pending_enrichments
+                    self._pending_enrichments = {}
+                    state.enrichments.update(batch)
+                    # Mirror set_enrichment's LRU cap after the batch write.
+                    from core.state import _ENRICHMENT_CAP
+
+                    while len(state.enrichments) > _ENRICHMENT_CAP:
+                        oldest = next(iter(state.enrichments))
+                        del state.enrichments[oldest]
+                # Dirty alone means render — the enrichment tail after a
+                # scan completes also lands here (is_searching already False).
+                state.progress_version += 1
+        except asyncio.CancelledError:
+            pass
 
     async def init(self) -> None:
         """Configure the page, init services, load state, mount AppShell."""
@@ -530,8 +584,11 @@ class AppController:
                 username, len(result.found), result.total_sites, mode=MODE_USERNAME
             )
 
-            # Final progress apply (enqueues any remaining found URLs)
+            # Final progress apply (enqueues any remaining found URLs).
+            # Explicit bump: the flusher only renders while is_searching,
+            # and the final result object may be the live one (silent assign).
             await self._apply_progress(result)
+            state.progress_version += 1
         except asyncio.CancelledError:
             logger.info("WATCHDOG: username search %r killed mid-flight", username)
             raise
@@ -582,8 +639,10 @@ class AppController:
                     )
                     data = await fn(url, timeout=8 if use_mutations else 6)
                     if data:
-                        state.set_enrichment(url, data)
-                        state.progress_version += 1
+                        # Batch into the flusher — never bump per URL: every
+                        # observable write re-renders the whole tree.
+                        self._pending_enrichments[url] = data
+                        self._render_dirty = True
                 except Exception as exc:
                     logger.warning("Streaming enrichment error for %s: %s", url, exc)
 
@@ -613,9 +672,9 @@ class AppController:
     def _progress_from_thread(self, progress) -> None:
         """Bridge a scan-worker progress tick onto the main event loop.
 
-        Coalesces rapid worker updates so the UI loop is updated at a clean,
-        smooth ~5 Hz rate, avoiding MessagePack socket saturation and keeping
-        the UI 100% responsive.
+        Coalesces rapid worker updates (500ms window — ~2Hz UI budget) and
+        marks the render flusher dirty instead of bumping progress_version
+        directly: one pipeline, one bump window, main loop stays free.
         """
         if not self._main_loop:
             logger.warning("No main loop captured; progress tick dropped")
@@ -625,7 +684,7 @@ class AppController:
             return
 
         now = time.monotonic()
-        delay = max(0.0, 0.20 - (now - self._last_progress_emit))
+        delay = max(0.0, 0.50 - (now - self._last_progress_emit))
         self._progress_emit_scheduled = True
 
         async def _flush():
@@ -635,6 +694,7 @@ class AppController:
             self._pending_progress = None
             if snap is not None:
                 await self._apply_progress(snap)
+                self._render_dirty = True
 
         if delay > 0.001:
             self._main_loop.call_later(
@@ -649,6 +709,11 @@ class AppController:
 
     async def _apply_progress(self, progress) -> None:
         """Push a search-progress snapshot into observable state.
+
+        NOTE: does NOT bump progress_version — during a scan the render
+        flusher owns that (single ~2Hz window). Assigning the live progress
+        object is silent (same identity), so this only updates data; the
+        next flusher tick renders it. Completion paths bump explicitly.
 
         Ticks from killed/superseded scans are dropped: a dying scan's
         late callbacks (e.g. its finally-block tick) must never clobber
@@ -679,7 +744,6 @@ class AppController:
             logger.debug("Dropping stale username progress tick — superseded scan")
             return
         state.search_progress = progress
-        state.progress_version += 1
 
         # Stream newly discovered found URLs into the enrichment queue
         if (
@@ -760,7 +824,7 @@ class AppController:
         try:
             result = await self.email_service.search(
                 email=email.strip(),
-                on_progress=self._email_progress_callback,
+                on_progress=self._progress_from_thread,
                 timeout=state.email_timeout,
                 skip_password_recovery=state.no_password_recovery,
                 concurrency=getattr(state, "email_concurrency", 15),
@@ -793,7 +857,12 @@ class AppController:
 
             # Convert to result list for state
             all_results = []
-            for r in result.found + result.not_found + result.rate_limited:
+            for r in (
+                result.found
+                + result.not_found
+                + result.rate_limited
+                + result.unavailable
+            ):
                 all_results.append(
                     {
                         "name": r.name,
@@ -801,6 +870,7 @@ class AppController:
                         "method": r.method,
                         "exists": r.exists,
                         "rateLimit": r.rate_limit,
+                        "unavailable": r.unavailable,
                         "frequent_rate_limit": r.frequent_rate_limit,
                         "emailrecovery": r.email_recovery,
                         "phoneNumber": r.phone_number,
@@ -812,6 +882,7 @@ class AppController:
             state.email_found_count = len(result.found)
             state.email_not_found_count = len(result.not_found)
             state.email_rate_limited_count = len(result.rate_limited)
+            state.email_unavailable_count = len(result.unavailable)
             state.email_total_modules = result.total_modules
 
             # Email enrichment via socid-extractor is intentionally skipped:
@@ -827,8 +898,11 @@ class AppController:
                 mode=MODE_EMAIL,
             )
 
-            # Final progress apply
+            # Final progress apply — explicit bump: the flusher only renders
+            # while is_searching, and result may be the live progress object
+            # (silent assign).
             await self._apply_progress(result)
+            state.progress_version += 1
         except asyncio.CancelledError:
             logger.info("WATCHDOG: email search %r killed mid-flight", email)
             raise
@@ -861,18 +935,6 @@ class AppController:
                 else ERR_GENERIC
             )
             self._show_snack(msg, duration=10000)
-
-    def _email_progress_callback(self, progress) -> None:
-        """Bridge email search progress to observable state."""
-        if not self._main_loop:
-            logger.warning("Email progress tick dropped — no main loop captured")
-            return
-        try:
-            asyncio.run_coroutine_threadsafe(
-                self._apply_progress(progress), self._main_loop
-            )
-        except Exception as e:
-            logger.warning("Email progress dispatch failed: %s", e)
 
     def cancel_email_search(self) -> None:
         """Cancel a running email search (sync — called from UI)."""

@@ -24,6 +24,12 @@ except ImportError as err:
 # re-running pycountry fuzzy matching per string. Populated lazily on the
 # first location resolve; persisted fields mirror CountryInfo.
 _DISK_CACHE: dict[str, list[str]] | None = None
+# Disk flushes are rate-limited: resolve_location runs ON the UI render
+# path, and a file write per novel location was render-path IO. Memory
+# updates stay instant; disk lags at most _GEO_FLUSH_INTERVAL.
+_GEO_FLUSH_INTERVAL = 10.0
+_LAST_GEO_FLUSH = [0.0]
+_GEO_FLUSH_DIRTY = [False]
 
 
 def _country_to_row(c: CountryInfo | None) -> list[str] | None:
@@ -59,9 +65,8 @@ def _load_disk_cache() -> dict[str, list[str]]:
 
 
 def _record_disk_hit(key: str, c: CountryInfo | None) -> None:
-    """Remember a resolved (or confirmed-unresolvable) location string, then
-    persist opportunistically — geo lookups cluster at scan/render time, so
-    writes after the burst amortize to near zero IO. A stored empty row means
+    """Remember a resolved (or confirmed-unresolvable) location string and
+    persist at most once per flush interval. A stored empty row means
     "known unresolvable"; past successes are never downgraded to failures.
     """
     store = _load_disk_cache()
@@ -72,6 +77,13 @@ def _record_disk_hit(key: str, c: CountryInfo | None) -> None:
     if store.get(key) == new_val:
         return
     store[key] = new_val
+    import time as _time
+
+    now = _time.monotonic()
+    if _GEO_FLUSH_DIRTY[0] or (now - _LAST_GEO_FLUSH[0]) < _GEO_FLUSH_INTERVAL:
+        _GEO_FLUSH_DIRTY[0] = True  # memory holds it; disk flushes later
+        return
+    _LAST_GEO_FLUSH[0] = now
     try:
         from services.cache_service import save_geo_cache
 

@@ -52,6 +52,7 @@ class AppState:
     email_found_count: int = 0
     email_not_found_count: int = 0
     email_rate_limited_count: int = 0
+    email_unavailable_count: int = 0
     email_total_modules: int = 0
 
     # --- Profile enrichment ---

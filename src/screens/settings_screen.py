@@ -57,48 +57,75 @@ def _setting_row(
     title: str,
     subtitle: str,
     trailing: Control,
+    stacked: bool = False,
 ) -> ft.Container:
-    """Reusable settings row with icon + text + trailing control."""
-    return ft.Container(
-        content=ft.Row(
+    """Reusable settings row with icon + text + trailing control.
+
+    On narrow screens (`stacked=True`) the trailing control moves to its
+    own line below the description instead of competing for horizontal
+    space — SegmentedButtons and Sliders otherwise squeeze the subtitle
+    or overflow on phones. Wide layouts are unchanged.
+    """
+    icon_box = ft.Container(
+        content=ft.Icon(
+            icon,
+            size=tokens.ICON_MD,
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        ),
+        width=tokens.ICON_BACKDROP,
+        height=tokens.ICON_BACKDROP,
+        border_radius=tokens.ICON_BACKDROP_RADIUS,
+        bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE),
+        alignment=ft.Alignment.CENTER,
+    )
+    text_col = ft.Column(
+        controls=[
+            ft.Text(
+                title,
+                size=tokens.FONT_MD,
+                weight=ft.FontWeight.W_500,
+            ),
+            ft.Text(
+                subtitle,
+                size=tokens.FONT_XS,
+                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+            ),
+        ],
+        spacing=tokens.SPACE_XXS,
+        expand=True,
+    )
+
+    if stacked:
+        # Sliders and SegmentedButtons stretch across the second line;
+        # switches/buttons keep their natural size under the text indent.
+        stretches = isinstance(trailing, (ft.Slider, ft.SegmentedButton))
+        trailing_line = ft.Row(
             controls=[
-                ft.Container(
-                    content=ft.Icon(
-                        icon,
-                        size=tokens.ICON_MD,
-                        color=ft.Colors.ON_SURFACE_VARIANT,
-                    ),
-                    width=tokens.ICON_BACKDROP,
-                    height=tokens.ICON_BACKDROP,
-                    border_radius=tokens.ICON_BACKDROP_RADIUS,
-                    bgcolor=ft.Colors.with_opacity(
-                        tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE
-                    ),
-                    alignment=ft.Alignment.CENTER,
-                ),
-                ft.Column(
-                    controls=[
-                        ft.Text(
-                            title,
-                            size=tokens.FONT_MD,
-                            weight=ft.FontWeight.W_500,
-                        ),
-                        ft.Text(
-                            subtitle,
-                            size=tokens.FONT_XS,
-                            color=ft.Colors.with_opacity(
-                                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
-                            ),
-                        ),
-                    ],
-                    spacing=tokens.SPACE_XXS,
-                    expand=True,
-                ),
-                trailing,
+                ft.Container(width=tokens.ICON_BACKDROP + tokens.SPACE_MD),
+                (ft.Row(controls=[trailing], expand=True) if stretches else trailing),
             ],
+            spacing=0,
+        )
+        content = ft.Column(
+            controls=[
+                ft.Row(
+                    controls=[icon_box, text_col],
+                    spacing=tokens.SPACE_MD,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                trailing_line,
+            ],
+            spacing=tokens.SPACE_XS,
+        )
+    else:
+        content = ft.Row(
+            controls=[icon_box, text_col, trailing],
             spacing=tokens.SPACE_MD,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
+        )
+
+    return ft.Container(
+        content=content,
         padding=ft.Padding(
             left=tokens.SPACE_LG,
             right=tokens.SPACE_LG,
@@ -133,6 +160,10 @@ def SettingsScreen() -> Control:
         page = context.page
     except Exception:
         page = None
+
+    # Narrow screens stack each setting's control under its description —
+    # one-line rows squeeze subtitles and overflow SegmentedButtons.
+    narrow = bool(page and getattr(page, "width", None) and page.width < 600)
 
     async def _on_theme_change(val: str):
         if val == "system":
@@ -413,6 +444,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_recursive_search(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -427,6 +459,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_extract_info(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -441,6 +474,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_exclusions(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -455,6 +489,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_nsfw(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -477,6 +512,7 @@ def SettingsScreen() -> Control:
                     ),
                     show_selected_icon=False,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -497,6 +533,7 @@ def SettingsScreen() -> Control:
                     ),
                     show_selected_icon=False,
                 ),
+                stacked=narrow,
             ),
         ]
     )
@@ -513,6 +550,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_use_curl_cffi(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -533,6 +571,7 @@ def SettingsScreen() -> Control:
                         str(int(e.control.value))
                     ),
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -553,6 +592,7 @@ def SettingsScreen() -> Control:
                         str(int(e.control.value))
                     ),
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -567,6 +607,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_email_only_found(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -581,6 +622,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_no_password_recovery(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -608,6 +650,7 @@ def SettingsScreen() -> Control:
                     ),
                     show_selected_icon=False,
                 ),
+                stacked=narrow,
             ),
         ]
     )
@@ -631,6 +674,7 @@ def SettingsScreen() -> Control:
                     ),
                     show_selected_icon=False,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -651,6 +695,7 @@ def SettingsScreen() -> Control:
                         str(int(e.control.value))
                     ),
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -665,6 +710,7 @@ def SettingsScreen() -> Control:
                     on_change=lambda e: _toggle_local_db(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
+                stacked=narrow,
             ),
             ft.Divider(
                 height=1,
@@ -683,6 +729,7 @@ def SettingsScreen() -> Control:
                     active_color=AppColors.PRIMARY,
                     on_change=lambda e: _on_timeout_change(str(int(e.control.value))),
                 ),
+                stacked=narrow,
             ),
         ]
     )
@@ -868,6 +915,7 @@ def SettingsScreen() -> Control:
                     ),
                     show_selected_icon=False,
                 ),
+                stacked=narrow,
             ),
         ]
     )
@@ -1020,6 +1068,7 @@ def SettingsScreen() -> Control:
                     icon=ft.Icons.TERMINAL_ROUNDED,
                     on_click=lambda e: _open_terminal(),
                 ),
+                stacked=narrow,
             ),
         ]
     )

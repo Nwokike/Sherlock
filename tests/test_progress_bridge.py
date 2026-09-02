@@ -29,9 +29,12 @@ def test_progress_tick_reaches_main_loop():
         def worker():
             controller._progress_from_thread(object())
 
+        # The bridge marks dirty; the render-budget flusher owns the
+        # observable bump (~500ms window), so start it and wait longer.
+        controller._start_render_flusher()
         threading.Thread(target=worker, daemon=True).start()
 
-        for _ in range(150):  # up to ~3s for the cross-thread hop
+        for _ in range(250):  # up to ~5s for the cross-thread hop + flush
             if state.progress_version != before:
                 break
             await asyncio.sleep(0.02)

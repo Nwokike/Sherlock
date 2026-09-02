@@ -103,3 +103,36 @@ class TestEmailService:
 
         service = EmailService()
         service.cancel()  # Should not raise
+
+
+class TestRateLimitClassification:
+    """Honest rate-limit vs unavailable classification."""
+
+    def test_genuine_rate_limit_pure_function(self):
+        from services.email_service import _genuine_rate_limit
+
+        # Real site blocks.
+        assert _genuine_rate_limit([200, 403]) is True
+        assert _genuine_rate_limit([429]) is True
+        assert _genuine_rate_limit([-1, 403]) is True
+        # Dead endpoints / rotted parsing are NOT rate limits.
+        assert _genuine_rate_limit([404, 520]) is False
+        assert _genuine_rate_limit([200, 404]) is False
+        assert _genuine_rate_limit([503]) is False
+        assert _genuine_rate_limit([-1]) is False
+        # No requests observed -> conservative default handled at call site.
+        assert _genuine_rate_limit([]) is False
+
+    def test_progress_has_unavailable_bucket(self):
+        from services.email_service import EmailSearchProgress
+
+        progress = EmailSearchProgress(email="a@b.com")
+        assert progress.unavailable == []
+        assert progress.rate_limited == []
+
+    def test_email_result_unavailable_default(self):
+        from services.email_service import EmailResult
+
+        result = EmailResult(name="x", domain="x.com")
+        assert result.unavailable is False
+        assert result.rate_limit is False

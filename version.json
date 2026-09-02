@@ -1,9 +1,9 @@
 {
-  "build_number": 10,
-  "version": "2.1.0",
+  "build_number": 9,
+  "version": "2.0.0",
   "type": "update",
-  "title": "Sherlock 2.1.0",
-  "release_notes": "• Full dependency squeeze and 3,300+ platform polish\n• Full ecosystem integration on 3,300+ sites engine\n• Username engine upgraded to Maigret with 3,300+ platforms\n• Fix: msgpack-safe site selection (list instead of set)",
+  "title": "Sherlock 2.0.0",
+  "release_notes": "• Dual-Mode OSINT: Username & Email search\n• 120+ platforms email check via holehe\n• Profile enrichment (bio, location, followers)\n• Privacy-first: 100% on-device OSINT",
   "mandatory": false,
   "github_url": "https://github.com/Nwokike/Sherlock/releases/latest",
   "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.sherlock"

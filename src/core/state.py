@@ -59,15 +59,17 @@ class AppState:
     # Capped at _ENRICHMENT_CAP via set_enrichment() to avoid long-session growth.
     enrichments: dict | None = None
 
-    # --- History ---
+    # --- History & Result Cache ---
     history: list | None = None
+    # {f"{mode}:{query.lower()}": {found: [...], not_found: [...], errors: [...], ...}}
+    results_cache: dict | None = None
 
     # --- Settings state ---
     nsfw_enabled: bool = True
     ignore_exclusions: bool = False
-    timeout: int = 30
-    email_timeout: int = 30
-    email_concurrency: int = 5
+    timeout: int = 15
+    email_timeout: int = 10
+    email_concurrency: int = 12
     email_only_found: bool = False
     email_method_filter: str = "all"
     proxy_url: str = ""
@@ -77,6 +79,13 @@ class AppState:
     use_local_db: bool = True
     custom_manifest: str = ""
     scan_depth: str = "all"
+    recursive_search: bool = False
+    extract_info: bool = True
+    max_connections: int = 50
+    retries: int = 0
+    dns_resolver: str = "async"
+    use_curl_cffi: bool = True
+    safe_search: bool = False
 
     # --- Site database ---
     # Total sites in the active site database (0 until first load lands).
@@ -89,6 +98,9 @@ class AppState:
     sites_cache: list | None = None
     # Map of site_name -> list of category/country tags
     sites_tags_map: dict | None = None
+    # Inverted index {tag -> [site names]} built after each DB load —
+    # powers O(1) category chip filtering in SitesScreen.
+    sites_tag_index: dict | None = None
 
     # --- Update & Announcement ---
     update_available: bool = False
@@ -99,6 +111,7 @@ class AppState:
         # __setattr__ auto-wraps them into ObservableList / ObservableDict
         # (use_state initial values wouldn't trigger wrapping otherwise).
         self.history = []
+        self.results_cache = {}
         self.last_results = {}
         self.selected_sites = []
         self.search_targets = []
@@ -109,6 +122,19 @@ class AppState:
         self.enrichments = {}
         self.update_data = None
         self.search_error = None
+
+    def set_cached_result(self, mode: str, query: str, data: dict) -> None:
+        """Store search results with an LRU cap of 30 queries."""
+        key = f"{mode}:{query.strip().lower()}"
+        if len(self.results_cache) >= 30:
+            oldest = next(iter(self.results_cache))
+            del self.results_cache[oldest]
+        self.results_cache[key] = data
+
+    def get_cached_result(self, mode: str, query: str) -> dict | None:
+        """Get cached search results for a specific query and mode."""
+        key = f"{mode}:{query.strip().lower()}"
+        return self.results_cache.get(key)
 
     def set_enrichment(self, url: str, data: dict) -> None:
         """Add an enrichment with LRU-ish cap at _ENRICHMENT_CAP entries."""

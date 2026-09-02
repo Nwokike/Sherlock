@@ -61,6 +61,8 @@ class _ParkedEmailService:
         timeout=10,
         skip_password_recovery=False,
         concurrency=15,
+        *args,
+        **kwargs,
     ):
         await asyncio.sleep(30)
         raise AssertionError("parked scan should have been killed")
@@ -82,6 +84,8 @@ class _InstantEmailService:
         timeout=10,
         skip_password_recovery=False,
         concurrency=15,
+        *args,
+        **kwargs,
     ):
         return EmailSearchProgress(
             email=email,

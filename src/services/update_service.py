@@ -69,31 +69,35 @@ class UpdateService:
                     return None
 
                 server_build = data.get("build_number", 0)
-                if server_build > APP_BUILD_NUMBER:
-                    info = UpdateInfo(
-                        version=str(data.get("version", APP_VERSION)),
-                        build_number=int(server_build),
-                        type=str(data.get("type", "update")),
-                        title=str(
-                            data.get(
-                                "title",
-                                f"Version {data.get('version', '')} Available!"
-                                if data.get("type") != "announcement"
-                                else "Announcement",
-                            )
-                        ),
-                        release_notes=str(data.get("release_notes", "")),
-                        mandatory=bool(data.get("mandatory", False)),
-                        github_url=str(data.get("github_url", GITHUB_RELEASES_URL)),
-                        playstore_url=str(data.get("playstore_url", PLAY_STORE_URL)),
-                        action_url=data.get("action_url"),
-                    )
-                    logger.info(
-                        "New update/announcement found: build %s (current: %s)",
-                        server_build,
-                        APP_BUILD_NUMBER,
-                    )
-                    return info.to_dict()
+                if (
+                    not isinstance(server_build, int)
+                    or server_build <= APP_BUILD_NUMBER
+                ):
+                    return None
+                info = UpdateInfo(
+                    version=str(data.get("version", APP_VERSION)),
+                    build_number=int(server_build),
+                    type=str(data.get("type", "update")),
+                    title=str(
+                        data.get(
+                            "title",
+                            f"Version {data.get('version', '')} Available!"
+                            if data.get("type") != "announcement"
+                            else "Announcement",
+                        )
+                    ),
+                    release_notes=str(data.get("release_notes", "")),
+                    mandatory=bool(data.get("mandatory", False)),
+                    github_url=str(data.get("github_url", GITHUB_RELEASES_URL)),
+                    playstore_url=str(data.get("playstore_url", PLAY_STORE_URL)),
+                    action_url=data.get("action_url"),
+                )
+                logger.info(
+                    "New update/announcement found: build %s (current: %s)",
+                    server_build,
+                    APP_BUILD_NUMBER,
+                )
+                return info.to_dict()
 
         except Exception as ex:
             logger.debug("Update check failed (expected if offline): %s", ex)

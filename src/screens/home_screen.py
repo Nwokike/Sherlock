@@ -18,19 +18,24 @@ from components.targets_card import TargetsCard
 from core import tokens
 from core.constants import (
     APP_NAME,
-    APP_VERSION,
+    ERR_INVALID_EMAIL,
     MODE_EMAIL,
     MODE_USERNAME,
     MSG_OFFLINE,
+    MSG_SEARCH_OFFLINE,
+    STORAGE_EMAIL_METHOD_FILTER,
     STORAGE_EMAIL_TIMEOUT,
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
-    STORAGE_LOCAL_DB,
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
+    STORAGE_RECURSIVE_SEARCH,
+    STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_MODE,
     STORAGE_TIMEOUT,
+    STORAGE_USE_CURL_CFFI,
 )
+from core.notify import show_snack
 from core.theme import (
     AppColors,
     AppStyles,
@@ -62,7 +67,7 @@ _FEATURES_USERNAME = [
     {
         "icon": ft.Icons.DOWNLOAD_ROUNDED,
         "title": "Premium Data Exports",
-        "desc": "Export reports as Excel, CSV, or Text lists — directly to your device.",
+        "desc": "Export reports as PDF dossiers, XMind mind maps, CSV/JSON, or Text lists.",
         "color": AppColors.PRIMARY_LIGHT,
     },
 ]
@@ -323,7 +328,10 @@ def HomeScreen() -> Control:
     from flet import context as flet_context
 
     def _get_page():
-        return flet_context.page
+        try:
+            return flet_context.page
+        except Exception:
+            return None
 
     def _is_dark():
         return is_dark_mode(_get_page())
@@ -345,6 +353,28 @@ def HomeScreen() -> Control:
         asyncio.create_task(_save())
 
     # ── Quick Setting Toggles ──
+
+    def _cycle_scan_depth(e):
+        depths = ["all", "1000", "500"]
+        curr = state.scan_depth or "all"
+        next_val = (
+            depths[(depths.index(curr) + 1) % len(depths)] if curr in depths else "all"
+        )
+        state.scan_depth = next_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_SCAN_DEPTH, next_val)
+                if controller.refresh_sites:
+                    await controller.refresh_sites()
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
 
     def _cycle_timeout(e):
         timeouts = [5, 10, 15, 30, 60]
@@ -368,15 +398,9 @@ def HomeScreen() -> Control:
 
         asyncio.create_task(_save())
 
-    def _cycle_email_timeout(e):
-        timeouts = [5, 10, 15, 30]
-        curr = state.email_timeout
-        next_val = (
-            timeouts[(timeouts.index(curr) + 1) % len(timeouts)]
-            if curr in timeouts
-            else 30
-        )
-        state.email_timeout = next_val
+    def _toggle_recursive_search(e):
+        new_val = not getattr(state, "recursive_search", False)
+        state.recursive_search = new_val
         state.progress_version += 1
 
         async def _save():
@@ -384,25 +408,9 @@ def HomeScreen() -> Control:
                 from services.storage_service import StorageService
 
                 storage = StorageService(_get_page())
-                await storage.set(STORAGE_EMAIL_TIMEOUT, str(next_val))
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
-
-    def _toggle_local_db(e):
-        new_val = not state.use_local_db
-        state.use_local_db = new_val
-        state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(STORAGE_LOCAL_DB, "true" if new_val else "false")
-                if controller.refresh_sites:
-                    await controller.refresh_sites()
+                await storage.set(
+                    STORAGE_RECURSIVE_SEARCH, "true" if new_val else "false"
+                )
             except Exception:
                 pass
 
@@ -411,6 +419,7 @@ def HomeScreen() -> Control:
     def _toggle_nsfw(e):
         new_val = not state.nsfw_enabled
         state.nsfw_enabled = new_val
+        state.safe_search = not new_val
         state.progress_version += 1
 
         async def _save():
@@ -444,6 +453,50 @@ def HomeScreen() -> Control:
 
         asyncio.create_task(_save())
 
+    def _cycle_email_method_filter(e):
+        methods = ["all", "register", "login", "recovery"]
+        curr = state.email_method_filter or "all"
+        next_val = (
+            methods[(methods.index(curr) + 1) % len(methods)]
+            if curr in methods
+            else "all"
+        )
+        state.email_method_filter = next_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_EMAIL_METHOD_FILTER, next_val)
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
+    def _cycle_email_timeout(e):
+        timeouts = [5, 10, 15, 30]
+        curr = state.email_timeout
+        next_val = (
+            timeouts[(timeouts.index(curr) + 1) % len(timeouts)]
+            if curr in timeouts
+            else 30
+        )
+        state.email_timeout = next_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_EMAIL_TIMEOUT, str(next_val))
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
     def _toggle_password_recovery(e):
         new_val = not state.no_password_recovery
         state.no_password_recovery = new_val
@@ -462,6 +515,22 @@ def HomeScreen() -> Control:
 
         asyncio.create_task(_save())
 
+    def _toggle_use_curl_cffi(e):
+        new_val = not getattr(state, "use_curl_cffi", True)
+        state.use_curl_cffi = new_val
+        state.progress_version += 1
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_USE_CURL_CFFI, "true" if new_val else "false")
+            except Exception:
+                pass
+
+        asyncio.create_task(_save())
+
     # ── Search logic ──
 
     def _on_search(e=None):
@@ -474,12 +543,22 @@ def HomeScreen() -> Control:
         except Exception:
             pass
 
+        # Offline gate on client submit
+        if not state.is_online:
+            page = _get_page()
+            if page:
+                show_snack(page, MSG_SEARCH_OFFLINE, bgcolor=AppColors.ERROR)
+            return
+
         from services.email_service import validate_email
 
-        target_mode = state.search_mode
         if state.search_mode == MODE_EMAIL and not validate_email(query):
-            target_mode = MODE_USERNAME
-            _switch_mode(MODE_USERNAME)
+            page = _get_page()
+            if page:
+                show_snack(page, ERR_INVALID_EMAIL, bgcolor=AppColors.ERROR)
+            return
+
+        target_mode = state.search_mode
 
         async def _run():
             controller.show_results()
@@ -528,6 +607,12 @@ def HomeScreen() -> Control:
         if state.search_mode != mode:
             _switch_mode(mode)
         set_search_query(query)
+
+        # 1. Try instant load from cache
+        if controller.open_cached_result and controller.open_cached_result(query, mode):
+            return
+
+        # 2. Fallback to fresh scan if not in cache
         controller.show_results()
 
         async def _run_hist():
@@ -566,7 +651,21 @@ def HomeScreen() -> Control:
 
     # Mode-aware category / quick settings chips
     if is_email_mode:
+        method_labels = {
+            "all": "Method: All",
+            "register": "Method: Register",
+            "login": "Method: Login",
+            "recovery": "Method: Recovery",
+        }
+        curr_method = getattr(state, "email_method_filter", "all")
         chips = [
+            _category_chip(
+                icon=ft.Icons.CATEGORY_ROUNDED,
+                label=method_labels.get(curr_method, "Method: All"),
+                color=AppColors.PRIMARY,
+                is_active=curr_method != "all",
+                on_click=_cycle_email_method_filter,
+            ),
             _category_chip(
                 icon=ft.Icons.TIMER_OUTLINED,
                 label=f"{state.email_timeout}s Timeout",
@@ -587,9 +686,33 @@ def HomeScreen() -> Control:
                 is_active=not state.no_password_recovery,
                 on_click=_toggle_password_recovery,
             ),
+            _category_chip(
+                icon=ft.Icons.SECURITY_ROUNDED,
+                label="Stealth: Chrome 124"
+                if getattr(state, "use_curl_cffi", True)
+                else "Stealth: Standard",
+                color=AppColors.PRIMARY_LIGHT
+                if getattr(state, "use_curl_cffi", True)
+                else AppColors.GREY,
+                is_active=getattr(state, "use_curl_cffi", True),
+                on_click=_toggle_use_curl_cffi,
+            ),
         ]
     else:
+        depth_labels = {
+            "all": "Scope: All 3.3k",
+            "1000": "Scope: Top 1k",
+            "500": "Scope: Top 500",
+        }
+        curr_depth = getattr(state, "scan_depth", "all")
         chips = [
+            _category_chip(
+                icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED,
+                label=depth_labels.get(curr_depth, "Scope: All 3.3k"),
+                color=AppColors.PRIMARY,
+                is_active=curr_depth != "all",
+                on_click=_cycle_scan_depth,
+            ),
             _category_chip(
                 icon=ft.Icons.TIMER_OUTLINED,
                 label=f"{state.timeout}s Timeout",
@@ -598,24 +721,28 @@ def HomeScreen() -> Control:
                 on_click=_cycle_timeout,
             ),
             _category_chip(
-                icon=ft.Icons.FLASH_ON_ROUNDED,
-                label="Offline DB" if state.use_local_db else "Online DB",
-                color=AppColors.PRIMARY_LIGHT if state.use_local_db else AppColors.GREY,
-                is_active=state.use_local_db,
-                on_click=_toggle_local_db,
+                icon=ft.Icons.SAVED_SEARCH_ROUNDED,
+                label="Recursive: ON"
+                if getattr(state, "recursive_search", False)
+                else "Recursive: OFF",
+                color=AppColors.PRIMARY_LIGHT
+                if getattr(state, "recursive_search", False)
+                else AppColors.GREY,
+                is_active=getattr(state, "recursive_search", False),
+                on_click=_toggle_recursive_search,
             ),
             _category_chip(
                 icon=ft.Icons.BLOCK_ROUNDED,
-                label="NSFW: ON" if state.nsfw_enabled else "NSFW: OFF",
-                color=AppColors.ERROR if state.nsfw_enabled else AppColors.GREY,
+                label="Adult Sites: ON" if state.nsfw_enabled else "Adult Sites: OFF",
+                color=AppColors.PRIMARY if state.nsfw_enabled else AppColors.GREY,
                 is_active=state.nsfw_enabled,
                 on_click=_toggle_nsfw,
             ),
             _category_chip(
                 icon=ft.Icons.SHIELD_ROUNDED,
-                label="Exclusions: Ignore"
+                label="Disabled Sites: ON"
                 if state.ignore_exclusions
-                else "Exclusions: Active",
+                else "Disabled Sites: OFF",
                 color=AppColors.WARNING if state.ignore_exclusions else AppColors.GREY,
                 is_active=state.ignore_exclusions,
                 on_click=_toggle_exclusions,
@@ -643,86 +770,6 @@ def HomeScreen() -> Control:
                 )
             )
 
-    # ── Version / Update Chip ──
-    is_announcement = (
-        state.update_available
-        and state.update_data
-        and state.update_data.get("type") == "announcement"
-    )
-    if state.update_available:
-        badge_color = AppColors.ACCENT if is_announcement else AppColors.PRIMARY
-        badge_text = "News" if is_announcement else "Update"
-        badge_icon = (
-            ft.Icons.CAMPAIGN_ROUNDED if is_announcement else ft.Icons.UPGRADE_ROUNDED
-        )
-        version_chip = ft.Container(
-            content=ft.Row(
-                [
-                    ft.Icon(badge_icon, size=13, color=badge_color),
-                    ft.Text(
-                        badge_text,
-                        size=11,
-                        weight=ft.FontWeight.W_700,
-                        color=badge_color,
-                        font_family="Outfit",
-                    ),
-                    ft.Container(
-                        width=6,
-                        height=6,
-                        border_radius=3,
-                        bgcolor=badge_color,
-                    ),
-                ],
-                spacing=4,
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
-            padding=ft.Padding(7, 3, 7, 3),
-            border_radius=tokens.RADIUS_SM,
-            bgcolor=ft.Colors.with_opacity(0.12, badge_color),
-            border=ft.Border.all(1.2, badge_color),
-            ink=True,
-            tooltip="New update available — tap to view",
-            on_click=lambda e: controller.open_update_dialog(),
-        )
-    else:
-        # Always tappable — shows local changelog even when no remote update
-        def _open_changelog(e):
-            if state.update_available and state.update_data:
-                controller.open_update_dialog()
-            else:
-                from components.update_dialog import show_update_dialog
-
-                fallback = {
-                    "version": APP_VERSION,
-                    "type": "update",
-                    "title": f"Sherlock {APP_VERSION}",
-                    "release_notes": "• Dual-mode OSINT (Username + Email)\n• 120+ email platforms + profile enrichment\n• Proxy, enrichment modes, markdown changelogs\n• You're up to date!",
-                    "github_url": "https://github.com/Nwokike/Sherlock/releases/latest",
-                    "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.sherlock",
-                }
-                pg = _get_page()
-                if pg:
-                    show_update_dialog(pg, fallback)
-
-        version_chip = ft.Container(
-            content=ft.Text(
-                f"v{APP_VERSION}",
-                size=11,
-                weight=ft.FontWeight.W_500,
-                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
-                font_family="Outfit",
-            ),
-            padding=ft.Padding(6, 2, 6, 2),
-            border_radius=tokens.RADIUS_SM,
-            border=ft.Border.all(
-                1,
-                ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE),
-            ),
-            ink=True,
-            tooltip="Tap to view changelog",
-            on_click=_open_changelog,
-        )
-
     # ── Assemble ──
 
     content = ft.Column(
@@ -731,7 +778,6 @@ def HomeScreen() -> Control:
             AppHeader(
                 _get_page(),
                 title=APP_NAME,
-                extra_actions=[version_chip],
                 on_settings=lambda e: (
                     controller.show_settings() if controller.show_settings else None
                 ),
@@ -901,16 +947,30 @@ def HomeScreen() -> Control:
                                 font_family="Outfit",
                             ),
                             leading=ft.Icon(
-                                ft.Icons.HISTORY_ROUNDED,
+                                ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                if is_email_mode
+                                else ft.Icons.HISTORY_ROUNDED,
                                 size=16,
                                 color=AppColors.PRIMARY,
                             ),
                             on_click=lambda _, entry=e: _on_history_click(entry),
                         )
-                        for e in (list(state.history[:5]) if state.history else [])
-                    ]
-                    if state.history
-                    else [],
+                        for e in (
+                            [
+                                item
+                                for item in (state.history or [])
+                                if (
+                                    item.get("mode")
+                                    or (
+                                        MODE_EMAIL
+                                        if "@" in item.get("query", "")
+                                        else MODE_USERNAME
+                                    )
+                                )
+                                == state.search_mode
+                            ][:5]
+                        )
+                    ],
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0

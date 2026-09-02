@@ -18,6 +18,7 @@ import contextlib
 import json
 import logging
 import time
+from typing import Any
 
 import flet as ft
 
@@ -32,34 +33,42 @@ from core.constants import (
     MSG_OFFLINE,
     MSG_ONLINE,
     MSG_SEARCH_OFFLINE,
+    STORAGE_CACHED_RESULTS,
     STORAGE_CACHED_SITES,
-    STORAGE_EMAIL_TIMEOUT,
+    STORAGE_DNS_RESOLVER,
     STORAGE_EMAIL_CONCURRENCY,
-    STORAGE_EMAIL_ONLY_FOUND,
     STORAGE_EMAIL_METHOD_FILTER,
+    STORAGE_EMAIL_ONLY_FOUND,
+    STORAGE_EMAIL_TIMEOUT,
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
+    STORAGE_EXTRACT_INFO,
     STORAGE_HISTORY,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
+    STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_ONBOARDING_DONE,
     STORAGE_PROXY_URL,
+    STORAGE_RECURSIVE_SEARCH,
+    STORAGE_RETRIES,
+    STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_MODE,
     STORAGE_SELECTED_SITES,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
+    STORAGE_USE_CURL_CFFI,
 )
 from core.logger_handler import in_memory_log_handler
 from core.state import state
 from core.theme import AppTheme
 from components.update_dialog import show_update_dialog
 from services.ad_service import AdService
-from services.email_service import EmailSearchProgress, EmailService
+from services.email_service import EmailResult, EmailSearchProgress, EmailService
 from services.enrich_service import EnrichService
-from services.sherlock_service import SearchProgress, SherlockService
+from services.sherlock_service import SearchProgress, SherlockService, SiteResult
 from services.storage_service import StorageService
 from services.update_service import UpdateService
 from state.controller_ctx import (
@@ -101,6 +110,10 @@ class AppController:
         # task awaiting start_search/start_email_search) — cancelled
         # instantly when a new search supersedes it.
         self._search_task: asyncio.Task | None = None
+        # Coalesced progress bridge throttling
+        self._last_progress_emit: float = 0.0
+        self._pending_progress: Any | None = None
+        self._progress_emit_scheduled: bool = False
 
     # --- Lifecycle ----------------------------------------------------
 
@@ -235,6 +248,7 @@ class AppController:
             check_for_updates=self.check_for_updates,
             open_update_dialog=self.open_update_dialog,
             set_onboarding_done=self.set_onboarding_done,
+            open_cached_result=self.open_cached_result,
         )
         self._controller_methods = methods
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
@@ -345,6 +359,43 @@ class AppController:
             if scan_depth_raw in ("all", "1000", "500"):
                 state.scan_depth = scan_depth_raw
 
+            rec_raw = await self.storage.get(STORAGE_RECURSIVE_SEARCH)
+            if rec_raw is not None:
+                state.recursive_search = rec_raw == "true"
+
+            ext_raw = await self.storage.get(STORAGE_EXTRACT_INFO)
+            if ext_raw is not None:
+                state.extract_info = ext_raw == "true"
+
+            max_conn_raw = await self.storage.get(STORAGE_MAX_CONNECTIONS)
+            if max_conn_raw and max_conn_raw.isdigit():
+                state.max_connections = int(max_conn_raw)
+
+            retries_raw = await self.storage.get(STORAGE_RETRIES)
+            if retries_raw and retries_raw.isdigit():
+                state.retries = int(retries_raw)
+
+            dns_res_raw = await self.storage.get(STORAGE_DNS_RESOLVER)
+            if dns_res_raw in ("async", "threaded"):
+                state.dns_resolver = dns_res_raw
+
+            curl_raw = await self.storage.get(STORAGE_USE_CURL_CFFI)
+            if curl_raw is not None:
+                state.use_curl_cffi = curl_raw == "true"
+
+            safe_raw = await self.storage.get(STORAGE_SAFE_SEARCH)
+            if safe_raw is not None:
+                state.safe_search = safe_raw == "true"
+
+            cached_res_raw = await self.storage.get(STORAGE_CACHED_RESULTS)
+            if cached_res_raw:
+                try:
+                    res_map = json.loads(cached_res_raw)
+                    if isinstance(res_map, dict):
+                        state.results_cache.update(res_map)
+                except Exception:
+                    logger.warning("Failed to deserialize cached results from storage")
+
             onboarding_done = await self.storage.get(STORAGE_ONBOARDING_DONE)
             if onboarding_done == "true":
                 state.has_accepted_terms = True
@@ -381,9 +432,24 @@ class AppController:
         if not self.sherlock_service:
             return
 
+        target_clean = username.strip()
+        if not target_clean:
+            return
+
+        # SMART RE-ATTACH: If already searching this exact username, attach to live progress
+        if (
+            state.is_searching
+            and state.current_username.strip().lower() == target_clean.lower()
+            and state.search_mode == MODE_USERNAME
+        ):
+            logger.info("Re-attaching to ongoing username search for %r", target_clean)
+            if self._controller_methods and self._controller_methods.show_results:
+                self._controller_methods.show_results()
+            return
+
         # NEW SEARCH = PRIORITY: kill any prior activity instantly,
         # whether it is still running or just draining its tail.
-        self._kill_all_activity(f"username-search[{username}]")
+        self._kill_all_activity(f"username-search[{target_clean}]")
         self._register_search_task()
 
         # Offline gate — don't launch a 400-site scan that can only
@@ -393,18 +459,18 @@ class AppController:
             self._show_snack(MSG_SEARCH_OFFLINE, duration=10000)
             return
 
-        state.current_username = username
+        state.current_username = target_clean
         state.is_searching = True
         state.search_error = None
         # Reset to a fresh USERNAME-typed progress immediately: the UI
         # switches to ResultsScreen before the first scan tick, and a
         # stale EmailSearchProgress here crashes username-mode render.
-        username_progress = SearchProgress(username=username, is_running=True)
+        username_progress = SearchProgress(username=target_clean, is_running=True)
         state.search_progress = username_progress
         state.progress_version += 1
         logger.info(
             "WATCHDOG: username search START %r (total_sites pending)",
-            username,
+            target_clean,
         )
 
         # Interstitial on every search — original v1.4.0 behavior
@@ -518,8 +584,6 @@ class AppController:
                     if data:
                         state.set_enrichment(url, data)
                         state.progress_version += 1
-                        with contextlib.suppress(Exception):
-                            self.page.update()
                 except Exception as exc:
                     logger.warning("Streaming enrichment error for %s: %s", url, exc)
 
@@ -549,23 +613,39 @@ class AppController:
     def _progress_from_thread(self, progress) -> None:
         """Bridge a scan-worker progress tick onto the main event loop.
 
-        The sherlock scan runs in a worker thread; its callbacks must be
-        scheduled onto the loop captured at init. page.run_task is NOT
-        usable here: it evaluates `self.session.connection.loop` from the
-        worker thread (no running loop there), raises, and drops the
-        already-created coroutine — surfacing as
-        "coroutine '_apply_progress' was never awaited" and silently
-        killing live result ticking.
+        Coalesces rapid worker updates so the UI loop is updated at a clean,
+        smooth ~5 Hz rate, avoiding MessagePack socket saturation and keeping
+        the UI 100% responsive.
         """
         if not self._main_loop:
             logger.warning("No main loop captured; progress tick dropped")
             return
-        try:
-            asyncio.run_coroutine_threadsafe(
-                self._apply_progress(progress), self._main_loop
+        self._pending_progress = progress
+        if self._progress_emit_scheduled:
+            return
+
+        now = time.monotonic()
+        delay = max(0.0, 0.20 - (now - self._last_progress_emit))
+        self._progress_emit_scheduled = True
+
+        async def _flush():
+            self._progress_emit_scheduled = False
+            self._last_progress_emit = time.monotonic()
+            snap = self._pending_progress
+            self._pending_progress = None
+            if snap is not None:
+                await self._apply_progress(snap)
+
+        if delay > 0.001:
+            self._main_loop.call_later(
+                delay,
+                lambda: asyncio.run_coroutine_threadsafe(_flush(), self._main_loop),
             )
-        except Exception as e:
-            logger.warning("Progress dispatch failed: %s", e)
+        else:
+            try:
+                asyncio.run_coroutine_threadsafe(_flush(), self._main_loop)
+            except Exception as e:
+                logger.warning("Progress dispatch failed: %s", e)
 
     async def _apply_progress(self, progress) -> None:
         """Push a search-progress snapshot into observable state.
@@ -627,9 +707,24 @@ class AppController:
             self._show_snack("Email search is not available.")
             return
 
+        email_clean = email.strip()
+        if not email_clean:
+            return
+
+        # SMART RE-ATTACH: If already searching this exact email, attach to live progress
+        if (
+            state.is_searching
+            and state.current_username.strip().lower() == email_clean.lower()
+            and state.search_mode == MODE_EMAIL
+        ):
+            logger.info("Re-attaching to ongoing email search for %r", email_clean)
+            if self._controller_methods and self._controller_methods.show_results:
+                self._controller_methods.show_results()
+            return
+
         # NEW SEARCH = PRIORITY: kill any prior activity instantly,
         # whether it is still running or just draining its tail.
-        self._kill_all_activity(f"email-search[{email}]")
+        self._kill_all_activity(f"email-search[{email_clean}]")
         self._register_search_task()
 
         # Offline gate
@@ -641,21 +736,21 @@ class AppController:
         # Validate email
         from services.email_service import validate_email
 
-        if not validate_email(email.strip()):
+        if not validate_email(email_clean):
             self._show_snack(ERR_INVALID_EMAIL)
             return
 
-        state.current_username = email.strip()
+        state.current_username = email_clean
         state.is_searching = True
         state.search_error = None
         state.email_results.clear()
         # Reset to a fresh EMAIL-typed progress immediately: the UI
         # switches to ResultsScreen before the first scan tick, and a
         # stale SearchProgress here crashes email-mode render.
-        email_progress = EmailSearchProgress(email=email.strip(), is_running=True)
+        email_progress = EmailSearchProgress(email=email_clean, is_running=True)
         state.search_progress = email_progress
         state.progress_version += 1
-        logger.info("WATCHDOG: email search START %r", email)
+        logger.info("WATCHDOG: email search START %r", email_clean)
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:
@@ -669,6 +764,8 @@ class AppController:
                 timeout=state.email_timeout,
                 skip_password_recovery=state.no_password_recovery,
                 concurrency=getattr(state, "email_concurrency", 15),
+                method_filter=getattr(state, "email_method_filter", "all"),
+                use_curl_cffi=getattr(state, "use_curl_cffi", True),
             )
             # If this scan was cancelled or superseded by another search, do not clobber state
             if (
@@ -811,10 +908,183 @@ class AppController:
             except Exception as e:
                 logger.warning("Failed to persist onboarding state: %s", e)
 
+    def open_cached_result(self, query: str, mode: str) -> bool:
+        """Open past results from cache instantly without re-scanning."""
+        snapshot = state.get_cached_result(mode, query)
+        if not snapshot:
+            return False
+
+        # Cancel any active scan if opening a different target
+        if (
+            state.is_searching
+            and state.current_username.strip().lower() != query.strip().lower()
+        ):
+            self._kill_all_activity(f"open-cached-result[{query}]")
+
+        if mode == MODE_USERNAME:
+            found_objs = [
+                SiteResult(
+                    site_name=r.get("site_name", "?"),
+                    url_main=r.get("url_main", ""),
+                    url_user=r.get("url_user", ""),
+                    status=r.get("status", "Claimed"),
+                    http_status=r.get("http_status", ""),
+                    query_time=r.get("query_time"),
+                    context=r.get("context"),
+                    tags=r.get("tags", []),
+                    ids_data=r.get("ids_data"),
+                )
+                for r in snapshot.get("found", [])
+            ]
+            notfound_objs = [
+                SiteResult(
+                    site_name=r.get("site_name", "?"),
+                    url_main=r.get("url_main", ""),
+                    url_user=r.get("url_user", ""),
+                    status=r.get("status", "Available"),
+                    http_status="",
+                )
+                for r in snapshot.get("not_found", [])
+            ]
+            error_objs = [
+                SiteResult(
+                    site_name=r.get("site_name", "?"),
+                    url_main=r.get("url_main", ""),
+                    url_user=r.get("url_user", ""),
+                    status=r.get("status", "Error"),
+                    http_status="",
+                    context=r.get("context"),
+                )
+                for r in snapshot.get("errors", [])
+            ]
+            total = snapshot.get("total") or len(found_objs) + len(notfound_objs) + len(
+                error_objs
+            )
+            progress = SearchProgress(
+                username=query.strip(),
+                total_sites=total,
+                checked_sites=total,
+                found=found_objs,
+                not_found=notfound_objs,
+                errors=error_objs,
+                is_running=False,
+            )
+            state.current_username = query.strip()
+            state.last_results_username = query.strip()
+            state.last_results = {
+                r.site_name: r for r in (found_objs + notfound_objs + error_objs)
+            }
+            state.search_mode = MODE_USERNAME
+            state.search_progress = progress
+            if snapshot.get("enrichments"):
+                state.enrichments.update(snapshot["enrichments"])
+        else:
+            all_email = snapshot.get("email_results", [])
+            found_count = len(
+                [r for r in all_email if r.get("exists") and not r.get("rateLimit")]
+            )
+            state.email_results[:] = all_email
+            state.email_results_address = query.strip()
+            state.current_username = query.strip()
+            state.search_mode = MODE_EMAIL
+            state.email_found_count = found_count
+            state.email_total_modules = snapshot.get("total", len(all_email) or 121)
+            state.search_progress = EmailSearchProgress(
+                email=query.strip(),
+                total_modules=state.email_total_modules,
+                checked_modules=state.email_total_modules,
+                found=[
+                    EmailResult(
+                        name=r.get("name", ""),
+                        domain=r.get("domain", ""),
+                        method=r.get("method", ""),
+                        exists=r.get("exists"),
+                        rate_limit=r.get("rateLimit", False),
+                        frequent_rate_limit=r.get("frequent_rate_limit", False),
+                        email_recovery=r.get("emailrecovery"),
+                        phone_number=r.get("phoneNumber"),
+                        others=r.get("others"),
+                    )
+                    for r in all_email
+                    if r.get("exists") and not r.get("rateLimit")
+                ],
+                is_running=False,
+            )
+
+        state.is_searching = False
+        state.progress_version += 1
+        if self._controller_methods and self._controller_methods.show_results:
+            self._controller_methods.show_results()
+        return True
+
     async def _save_to_history(
         self, query: str, found: int, total: int, mode: str = MODE_USERNAME
     ) -> None:
-        """Append a search entry to persistent history and observable state."""
+        """Append a search entry to persistent history, snapshot results, and observable state."""
+        # 1. Capture full results snapshot for instant history viewing
+        try:
+            if mode == MODE_USERNAME:
+                prog = state.search_progress
+                snapshot = {
+                    "query": query,
+                    "mode": mode,
+                    "total": total,
+                    "checked": total,
+                    "found": [
+                        {
+                            "site_name": getattr(r, "site_name", "?"),
+                            "url_main": getattr(r, "url_main", ""),
+                            "url_user": getattr(r, "url_user", ""),
+                            "status": getattr(r, "status", "Claimed"),
+                            "http_status": getattr(r, "http_status", ""),
+                            "query_time": getattr(r, "query_time", None),
+                            "tags": getattr(r, "tags", []),
+                            "ids_data": getattr(r, "ids_data", None),
+                        }
+                        for r in getattr(prog, "found", [])
+                    ],
+                    "not_found": [
+                        {
+                            "site_name": getattr(r, "site_name", "?"),
+                            "url_main": getattr(r, "url_main", ""),
+                            "url_user": getattr(r, "url_user", None)
+                            or getattr(r, "url_main", ""),
+                            "status": getattr(r, "status", "Available"),
+                        }
+                        for r in getattr(prog, "not_found", [])
+                    ],
+                    "errors": [
+                        {
+                            "site_name": getattr(r, "site_name", "?"),
+                            "url_main": getattr(r, "url_main", ""),
+                            "url_user": getattr(r, "url_user", None)
+                            or getattr(r, "url_main", ""),
+                            "status": getattr(r, "status", "Error"),
+                            "context": getattr(r, "context", None),
+                        }
+                        for r in getattr(prog, "errors", [])
+                    ],
+                    "enrichments": dict(state.enrichments or {}),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                }
+            else:
+                snapshot = {
+                    "query": query,
+                    "mode": mode,
+                    "total": total,
+                    "checked": total,
+                    "email_results": list(state.email_results or []),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                }
+            state.set_cached_result(mode, query, snapshot)
+            if self.storage:
+                await self.storage.set(
+                    STORAGE_CACHED_RESULTS, json.dumps(state.results_cache)
+                )
+        except Exception as snap_exc:
+            logger.warning("Failed to snapshot search results: %s", snap_exc)
+
+        # 2. Append to history metadata list
         if not self.storage:
             return
         try:

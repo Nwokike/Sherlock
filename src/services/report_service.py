@@ -273,11 +273,14 @@ def generate_xmind_case(
 
     enrichments = enrichments or {}
     if output_path is None:
+        from services.cache_service import cached_report_path
         from services.storage_service import get_cache_dir
 
         cache = Path(get_cache_dir())
         cache.mkdir(parents=True, exist_ok=True)
-        output_path = cache / f"sherlock_case_{username}.xmind"
+        # Keyed by (query, found-set fingerprint) so different scans of the
+        # same username no longer clobber each other's case files.
+        output_path = cached_report_path("xmind", username, found, "xmind")
     output_path = Path(output_path)
 
     if output_path.exists():

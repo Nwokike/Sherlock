@@ -11,6 +11,7 @@ import logging
 import flet as ft
 from flet import Control
 
+from components.active_scan_banner import ActiveScanBanner
 from core.theme import AppColors
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -30,8 +31,20 @@ def _should_show_onboarding(state) -> bool:
     return state.is_first_launch or not state.has_accepted_terms
 
 
-def _dashboard_scaffold(body: Control) -> Control:
-    """Build the dashboard body container."""
+def _dashboard_scaffold(body: Control, banner: Control | None = None) -> Control:
+    """Build the dashboard body container with optional active scan banner."""
+    if banner:
+        return ft.Container(
+            content=ft.Column(
+                controls=[
+                    banner,
+                    ft.Container(content=body, expand=True),
+                ],
+                spacing=0,
+                expand=True,
+            ),
+            expand=True,
+        )
     return ft.Container(content=body, expand=True)
 
 
@@ -126,33 +139,61 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 username = app_state.last_results_username or "unknown"
 
                 try:
+                    from services.cache_service import (
+                        load_cached_report,
+                        save_cached_report,
+                    )
+
                     if format_type == "pdf":
                         from services.report_service import generate_pdf_dossier
 
-                        pdf_bytes = generate_pdf_dossier(
-                            username=username,
-                            found=list(progress.found),
-                            not_found=list(progress.not_found),
-                            errors=list(progress.errors),
-                            enrichments=dict(app_state.enrichments or {}),
-                            total_sites=progress.total_sites or 3302,
-                            checked_sites=progress.checked_sites or len(progress.found),
+                        report_bytes = load_cached_report(
+                            "pdf", username, list(progress.found), "pdf"
                         )
-                        if not pdf_bytes:
-                            raise RuntimeError("PDF generation returned empty output")
-                        report_bytes = pdf_bytes
+                        if report_bytes is None:
+                            pdf_bytes = generate_pdf_dossier(
+                                username=username,
+                                found=list(progress.found),
+                                not_found=list(progress.not_found),
+                                errors=list(progress.errors),
+                                enrichments=dict(app_state.enrichments or {}),
+                                total_sites=progress.total_sites or 3302,
+                                checked_sites=progress.checked_sites
+                                or len(progress.found),
+                            )
+                            if not pdf_bytes:
+                                raise RuntimeError(
+                                    "PDF generation returned empty output"
+                                )
+                            report_bytes = pdf_bytes
+                            save_cached_report(
+                                "pdf", username, list(progress.found), "pdf", pdf_bytes
+                            )
 
                     elif format_type == "xmind":
                         from services.report_service import generate_xmind_case
 
-                        xmind_path = generate_xmind_case(
-                            username=username,
-                            found=list(progress.found),
-                            enrichments=dict(app_state.enrichments or {}),
+                        report_bytes = load_cached_report(
+                            "xmind", username, list(progress.found), "xmind"
                         )
-                        if not xmind_path or not xmind_path.exists():
-                            raise RuntimeError("XMind generation returned empty output")
-                        report_bytes = xmind_path.read_bytes()
+                        if report_bytes is None:
+                            xmind_path = generate_xmind_case(
+                                username=username,
+                                found=list(progress.found),
+                                enrichments=dict(app_state.enrichments or {}),
+                            )
+                            if not xmind_path or not xmind_path.exists():
+                                raise RuntimeError(
+                                    "XMind generation returned empty output"
+                                )
+                            report_bytes = xmind_path.read_bytes()
+                            save_cached_report(
+                                "xmind",
+                                username,
+                                list(progress.found),
+                                "xmind",
+                                report_bytes,
+                            )
 
                     elif format_type == "csv":
                         import csv
@@ -772,6 +813,22 @@ def AppShell() -> Control:
             tab_body = HistoryScreen()
         else:
             tab_body = SettingsScreen()
-        screen = _dashboard_scaffold(body=tab_body)
+
+        active_banner = None
+        if state.is_searching and state.current_username:
+            prog = state.search_progress
+            checked = getattr(prog, "checked_sites", 0) or getattr(
+                prog, "checked_modules", 0
+            )
+            total = getattr(prog, "total_sites", 0) or getattr(prog, "total_modules", 0)
+            active_banner = ActiveScanBanner(
+                target_query=state.current_username,
+                search_mode=state.search_mode,
+                checked=checked,
+                total=total,
+                on_tap=controller.show_results,
+            )
+
+        screen = _dashboard_scaffold(body=tab_body, banner=active_banner)
 
     return ft.SafeArea(content=screen, expand=True)

@@ -1,195 +1,210 @@
-"""UpdateDialog — modal dialog for app updates and cross-promotion announcements.
+"""Update dialog — always available from the header version chip and the
+Settings version row.
 
-Platform-aware:
-- Android: Offers Google Play Store and Direct APK (GitHub Releases) options.
-- Desktop / Other: Offers GitHub Releases download option.
-- Announcement type: Offers direct action link for featured apps/news.
+Two modes:
+- Up to date: current version's bundled changelog (works offline) plus a
+  Check for Updates button that re-checks live.
+- Update available (server build newer): server release notes as Markdown
+  with launch buttons — Android gets Play Store + Direct APK, every other
+  platform gets the GitHub release only.
+
+Delivery is deliberately browser-based: URLs launch externally; there is
+no in-app APK download or install.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import flet as ft
 
-from core import tokens
-from core.constants import ERR_OPEN_URL
+from core.changelog import notes_for
+from core.constants import (
+    APP_VERSION,
+    ERR_OPEN_URL,
+    GITHUB_RELEASES_URL,
+    PLAY_STORE_URL,
+)
+from core.state import state
 from core.theme import AppColors
 
 logger = logging.getLogger("UpdateDialog")
 
 
-def show_update_dialog(page: ft.Page, update_data: dict) -> None:
-    """Display the update or announcement dialog."""
-    if not page or not update_data:
-        return
-
-    is_mandatory = bool(update_data.get("mandatory", False))
-    is_announcement = update_data.get("type") == "announcement"
-    title_text = update_data.get(
-        "title",
-        "Announcement"
-        if is_announcement
-        else f"New Version {update_data.get('version', '')} Available! 🎉",
-    )
-    release_notes = update_data.get("release_notes", "")
-    github_url = update_data.get("github_url", "")
-    playstore_url = update_data.get("playstore_url", "")
-    action_url = update_data.get("action_url") or github_url
-
-    # Detect platform
-    is_android = page.platform == ft.PagePlatform.ANDROID
-
-    async def _launch(url: str):
-        page.pop_dialog()
+def _launch(page: ft.Page, url: str):
+    async def _run():
         try:
             await ft.UrlLauncher().launch_url(url)
-        except Exception as exc:
-            logger.warning("Failed to launch URL %s: %s", url, exc)
+        except Exception as ex:
+            logger.debug("Update URL launch failed: %s", ex)
             from core.notify import show_snack
 
             show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
 
-    def _dismiss(e):
+    page.run_task(_run)
+
+
+def _pop_and_launch(page: ft.Page, url: str):
+    """Dismiss the dialog, then hand the URL to the browser/app store."""
+    try:
         page.pop_dialog()
+    except Exception:
+        logger.exception("Suppressed exception")
+    _launch(page, url)
 
-    # Action buttons based on type and platform
-    actions: list[ft.Control] = []
 
-    if is_announcement:
-        if action_url:
-            actions.append(
-                ft.FilledButton(
-                    content=ft.Text(
-                        "Learn More",
-                        weight=ft.FontWeight.W_600,
-                        color=ft.Colors.WHITE,
-                    ),
-                    icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
-                    on_click=lambda e: asyncio.create_task(_launch(action_url)),
-                )
-            )
+async def check_from_dialog(page: ft.Page):
+    """Live re-check from the up-to-date dialog; morphs it to update mode
+    if the server now reports a newer build."""
+    from services.update_service import UpdateService
+
+    try:
+        page.pop_dialog()
+    except Exception:
+        logger.exception("Suppressed exception")
+    result = await UpdateService().check_for_update()
+    if result:
+        state.update_available = True
+        state.update_data = result
+        state.progress_version += 1
+        show_update_dialog(page, result)
     else:
-        if is_android:
-            # Android: Play Store + GitHub APK
-            if playstore_url:
-                actions.append(
-                    ft.FilledButton(
-                        content=ft.Text(
-                            "Google Play",
-                            weight=ft.FontWeight.W_600,
-                            color=ft.Colors.WHITE,
-                        ),
-                        icon=ft.Icons.SHOP_ROUNDED,
-                        on_click=lambda e: asyncio.create_task(_launch(playstore_url)),
-                    )
-                )
-            if github_url:
-                actions.append(
-                    ft.OutlinedButton(
-                        content=ft.Text(
-                            "Direct APK (GitHub)",
-                            weight=ft.FontWeight.W_600,
-                        ),
-                        icon=ft.Icons.DOWNLOAD_ROUNDED,
-                        on_click=lambda e: asyncio.create_task(_launch(github_url)),
-                    )
-                )
-        else:
-            # Desktop / Other: GitHub Download
-            if github_url:
-                actions.append(
-                    ft.FilledButton(
-                        content=ft.Text(
-                            "Download from GitHub",
-                            weight=ft.FontWeight.W_600,
-                            color=ft.Colors.WHITE,
-                        ),
-                        icon=ft.Icons.DOWNLOAD_ROUNDED,
-                        on_click=lambda e: asyncio.create_task(_launch(github_url)),
-                    )
-                )
+        from core.notify import show_snack
 
-    if not is_mandatory:
-        actions.append(
+        show_snack(page, f"Sherlock v{APP_VERSION} is up to date!")
+
+
+def _build_update_buttons(page: ft.Page, data: dict) -> list[ft.Control]:
+    """Platform rule: Android → Play Store + Direct APK; every other
+    platform → GitHub release only."""
+    buttons: list[ft.Control] = []
+    is_android = page.platform == ft.PagePlatform.ANDROID
+    github_url = data.get("github_url", GITHUB_RELEASES_URL)
+
+    if is_android:
+        buttons.append(
+            ft.FilledButton(
+                content=ft.Text("Google Play", font_family="Outfit"),
+                icon=ft.Icons.SHOP_ROUNDED,
+                on_click=lambda e, u=PLAY_STORE_URL: _pop_and_launch(page, u),
+            )
+        )
+        buttons.append(
+            ft.OutlinedButton(
+                content=ft.Text("Direct APK (GitHub)", font_family="Outfit"),
+                icon=ft.Icons.DOWNLOAD_ROUNDED,
+                on_click=lambda e, u=github_url: _pop_and_launch(page, u),
+            )
+        )
+    else:
+        buttons.append(
+            ft.FilledButton(
+                content=ft.Text("Download from GitHub", font_family="Outfit"),
+                icon=ft.Icons.DOWNLOAD_ROUNDED,
+                on_click=lambda e, u=github_url: _pop_and_launch(page, u),
+            )
+        )
+    if not data.get("mandatory"):
+        buttons.append(
             ft.TextButton(
-                "Later",
-                on_click=_dismiss,
-                style=ft.ButtonStyle(
-                    color=ft.Colors.with_opacity(
-                        tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
-                    )
-                ),
+                content=ft.Text("Later", font_family="Outfit"),
+                on_click=lambda e: page.pop_dialog(),
             )
         )
+    return buttons
 
-    # Content body
-    content_controls: list[ft.Control] = []
 
-    if not is_announcement and update_data.get("version"):
-        content_controls.append(
-            ft.Text(
-                f"Version {update_data['version']} is now available.",
-                size=tokens.FONT_SM,
-                color=ft.Colors.ON_SURFACE,
-                weight=ft.FontWeight.W_500,
-            )
+def _build_current_buttons(page: ft.Page) -> list[ft.Control]:
+    return [
+        ft.OutlinedButton(
+            content=ft.Text("Check for Updates", font_family="Outfit"),
+            icon=ft.Icons.SYNC_ROUNDED,
+            on_click=lambda e: page.run_task(check_from_dialog, page),
+        ),
+        ft.TextButton(
+            content=ft.Text("Close", font_family="Outfit"),
+            on_click=lambda e: page.pop_dialog(),
+        ),
+    ]
+
+
+def show_update_dialog(page: ft.Page, update_data: dict | None = None):
+    """Open the version dialog. Uses a fresh check result when given (the
+    dialog's own Check button), else the observable state."""
+    data = update_data if update_data is not None else state.update_data
+    is_update = bool(data)
+
+    if is_update:
+        title_text = data.get("title") or (
+            f"Version {data.get('version', '')} Available!"
         )
-        content_controls.append(ft.Container(height=tokens.SPACE_SM))
-
-    if release_notes:
-        if not is_announcement:
-            content_controls.append(
+        icon = (
+            ft.Icons.CAMPAIGN_ROUNDED
+            if data.get("type") == "announcement"
+            else ft.Icons.ROCKET_LAUNCH_ROUNDED
+        )
+        icon_color = (
+            AppColors.ACCENT
+            if data.get("type") == "announcement"
+            else AppColors.PRIMARY
+        )
+        body = ft.Column(
+            controls=[
                 ft.Text(
-                    "What's New:",
-                    size=tokens.FONT_SM,
-                    weight=ft.FontWeight.W_600,
-                    color=AppColors.PRIMARY,
-                )
-            )
-            content_controls.append(ft.Container(height=tokens.SPACE_XS))
-        content_controls.append(
-            ft.Markdown(
-                release_notes,
-                selectable=True,
-                extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-                on_tap_link=lambda e: __import__("asyncio").create_task(
-                    ft.UrlLauncher().launch_url(e.data)
+                    f"Version {data.get('version', '')} is now available.", size=13
                 ),
-            )
-        )
-
-    icon_data = (
-        ft.Icons.CAMPAIGN_ROUNDED if is_announcement else ft.Icons.ROCKET_LAUNCH_ROUNDED
-    )
-    icon_color = AppColors.ACCENT if is_announcement else AppColors.PRIMARY
-
-    dlg = ft.AlertDialog(
-        modal=is_mandatory,
-        title=ft.Row(
-            [
-                ft.Icon(icon_data, color=icon_color, size=24),
-                ft.Text(
-                    title_text,
-                    size=tokens.FONT_MD,
-                    weight=ft.FontWeight.BOLD,
-                    font_family="Outfit",
-                    expand=True,
+                ft.Text("What's New:", size=13, weight=ft.FontWeight.W_600),
+                ft.Container(
+                    content=ft.Markdown(
+                        data.get("release_notes", ""),
+                        selectable=True,
+                        extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+                        on_tap_link=lambda e: _launch(page, e.data),
+                    ),
+                    width=360,
                 ),
             ],
-            spacing=tokens.SPACE_SM,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=8,
+            scroll=ft.ScrollMode.AUTO,
+            tight=True,
+        )
+        actions = _build_update_buttons(page, data)
+        modal = bool(data.get("mandatory"))
+    else:
+        title_text = "You're up to date"
+        icon = ft.Icons.VERIFIED_ROUNDED
+        icon_color = AppColors.PRIMARY
+        body = ft.Column(
+            controls=[
+                ft.Text(f"✓ Latest version · v{APP_VERSION}", size=13),
+                ft.Text("What's New:", size=13, weight=ft.FontWeight.W_600),
+                ft.Container(
+                    content=ft.Markdown(
+                        notes_for(APP_VERSION),
+                        selectable=True,
+                        extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+                        on_tap_link=lambda e: _launch(page, e.data),
+                    ),
+                    width=360,
+                ),
+            ],
+            spacing=8,
+            scroll=ft.ScrollMode.AUTO,
+            tight=True,
+        )
+        actions = _build_current_buttons(page)
+        modal = False
+
+    dlg = ft.AlertDialog(
+        modal=modal,
+        title=ft.Row(
+            controls=[
+                ft.Icon(icon, color=icon_color, size=24),
+                ft.Text(title_text, weight=ft.FontWeight.BOLD, font_family="Outfit"),
+            ],
+            spacing=8,
         ),
-        content=ft.Container(
-            content=ft.Column(
-                controls=content_controls,
-                tight=True,
-                spacing=0,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-            width=360,
-        ),
+        content=ft.Container(content=body, width=380),
         actions=actions,
         actions_alignment=ft.MainAxisAlignment.END,
     )

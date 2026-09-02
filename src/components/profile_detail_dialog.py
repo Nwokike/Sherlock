@@ -339,16 +339,18 @@ def _email_dossier(
                         height=tokens.SPACE_MD,
                         color=ft.Colors.with_opacity(0.1, ft.Colors.OUTLINE),
                     ),
-                    ft.Column(
+                    ft.ListView(
                         controls=items,
                         spacing=tokens.SPACE_XS,
-                        scroll=ft.ScrollMode.AUTO,
+                        expand=True,
+                        padding=0,
                     ),
                 ],
-                tight=True,
                 spacing=0,
+                expand=True,
             ),
             width=380,
+            height=420,
         ),
         actions=[
             ft.TextButton(
@@ -431,8 +433,13 @@ def _username_dossier(
     )
 
     if has_valid_avatar:
+        from services.cache_service import (
+            ensure_cached_avatar,
+            schedule_avatar_download,
+        )
+
         avatar_control = ft.Image(
-            src=avatar_url,
+            src=ensure_cached_avatar(avatar_url),
             width=56,
             height=56,
             border_radius=28,
@@ -448,6 +455,9 @@ def _username_dossier(
                 alignment=ft.Alignment.CENTER,
             ),
         )
+        # Populate the on-device avatar cache in the background so the
+        # next open of this dossier renders with zero network latency.
+        asyncio.create_task(schedule_avatar_download(avatar_url))
     else:
         status_color = (
             AppColors.SUCCESS
@@ -763,7 +773,7 @@ def _username_dossier(
                         height=tokens.SPACE_MD,
                         color=ft.Colors.with_opacity(0.1, ft.Colors.OUTLINE),
                     ),
-                    ft.Column(
+                    ft.ListView(
                         controls=items
                         if items
                         else [
@@ -775,13 +785,15 @@ def _username_dossier(
                             )
                         ],
                         spacing=tokens.SPACE_XS,
-                        scroll=ft.ScrollMode.AUTO,
+                        expand=True,
+                        padding=0,
                     ),
                 ],
-                tight=True,
                 spacing=0,
+                expand=True,
             ),
             width=380,
+            height=420,
         ),
         actions=[
             ft.TextButton(

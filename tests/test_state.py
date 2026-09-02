@@ -21,7 +21,7 @@ class TestAppState:
         assert app_state.active_username == ""
         assert app_state.history == []
         assert app_state.nsfw_enabled is True
-        assert app_state.timeout == 30
+        assert app_state.timeout == 15
         assert app_state.is_online is True
 
     def test_search_fields(self, app_state):

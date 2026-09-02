@@ -16,6 +16,8 @@ from components.banner_ad import build_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
 from core.constants import MODE_EMAIL, MODE_USERNAME, STORAGE_HISTORY
+from core.notify import show_snack
+from core.theme import AppColors
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -28,22 +30,100 @@ def HistoryScreen() -> Control:
     controller = ft.use_context(ControllerMethodsCtx)
     from flet import context
 
-    page = context.page
+    try:
+        page = context.page
+    except Exception:
+        page = None
     history = state.history if state.history else []
 
+    # Hydrate history on mount if empty
+    def _hydrate():
+        async def _fetch():
+            if not state.history and page:
+                try:
+                    from services.storage_service import (
+                        StorageService,
+                        load_history_entries,
+                    )
+
+                    storage = StorageService(page)
+                    raw = await storage.get(STORAGE_HISTORY)
+                    entries = load_history_entries(raw)
+                    if entries:
+                        state.history.clear()
+                        state.history.extend(entries)
+                except Exception:
+                    pass
+
+        asyncio.create_task(_fetch())
+
+    ft.use_effect(_hydrate, [])
+
     def _on_clear_all():
-        async def _clear():
-            try:
-                from services.storage_service import StorageService
+        if not page:
+            return
 
-                storage = StorageService(page)
-                await storage.delete(STORAGE_HISTORY)
-                await storage.flush()
-            except Exception:
-                pass
-            state.history.clear()
+        def _confirm_clear(e):
+            page.pop_dialog()
 
-        asyncio.create_task(_clear())
+            async def _clear():
+                try:
+                    from services.storage_service import StorageService
+
+                    storage = StorageService(page)
+                    await storage.delete(STORAGE_HISTORY)
+                    await storage.flush()
+                except Exception:
+                    pass
+                state.history.clear()
+                show_snack(page, "Search history cleared", bgcolor=AppColors.SUCCESS)
+
+            asyncio.create_task(_clear())
+
+        dlg = ft.AlertDialog(
+            modal=False,
+            title=ft.Row(
+                [
+                    ft.Icon(
+                        ft.Icons.DELETE_SWEEP_ROUNDED,
+                        color=ft.Colors.ERROR,
+                        size=tokens.ICON_MD,
+                    ),
+                    ft.Text(
+                        "Clear Search History",
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.BOLD,
+                        font_family="Outfit",
+                    ),
+                ],
+                spacing=tokens.SPACE_SM,
+            ),
+            content=ft.Text(
+                "Are you sure you want to clear all past searches? This action cannot be undone.",
+                size=tokens.FONT_SM,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                ft.FilledButton(
+                    "Clear All",
+                    style=ft.ButtonStyle(
+                        bgcolor=ft.Colors.ERROR, color=ft.Colors.WHITE
+                    ),
+                    on_click=_confirm_clear,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.show_dialog(dlg)
+
+    def _on_open_history(entry: dict):
+        query = entry.get("query") or entry.get("username", "")
+        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
+        if not query:
+            return
+        if controller.open_cached_result and controller.open_cached_result(query, mode):
+            return
+        _on_re_search(entry)
 
     def _on_re_search(entry: dict):
         query = entry.get("query") or entry.get("username", "")
@@ -164,11 +244,19 @@ def HistoryScreen() -> Control:
                             spacing=tokens.SPACE_XXS,
                             expand=True,
                         ),
-                        ft.IconButton(
-                            icon=ft.Icons.REFRESH_ROUNDED,
-                            tooltip="Search again",
-                            icon_color=ft.Colors.PRIMARY,
-                            on_click=lambda e, ent=entry: _on_re_search(ent),
+                        ft.Container(
+                            content=ft.IconButton(
+                                icon=ft.Icons.REFRESH_ROUNDED,
+                                tooltip="Rescan network targets",
+                                icon_size=18,
+                                icon_color=AppColors.PRIMARY,
+                                on_click=lambda e, ent=entry: _on_re_search(ent),
+                            ),
+                            width=36,
+                            height=36,
+                            border_radius=18,
+                            bgcolor=ft.Colors.with_opacity(0.12, AppColors.PRIMARY),
+                            alignment=ft.Alignment.CENTER,
                         ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -189,7 +277,7 @@ def HistoryScreen() -> Control:
                 ),
                 margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
                 ink=True,
-                on_click=lambda e, ent=entry: _on_re_search(ent),
+                on_click=lambda e, ent=entry: _on_open_history(ent),
             )
 
             # Swipe-to-delete via Dismissible

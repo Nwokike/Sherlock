@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -129,10 +131,12 @@ class _MaigretQueryNotify:
         self.last_update_time = time.monotonic()
         self.collector: list[SiteResult] = []
 
-    def start(self, username: str, id_type: str = "username") -> None:
+    def start(
+        self, username: str = "", id_type: str = "username", *args, **kwargs
+    ) -> None:
         logger.debug("Maigret search started for %s (%s)", username, id_type)
 
-    def update(self, result: Any, is_similar: bool = False) -> None:
+    def update(self, result: Any, is_similar: bool = False, *args, **kwargs) -> None:
         if self.cancel_event.is_set():
             return
 
@@ -188,14 +192,32 @@ class _MaigretQueryNotify:
                     except Exception:
                         pass
 
-    def finish(self, message: str | None = None) -> None:
+    def finish(self, message: str | None = None, *args, **kwargs) -> None:
         logger.debug("Maigret search finished: %s", message)
 
-    def warning(self, message: str) -> None:
+    def warning(
+        self, message: str = "", symbol: str = "-", advice: Any = None, *args, **kwargs
+    ) -> None:
         logger.warning("Maigret warning: %s", message)
 
-    def info(self, message: str) -> None:
+    def info(self, message: str = "", symbol: str = "*", *args, **kwargs) -> None:
         logger.info("Maigret info: %s", message)
+
+    def success(self, message: str = "", symbol: str = "+", *args, **kwargs) -> None:
+        logger.info("Maigret success: %s", message)
+
+    def enrich(
+        self,
+        message: str = "",
+        symbol: str = "*",
+        verbose_only: bool = False,
+        *args,
+        **kwargs,
+    ) -> None:
+        logger.debug("Maigret enrich: %s", message)
+
+    def error(self, message: str = "", *args, **kwargs) -> None:
+        logger.error("Maigret error: %s", message)
 
 
 def parse_usernames(raw: str) -> list[str]:
@@ -226,11 +248,117 @@ def parse_usernames(raw: str) -> list[str]:
     return unique
 
 
+def _run_maigret_worker_thread(
+    targets: list[str],
+    sites_to_scan: dict[str, Any],
+    proxy: str | None,
+    timeout: int,
+    max_conns: int,
+    dns_res: str,
+    extract_info: bool,
+    retry_count: int,
+    cancel_event: threading.Event,
+    on_progress_cb: Callable[[SearchProgress], None],
+) -> SearchProgress | None:
+    """Run Maigret scan inside an isolated background OS thread with its own event loop.
+
+    Keeping this off the main thread ensures 100% UI responsiveness for Flet.
+    """
+    worker_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(worker_loop)
+
+    last_prog: SearchProgress | None = None
+    total_sites = len(sites_to_scan)
+
+    async def _runner():
+        nonlocal last_prog
+
+        # Layer-6 DNS pre-warm on the worker loop (never the main Flet loop):
+        # resolve the scan's domains ahead of the request flood so aiohttp's
+        # per-connector lookups mostly hit the warm OS resolver cache.
+        # Bounded and best-effort — can't block or fail the scan itself.
+        try:
+            from services.cache_service import prewarm_dns
+
+            await prewarm_dns(
+                [
+                    (name, getattr(site, "url_main", "") or "")
+                    for name, site in sites_to_scan.items()
+                ]
+            )
+        except Exception as exc:
+            logger.debug("DNS pre-warm skipped: %s", exc)
+
+        for tgt in targets:
+            if cancel_event.is_set():
+                break
+
+            progress = SearchProgress(
+                username=tgt,
+                total_sites=total_sites,
+                is_running=True,
+            )
+            on_progress_cb(progress)
+
+            query_notify = _MaigretQueryNotify(
+                total=total_sites,
+                cancel_event=cancel_event,
+                progress=progress,
+                on_progress=on_progress_cb,
+            )
+
+            output_container: dict[str, Any] = {}
+
+            try:
+                await maigret_search(
+                    username=tgt,
+                    site_dict=sites_to_scan,
+                    logger=logger,
+                    query_notify=query_notify,
+                    proxy=proxy,
+                    timeout=timeout,
+                    max_connections=max_conns,
+                    no_progressbar=True,
+                    dns_resolver=dns_res,
+                    is_parsing_enabled=extract_info,
+                    is_enrich_enabled=False,
+                    retries=retry_count,
+                    output_container=output_container,
+                )
+            except asyncio.CancelledError:
+                progress.is_cancelled = True
+                raise
+            except Exception as exc:
+                logger.exception("Maigret search encountered an error: %s", exc)
+                raise
+            finally:
+                progress.is_running = False
+
+            on_progress_cb(progress)
+            last_prog = progress
+
+        return last_prog
+
+    try:
+        return worker_loop.run_until_complete(_runner())
+    finally:
+        pending = asyncio.all_tasks(worker_loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            with contextlib.suppress(Exception):
+                worker_loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+        worker_loop.close()
+
+
 class SherlockService:
     """Runs high-performance username OSINT searches powered by Maigret across 3,300+ sites."""
 
     def __init__(self):
         self._cancel_event = asyncio.Event()
+        self._thread_cancel = threading.Event()
         self._search_task: asyncio.Task | None = None
         self._progress: SearchProgress | None = None
         self._db: Any | None = None
@@ -254,6 +382,7 @@ class SherlockService:
             state.use_local_db,
             state.ignore_exclusions,
             state.nsfw_enabled,
+            state.scan_depth,
         )
 
         if not force and self._sites_dict and self._last_config == config:
@@ -277,7 +406,16 @@ class SherlockService:
                     path_arg = _resolve_local_db()
 
             def _load_db():
+                # Layer-1 cache: reuse the pickled database when the source
+                # manifest is unchanged (hybrid mtime-then-SHA256 validation
+                # in cache_service). Falls back to a full parse on any miss.
+                from services import cache_service
+
+                cached = cache_service.try_load_compiled_db(path_arg)
+                if cached is not None:
+                    return cached
                 db = MaigretDatabase().load_from_path(path_arg)
+                cache_service.save_compiled_db(path_arg, db)
                 return db
 
             self._db = await asyncio.to_thread(_load_db)
@@ -307,6 +445,18 @@ class SherlockService:
             }
             state.sites_version += 1
 
+            # Layer-5 cache: inverted tag -> names index so SitesScreen chip
+            # filtering is an O(1) bucket lookup instead of an O(N) scan.
+            try:
+                from services import cache_service
+
+                indices = cache_service.build_sites_indices(sites_dict)
+                cache_service.save_sites_indices(indices)
+                state.sites_tag_index = indices["by_tag"]
+            except Exception as exc:
+                logger.warning("Failed to build site tag index: %s", exc)
+                state.sites_tag_index = None
+
             logger.info("Loaded %d Maigret sites", self._total_sites)
             return self._total_sites
         except Exception as e:
@@ -317,9 +467,9 @@ class SherlockService:
         self,
         username: str,
         on_progress: Callable[[SearchProgress], None],
-        timeout: int = 30,
+        timeout: int = 10,
     ) -> SearchProgress:
-        """Run Maigret search across multi-usernames with active settings filters."""
+        """Run Maigret search on an isolated worker thread with active settings filters."""
         if not _MAIGRET_AVAILABLE:
             raise RuntimeError("Maigret search engine is not available")
 
@@ -347,59 +497,28 @@ class SherlockService:
             raise RuntimeError("No sites selected or available for scanning")
 
         self._cancel_event.clear()
-        last_prog: SearchProgress | None = None
+        self._thread_cancel.clear()
 
         proxy = getattr(state, "proxy_url", "") or None
-        max_conns = 50  # Balanced high-throughput concurrency for mobile & desktop
+        max_conns = getattr(state, "max_connections", 50)
+        dns_res = getattr(state, "dns_resolver", "async")
+        extract_info = getattr(state, "extract_info", True)
+        retry_count = getattr(state, "retries", 0)
 
-        for tgt in targets:
-            if self._cancel_event.is_set():
-                break
-
-            state.active_username = tgt
-            self._progress = SearchProgress(
-                username=tgt,
-                total_sites=total_sites,
-                is_running=True,
-            )
-            state.target_results[tgt] = self._progress
-            on_progress(self._progress)
-
-            query_notify = _MaigretQueryNotify(
-                total=total_sites,
-                cancel_event=self._cancel_event,
-                progress=self._progress,
-                on_progress=on_progress,
-            )
-
-            output_container: dict[str, Any] = {}
-
-            try:
-                # Execute native async Maigret search
-                await maigret_search(
-                    username=tgt,
-                    site_dict=sites_to_scan,
-                    logger=logger,
-                    query_notify=query_notify,
-                    proxy=proxy,
-                    timeout=timeout,
-                    max_connections=max_conns,
-                    no_progressbar=True,
-                    dns_resolver="async",
-                    output_container=output_container,
-                )
-            except asyncio.CancelledError:
-                logger.info("Search task cancelled for %s", tgt)
-                self._progress.is_cancelled = True
-                raise
-            except Exception as exc:
-                logger.exception("Maigret search encountered an error: %s", exc)
-                raise
-            finally:
-                self._progress.is_running = False
-
-            on_progress(self._progress)
-            last_prog = self._progress
+        # Execute on isolated background thread
+        res = await asyncio.to_thread(
+            _run_maigret_worker_thread,
+            targets=targets,
+            sites_to_scan=sites_to_scan,
+            proxy=proxy,
+            timeout=timeout,
+            max_conns=max_conns,
+            dns_res=dns_res,
+            extract_info=extract_info,
+            retry_count=retry_count,
+            cancel_event=self._thread_cancel,
+            on_progress_cb=on_progress,
+        )
 
         for tgt in targets:
             if tgt not in state.target_results:
@@ -408,15 +527,16 @@ class SherlockService:
                     total_sites=total_sites,
                     is_cancelled=True,
                 )
-            elif self._cancel_event.is_set() and state.target_results[tgt].is_running:
+            elif self._thread_cancel.is_set() and state.target_results[tgt].is_running:
                 state.target_results[tgt].is_running = False
                 state.target_results[tgt].is_cancelled = True
 
-        return last_prog or self._progress
+        return res or SearchProgress(username=username, total_sites=total_sites)
 
     def cancel(self) -> None:
         """Cancel a running search."""
         self._cancel_event.set()
+        self._thread_cancel.set()
         if self._search_task and not self._search_task.done():
             self._search_task.cancel()
         if self._progress:
@@ -428,5 +548,7 @@ class SherlockService:
         for tgt in state.target_results:
             prog = state.target_results[tgt]
             if prog.is_running:
+                prog.is_running = False
+                prog.is_cancelled = True
                 prog.is_running = False
                 prog.is_cancelled = True

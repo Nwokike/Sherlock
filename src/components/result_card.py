@@ -11,6 +11,7 @@ Supports rich profile previews:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
 import flet as ft
@@ -337,8 +338,13 @@ def ResultCard(
         avatar_url and isinstance(avatar_url, str) and avatar_url.startswith("http")
     )
     if has_valid_avatar:
+        from services.cache_service import (
+            ensure_cached_avatar,
+            schedule_avatar_download,
+        )
+
         leading_control = ft.Image(
-            src=avatar_url,
+            src=ensure_cached_avatar(avatar_url),
             width=36,
             height=36,
             border_radius=18,
@@ -352,6 +358,12 @@ def ResultCard(
                 alignment=ft.Alignment.CENTER,
             ),
         )
+        # Warm the on-device avatar cache in the background — the image is
+        # shown from the remote URL now, but instantly on the next render.
+        try:
+            asyncio.create_task(schedule_avatar_download(avatar_url))
+        except RuntimeError:
+            pass  # no running loop (e.g. test render) — cache warms later
     else:
         leading_control = ft.Container(
             content=ft.Icon(icon, size=tokens.RESULT_ICON, color=icon_color),

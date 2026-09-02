@@ -20,22 +20,30 @@ from core import tokens
 from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
 from core.notify import show_snack
 from core.constants import (
+    APP_BUILD_NUMBER,
     APP_NAME,
     APP_VERSION,
-    STORAGE_EMAIL_TIMEOUT,
+    STORAGE_DNS_RESOLVER,
     STORAGE_EMAIL_CONCURRENCY,
-    STORAGE_EMAIL_ONLY_FOUND,
     STORAGE_EMAIL_METHOD_FILTER,
+    STORAGE_EMAIL_ONLY_FOUND,
+    STORAGE_EMAIL_TIMEOUT,
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
+    STORAGE_EXTRACT_INFO,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
+    STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_PROXY_URL,
+    STORAGE_RECURSIVE_SEARCH,
+    STORAGE_RETRIES,
+    STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
+    STORAGE_USE_CURL_CFFI,
 )
 from core.theme import AppColors, is_dark_mode
 from state.app_state import AppStateCtx
@@ -121,7 +129,10 @@ def SettingsScreen() -> Control:
     controller = ft.use_context(ControllerMethodsCtx)
     from flet import context
 
-    page = context.page
+    try:
+        page = context.page
+    except Exception:
+        page = None
 
     async def _on_theme_change(val: str):
         if val == "system":
@@ -143,10 +154,18 @@ def SettingsScreen() -> Control:
             pass
 
     def _create_theme_card(mode: str, label: str, icon: str):
+        curr_mode = (
+            page.theme_mode
+            if page and hasattr(page, "theme_mode")
+            else state.theme_mode
+        )
         is_sel = (
-            (mode == "dark" and page.theme_mode == ft.ThemeMode.DARK)
-            or (mode == "light" and page.theme_mode == ft.ThemeMode.LIGHT)
-            or (mode == "system" and page.theme_mode == ft.ThemeMode.SYSTEM)
+            (mode == "dark" and curr_mode == ft.ThemeMode.DARK)
+            or (mode == "light" and curr_mode == ft.ThemeMode.LIGHT)
+            or (
+                mode == "system"
+                and (curr_mode == ft.ThemeMode.SYSTEM or curr_mode is None)
+            )
         )
         return ft.Container(
             content=ft.Row(
@@ -240,8 +259,19 @@ def SettingsScreen() -> Control:
         asyncio.create_task(_persist(STORAGE_EMAIL_METHOD_FILTER, val))
 
     def _on_proxy_change(val: str):
-        state.proxy_url = val.strip()
-        asyncio.create_task(_persist(STORAGE_PROXY_URL, val.strip()))
+        cleaned = val.strip()
+        if cleaned and not any(
+            cleaned.lower().startswith(p)
+            for p in ("http://", "https://", "socks5://", "socks5h://")
+        ):
+            show_snack(
+                page,
+                "Invalid proxy URL. Please use http://, https://, or socks5://",
+                bgcolor=AppColors.WARNING,
+            )
+            return
+        state.proxy_url = cleaned
+        asyncio.create_task(_persist(STORAGE_PROXY_URL, cleaned))
 
     def _on_enrichment_mode_change(val: str):
         state.enrichment_mode = val
@@ -257,6 +287,40 @@ def SettingsScreen() -> Control:
         state.scan_depth = val
         asyncio.create_task(_persist(STORAGE_SCAN_DEPTH, val))
         asyncio.create_task(controller.refresh_sites())
+
+    def _toggle_recursive_search(val: bool):
+        state.recursive_search = val
+        asyncio.create_task(
+            _persist(STORAGE_RECURSIVE_SEARCH, "true" if val else "false")
+        )
+
+    def _toggle_extract_info(val: bool):
+        state.extract_info = val
+        asyncio.create_task(_persist(STORAGE_EXTRACT_INFO, "true" if val else "false"))
+
+    def _on_max_connections_change(val: str):
+        state.max_connections = max(10, min(100, int(val)))
+        asyncio.create_task(_persist(STORAGE_MAX_CONNECTIONS, val))
+
+    def _on_retries_change(val: str):
+        state.retries = int(val)
+        asyncio.create_task(_persist(STORAGE_RETRIES, val))
+
+    def _on_dns_resolver_change(val: str):
+        state.dns_resolver = val
+        asyncio.create_task(_persist(STORAGE_DNS_RESOLVER, val))
+
+    def _toggle_use_curl_cffi(val: bool):
+        state.use_curl_cffi = val
+        asyncio.create_task(_persist(STORAGE_USE_CURL_CFFI, "true" if val else "false"))
+
+    def _toggle_safe_search(val: bool):
+        state.safe_search = val
+        state.nsfw_enabled = not val
+        asyncio.create_task(_persist(STORAGE_SAFE_SEARCH, "true" if val else "false"))
+        asyncio.create_task(_persist(STORAGE_NSFW, "false" if val else "true"))
+        if controller.refresh_sites:
+            asyncio.create_task(controller.refresh_sites())
 
     async def _persist(key: str, value: str):
         from flet import context
@@ -337,13 +401,55 @@ def SettingsScreen() -> Control:
         ]
     )
 
-    # Scan Parameters
+    # Scan Parameters (Maigret Engine)
     scan_card = _settings_card(
         [
             _setting_row(
+                ft.Icons.SAVED_SEARCH_ROUNDED,
+                "Recursive OSINT Search",
+                "Extract discovered usernames & IDs to automatically expand search",
+                ft.Switch(
+                    value=getattr(state, "recursive_search", False),
+                    on_change=lambda e: _toggle_recursive_search(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.ACCOUNT_BOX_ROUNDED,
+                "Profile Data Extraction",
+                "Parse claimed profile HTML for names, bios, avatars, and locations",
+                ft.Switch(
+                    value=getattr(state, "extract_info", True),
+                    on_change=lambda e: _toggle_extract_info(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.SHIELD_ROUNDED,
+                "Include Disabled Sites",
+                "Scan unstable or broken networks (may increase false positives)",
+                ft.Switch(
+                    value=state.ignore_exclusions,
+                    on_change=lambda e: _toggle_exclusions(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
                 ft.Icons.BLOCK_ROUNDED,
-                "Include NSFW Sites",
-                "Include adult/NSFW networks in scans",
+                "Include Adult Sites",
+                "Include NSFW, dating, and adult networks in scans",
                 ft.Switch(
                     value=state.nsfw_enabled,
                     on_change=lambda e: _toggle_nsfw(e.control.value),
@@ -355,21 +461,63 @@ def SettingsScreen() -> Control:
                 color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
             ),
             _setting_row(
-                ft.Icons.SHIELD_ROUNDED,
-                "Ignore Exclusions",
-                "Scans exclusions list (may increase false positives)",
-                ft.Switch(
-                    value=state.ignore_exclusions,
-                    on_change=lambda e: _toggle_exclusions(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
+                ft.Icons.REPLAY_ROUNDED,
+                "Request Retries",
+                "Number of retries when a network request drops or times out",
+                ft.SegmentedButton(
+                    segments=[
+                        ft.Segment(value="0", label=ft.Text("0", size=10)),
+                        ft.Segment(value="1", label=ft.Text("1", size=10)),
+                        ft.Segment(value="2", label=ft.Text("2", size=10)),
+                        ft.Segment(value="3", label=ft.Text("3", size=10)),
+                    ],
+                    selected=[str(getattr(state, "retries", 0))],
+                    on_change=lambda e: _on_retries_change(
+                        e.control.selected[0] if e.control.selected else "0"
+                    ),
+                    show_selected_icon=False,
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.DNS_ROUNDED,
+                "DNS Resolver Mode",
+                "Async (c-ares) for speed · System (Threaded) for network compat",
+                ft.SegmentedButton(
+                    segments=[
+                        ft.Segment(value="async", label=ft.Text("Async", size=10)),
+                        ft.Segment(value="threaded", label=ft.Text("System", size=10)),
+                    ],
+                    selected=[getattr(state, "dns_resolver", "async")],
+                    on_change=lambda e: _on_dns_resolver_change(
+                        e.control.selected[0] if e.control.selected else "async"
+                    ),
+                    show_selected_icon=False,
                 ),
             ),
         ]
     )
 
-    # Email Intelligence
+    # Email Intelligence (Holehe + curl-cffi)
     email_card = _settings_card(
         [
+            _setting_row(
+                ft.Icons.SECURITY_ROUNDED,
+                "Stealth TLS (curl-cffi)",
+                "Chrome 124 JA3/H2 fingerprint to bypass WAF 403 blocks",
+                ft.Switch(
+                    value=getattr(state, "use_curl_cffi", True),
+                    on_change=lambda e: _toggle_use_curl_cffi(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
             _setting_row(
                 ft.Icons.ALTERNATE_EMAIL_ROUNDED,
                 "Email Request Timeout",
@@ -393,13 +541,13 @@ def SettingsScreen() -> Control:
             _setting_row(
                 ft.Icons.SPEED_ROUNDED,
                 "Email Concurrency",
-                "Parallel checks — higher is faster but rate-limits more",
+                "Parallel checks — lower is stealthier, higher is faster",
                 ft.Slider(
-                    value=float(getattr(state, "email_concurrency", 15)),
-                    min=5,
+                    value=float(getattr(state, "email_concurrency", 12)),
+                    min=4,
                     max=30,
-                    divisions=5,
-                    label=f"{getattr(state, 'email_concurrency', 15)}",
+                    divisions=13,
+                    label=f"{getattr(state, 'email_concurrency', 12)}",
                     active_color=AppColors.PRIMARY,
                     on_change=lambda e: _on_email_concurrency_change(
                         str(int(e.control.value))
@@ -434,6 +582,33 @@ def SettingsScreen() -> Control:
                     active_color=ft.Colors.PRIMARY,
                 ),
             ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.CATEGORY_ROUNDED,
+                "Detection Method Filter",
+                "Filter email intelligence by platform detection vector",
+                ft.SegmentedButton(
+                    segments=[
+                        ft.Segment(value="all", label=ft.Text("All", size=10)),
+                        ft.Segment(
+                            value="register", label=ft.Text("Register", size=10)
+                        ),
+                        ft.Segment(value="login", label=ft.Text("Login", size=10)),
+                        ft.Segment(
+                            value="password recovery",
+                            label=ft.Text("Recovery", size=10),
+                        ),
+                    ],
+                    selected=[state.email_method_filter or "all"],
+                    on_change=lambda e: _on_email_method_filter_change(
+                        e.control.selected[0] if e.control.selected else "all"
+                    ),
+                    show_selected_icon=False,
+                ),
+            ),
         ]
     )
 
@@ -462,9 +637,29 @@ def SettingsScreen() -> Control:
                 color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
             ),
             _setting_row(
+                ft.Icons.SPEED_ROUNDED,
+                "Network Concurrency",
+                "Max parallel requests during username scans (10 - 100)",
+                ft.Slider(
+                    value=float(getattr(state, "max_connections", 50)),
+                    min=10,
+                    max=100,
+                    divisions=9,
+                    label=f"{getattr(state, 'max_connections', 50)}",
+                    active_color=AppColors.PRIMARY,
+                    on_change=lambda e: _on_max_connections_change(
+                        str(int(e.control.value))
+                    ),
+                ),
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
                 ft.Icons.FLASH_ON_ROUNDED,
-                "Fast Offline Scan",
-                "Load local network list instantly without internet",
+                "Bundled Database",
+                "Use local bundled 3.3k database (faster startup)",
                 ft.Switch(
                     value=state.use_local_db,
                     on_change=lambda e: _toggle_local_db(e.control.value),
@@ -478,7 +673,7 @@ def SettingsScreen() -> Control:
             _setting_row(
                 ft.Icons.TIMER_OUTLINED,
                 "Request Timeout",
-                "Maximum connection wait time per site",
+                "Maximum connection wait time per site (5s - 60s)",
                 ft.Slider(
                     value=float(state.timeout),
                     min=5,
@@ -567,48 +762,10 @@ def SettingsScreen() -> Control:
     )
 
     # About & Updates
-    is_announcement = (
-        state.update_available
-        and state.update_data
-        and state.update_data.get("type") == "announcement"
-    )
+    def _open_version_dialog(e=None):
+        from components.update_dialog import show_update_dialog
 
-    update_badge_controls: list[Control] = []
-    if state.update_available and state.update_data:
-        badge_color = AppColors.ACCENT if is_announcement else AppColors.PRIMARY
-        badge_label = (
-            "Announcement Available"
-            if is_announcement
-            else f"Update to v{state.update_data.get('version', '')} available"
-        )
-        badge_icon = (
-            ft.Icons.CAMPAIGN_ROUNDED if is_announcement else ft.Icons.UPGRADE_ROUNDED
-        )
-        update_badge_controls.append(
-            ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(badge_icon, size=16, color=badge_color),
-                        ft.Text(
-                            badge_label,
-                            size=tokens.FONT_SM,
-                            weight=ft.FontWeight.W_600,
-                            color=badge_color,
-                            font_family="Outfit",
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=6,
-                ),
-                padding=ft.Padding(14, 8, 14, 8),
-                border_radius=tokens.RADIUS_MD,
-                bgcolor=ft.Colors.with_opacity(0.12, badge_color),
-                border=ft.Border.all(1.2, badge_color),
-                ink=True,
-                on_click=lambda e: controller.open_update_dialog(),
-                margin=ft.Margin(0, tokens.SPACE_MD, 0, tokens.SPACE_XS),
-            )
-        )
+        show_update_dialog(page)
 
     about_card = _settings_card(
         [
@@ -628,12 +785,17 @@ def SettingsScreen() -> Control:
                             weight=ft.FontWeight.W_700,
                             color=ft.Colors.ON_SURFACE,
                         ),
-                        ft.Text(
-                            f"Version {APP_VERSION}",
-                            size=tokens.FONT_SM,
-                            color=ft.Colors.with_opacity(
-                                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                        ft.Container(
+                            content=ft.Text(
+                                f"Version {APP_VERSION} (Build {APP_BUILD_NUMBER})",
+                                size=tokens.FONT_SM,
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                                ),
                             ),
+                            ink=True,
+                            tooltip="Tap to view changelog",
+                            on_click=_open_version_dialog,
                         ),
                         ft.Container(height=tokens.SPACE_XS),
                         ft.Text(
@@ -644,7 +806,6 @@ def SettingsScreen() -> Control:
                             ),
                             text_align=ft.TextAlign.CENTER,
                         ),
-                        *update_badge_controls,
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=0,
@@ -690,18 +851,22 @@ def SettingsScreen() -> Control:
                 ft.Icons.AUTO_AWESOME_ROUNDED,
                 "Enrichment Mode",
                 "Basic = fast (1 req/url) · Full = richer via API mutations",
-                ft.Dropdown(
-                    value=state.enrichment_mode,
-                    options=[
-                        ft.DropdownOption("basic", "Basic"),
-                        ft.DropdownOption("full", "Full"),
+                ft.SegmentedButton(
+                    segments=[
+                        ft.Segment(
+                            value="basic",
+                            label=ft.Text("Basic", size=10, font_family="Outfit"),
+                        ),
+                        ft.Segment(
+                            value="full",
+                            label=ft.Text("Full", size=10, font_family="Outfit"),
+                        ),
                     ],
-                    width=100,
-                    text_size=tokens.FONT_SM,
-                    border_radius=tokens.RADIUS_SM,
-                    focused_border_color=ft.Colors.PRIMARY,
-                    on_select=lambda e: _on_enrichment_mode_change(e.control.value),
-                    content_padding=4,
+                    selected=[state.enrichment_mode or "full"],
+                    on_change=lambda e: _on_enrichment_mode_change(
+                        e.control.selected[0] if e.control.selected else "full"
+                    ),
+                    show_selected_icon=False,
                 ),
             ),
         ]
@@ -731,6 +896,22 @@ def SettingsScreen() -> Control:
             except Exception as exc:
                 logger.warning("Failed to copy logs: %s", exc)
 
+        telemetry_text = ft.Text(
+            get_telemetry_snapshot(),
+            size=11,
+            font_family="Courier New",
+            color=AppColors.PRIMARY,
+            weight=ft.FontWeight.W_600,
+            expand=True,
+        )
+
+        def _refresh_telemetry(e):
+            telemetry_text.value = get_telemetry_snapshot()
+            cur_logs = in_memory_log_handler.get_logs()
+            if cur_logs:
+                log_text.value = "\n".join(cur_logs)
+            page.update()
+
         def _clear_logs(e):
             in_memory_log_handler.clear_logs()
             log_text.value = "Logs cleared.\nNew activity will appear here."
@@ -754,6 +935,14 @@ def SettingsScreen() -> Control:
                         weight=ft.FontWeight.BOLD,
                         font_family="Outfit",
                         color=AppColors.PRIMARY,
+                        expand=True,
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.REFRESH_ROUNDED,
+                        tooltip="Refresh telemetry",
+                        icon_size=18,
+                        icon_color=AppColors.PRIMARY,
+                        on_click=_refresh_telemetry,
                     ),
                 ],
                 spacing=tokens.SPACE_SM,
@@ -763,12 +952,11 @@ def SettingsScreen() -> Control:
                 content=ft.Column(
                     controls=[
                         ft.Container(
-                            content=ft.Text(
-                                get_telemetry_snapshot(),
-                                size=11,
-                                font_family="Courier New",
-                                color=AppColors.PRIMARY,
-                                weight=ft.FontWeight.W_600,
+                            content=ft.Row(
+                                [
+                                    telemetry_text,
+                                ],
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             ),
                             padding=ft.Padding(8, 4, 8, 4),
                             border_radius=tokens.RADIUS_SM,

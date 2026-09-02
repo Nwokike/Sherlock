@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _HOLEHE_AVAILABLE = False
 _holehe_modules: list | None = None
+_CURL_CFFI_AVAILABLE = False
 
 try:
     from holehe.core import import_submodules, get_functions, is_email
@@ -32,6 +33,66 @@ try:
     _HOLEHE_AVAILABLE = True
 except ImportError:
     pass
+
+try:
+    from curl_cffi.requests import AsyncSession as CurlAsyncSession
+
+    _CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CurlAsyncSession = None
+
+
+def _patch_holehe_user_agents():
+    """Patch holehe's internal user agent dictionary with modern browser strings
+
+    to prevent ancient Chrome 24-41 bot detection and WAF challenge blocks.
+    """
+    try:
+        import holehe.localuseragent as lua
+
+        lua.ua["browsers"]["chrome"] = [
+            (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+                " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0"
+                " Safari/537.36"
+            ),
+            (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML,"
+                " like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+        ]
+        lua.ua["browsers"]["firefox"] = [
+            (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0)"
+                " Gecko/20100101 Firefox/125.0"
+            ),
+            (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0)"
+                " Gecko/20100101 Firefox/125.0"
+            ),
+        ]
+    except Exception:
+        pass
+
+
+if _CURL_CFFI_AVAILABLE and CurlAsyncSession is not None:
+
+    class StealthHoleheSession(CurlAsyncSession):
+        """curl-cffi AsyncSession with Chrome 124 TLS & JA3 impersonation
+
+        and httpx kwarg compatibility (follow_redirects -> allow_redirects).
+        """
+
+        def request(self, method, url, **kwargs):
+            if "follow_redirects" in kwargs:
+                kwargs["allow_redirects"] = kwargs.pop("follow_redirects")
+            return super().request(method, url, **kwargs)
+else:
+    StealthHoleheSession = None
 
 EMAIL_FORMAT = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 
@@ -119,13 +180,17 @@ class EmailService:
         timeout: int = 10,
         skip_password_recovery: bool = False,
         concurrency: int = 15,
+        method_filter: str = "all",
+        use_curl_cffi: bool = True,
     ) -> EmailSearchProgress:
-        """Run holehe email scan across all modules concurrently."""
+        """Run holehe email scan across all modules concurrently with stealth TLS bypass."""
         if not _HOLEHE_AVAILABLE:
             raise RuntimeError("holehe is not available")
 
         if not validate_email(email):
             raise ValueError(f"Invalid email address: {email}")
+
+        _patch_holehe_user_agents()
 
         modules = self._load_modules(skip_password_recovery)
         total = len(modules)
@@ -175,7 +240,6 @@ class EmailService:
 
             if not local_out:
                 # Holehe returned nothing — treat as inconclusive, not not_found.
-                # Skipping prevents false-negative "Available" when the probe didn't run.
                 logger.warning("Module %s returned empty result — skipping", name)
                 async with progress_lock:
                     progress.checked_modules += 1
@@ -213,6 +277,30 @@ class EmailService:
                 others=raw.get("others"),
             )
 
+            # Apply method filtering if active
+            if method_filter and method_filter != "all":
+                m_curr = (result.method or "").lower()
+                m_target = method_filter.lower()
+                # Accept exact match or recovery alias
+                if not (
+                    m_curr == m_target
+                    or (m_target == "recovery" and "recovery" in m_curr)
+                ):
+                    async with progress_lock:
+                        progress.checked_modules += 1
+                        now = time.monotonic()
+                        should_notify = (
+                            now - last_update_time >= 0.20
+                        ) or progress.checked_modules == total
+                        if should_notify:
+                            last_update_time = now
+                    if should_notify:
+                        try:
+                            on_progress(progress)
+                        except Exception:
+                            pass
+                    return
+
             async with progress_lock:
                 progress.checked_modules += 1
                 if result.rate_limit:
@@ -243,12 +331,31 @@ class EmailService:
                     "Chrome/124.0.0.0 Safari/537.36"
                 ),
                 "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-CH-UA-Mobile": "?0",
+                "Sec-CH-UA-Platform": '"Windows"',
             }
-            async with httpx.AsyncClient(
-                timeout=timeout, headers=headers, follow_redirects=True
-            ) as client:
+
+            if (
+                use_curl_cffi
+                and _CURL_CFFI_AVAILABLE
+                and StealthHoleheSession is not None
+            ):
+                client_ctx = StealthHoleheSession(
+                    impersonate="chrome124",
+                    timeout=timeout,
+                    headers=headers,
+                    allow_redirects=True,
+                )
+            else:
+                client_ctx = httpx.AsyncClient(
+                    timeout=timeout, headers=headers, follow_redirects=True
+                )
+
+            async with client_ctx as client:
                 self._client = client
-                sem = asyncio.Semaphore(max(5, min(30, concurrency)))
+                sem = asyncio.Semaphore(max(4, min(30, concurrency)))
 
                 async def _bounded(module):
                     async with sem:

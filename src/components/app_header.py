@@ -1,7 +1,7 @@
 """AppHeader — single consistent header for every screen (MarkItDown / DDGS pattern).
 
 Top-left:  App icon + optional title/subtitle (History / Settings / Home).
-Top-right: Theme cycle (3 modes: dark→light→system) + settings gear + screen-specific actions.
+Top-right: Version chip + theme cycle (3 modes) + settings gear + screen-specific actions.
 """
 
 from __future__ import annotations
@@ -13,8 +13,9 @@ from typing import Callable
 import flet as ft
 
 from core import tokens
-from core.constants import STORAGE_THEME
-from core.theme import is_dark_mode
+from core.constants import APP_VERSION, STORAGE_THEME
+from core.state import state as core_state
+from core.theme import AppColors, is_dark_mode
 
 logger = logging.getLogger("AppHeader")
 
@@ -25,6 +26,73 @@ def _theme_icon(page: ft.Page | None) -> str:
     if page.theme_mode == ft.ThemeMode.LIGHT:
         return ft.Icons.LIGHT_MODE_ROUNDED
     return ft.Icons.SETTINGS_SYSTEM_DAYDREAM_ROUNDED
+
+
+def _build_version_chip(page: ft.Page | None) -> ft.Control:
+    """KTV-style version chip: shows the current version normally, flips to
+    an Update pill when a newer build is found. Always opens the update
+    dialog (changelog when up to date)."""
+
+    def _open_dialog(e=None):
+        if page is not None:
+            from components.update_dialog import show_update_dialog
+
+            show_update_dialog(page)
+
+    update_available = core_state.update_available
+    if update_available:
+        update_data = core_state.update_data or {}
+        label = (
+            update_data.get("version", "Update")
+            if update_data.get("type") != "announcement"
+            else "News"
+        )
+        content = ft.Row(
+            controls=[
+                ft.Text(
+                    f"Update: {label} Available!"
+                    if update_data.get("type") != "announcement"
+                    else "News",
+                    size=11,
+                    weight=ft.FontWeight.BOLD,
+                    color=AppColors.PRIMARY,
+                    no_wrap=True,
+                ),
+                ft.Container(
+                    width=6,
+                    height=6,
+                    border_radius=3,
+                    bgcolor=AppColors.PRIMARY,
+                ),
+            ],
+            spacing=6,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        return ft.Container(
+            content=content,
+            padding=ft.Padding(10, 4, 10, 4),
+            border_radius=10,
+            bgcolor=ft.Colors.with_opacity(0.15, AppColors.PRIMARY),
+            border=ft.Border.all(1.5, AppColors.PRIMARY),
+            ink=True,
+            tooltip="New update available — tap to view",
+            on_click=lambda e: _open_dialog(),
+        )
+    return ft.Container(
+        content=ft.Text(
+            f"v{APP_VERSION}",
+            size=11,
+            weight=ft.FontWeight.BOLD,
+            color=ft.Colors.ON_SURFACE_VARIANT,
+            no_wrap=True,
+        ),
+        padding=ft.Padding(10, 4, 10, 4),
+        border_radius=10,
+        bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE_VARIANT),
+        ink=True,
+        tooltip="What's New — version & changelog",
+        on_click=lambda e: _open_dialog(),
+    )
 
 
 def AppHeader(
@@ -123,6 +191,8 @@ def AppHeader(
     right_controls: list[ft.Control] = []
     if extra_actions:
         right_controls.extend(extra_actions)
+
+    right_controls.append(_build_version_chip(page))
 
     right_controls.append(
         ft.IconButton(

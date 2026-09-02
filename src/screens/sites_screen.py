@@ -18,6 +18,7 @@ from flet import Control
 from components.banner_ad import build_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
+from hooks.use_debounce import use_debounce
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -70,6 +71,7 @@ def SitesScreen() -> Control:
     _ = state.sites_version
 
     search_query, set_search_query = ft.use_state("")
+    debounced_query = use_debounce(search_query, 200)
     selected_tag, set_selected_tag = ft.use_state("all")
     checked_states, set_checked_states = ft.use_state({})
 
@@ -137,23 +139,33 @@ def SitesScreen() -> Control:
         _apply({k: k.lower() in POPULAR_SITES for k in checked_states})
 
     # Build filtered list
-    query = search_query.strip().lower()
+    query = debounced_query.strip().lower()
+    # O(1) inverted tag index (built by SherlockService after each DB load)
+    # — falls back to the per-site tags map when the index isn't warm yet.
+    tag_index = getattr(state, "sites_tag_index", None) or {}
     tags_map = getattr(state, "sites_tags_map", {}) or {}
+    tag_bucket: set[str] | None = None
+    if selected_tag != "all" and selected_tag.lower() in tag_index:
+        tag_bucket = set(tag_index[selected_tag.lower()])
     items = []
     for name, is_checked in sorted(checked_states.items()):
         if query and query not in name.lower():
             continue
         if selected_tag != "all":
-            site_tags = [t.lower() for t in tags_map.get(name, [])]
-            if selected_tag.lower() not in site_tags:
-                continue
+            if tag_bucket is not None:
+                if name not in tag_bucket:
+                    continue
+            else:
+                site_tags = [t.lower() for t in tags_map.get(name, [])]
+                if selected_tag.lower() not in site_tags:
+                    continue
         items.append(
             ft.Container(
                 content=ft.Row(
                     controls=[
                         ft.Checkbox(
                             value=is_checked,
-                            on_change=lambda e, n=name: _toggle_row(n),
+                            on_change=None,
                             fill_color={
                                 ft.ControlState.HOVERED: ft.Colors.PRIMARY,
                                 ft.ControlState.FOCUSED: ft.Colors.PRIMARY,
@@ -285,15 +297,8 @@ def SitesScreen() -> Control:
         padding=ft.Padding(0, tokens.SPACE_XS, 0, tokens.SPACE_SM),
     )
 
-    body = (
-        ft.ListView(
-            controls=items,
-            spacing=0,
-            expand=True,
-            build_controls_on_demand=True,
-        )
-        if checked_states
-        else ft.Container(
+    if not checked_states:
+        body = ft.Container(
             content=EmptyState(
                 title="Loading networks...",
                 message="Fetching the social network database.",
@@ -301,7 +306,27 @@ def SitesScreen() -> Control:
             ),
             expand=True,
         )
-    )
+    elif not items:
+        filter_msg = (
+            f'No networks match "{debounced_query}"'
+            if debounced_query
+            else f"No networks in category '{selected_tag}'"
+        )
+        body = ft.Container(
+            content=EmptyState(
+                title="No networks found",
+                message=filter_msg,
+                icon=ft.Icons.SEARCH_OFF_ROUNDED,
+            ),
+            expand=True,
+        )
+    else:
+        body = ft.ListView(
+            controls=items,
+            spacing=0,
+            expand=True,
+            build_controls_on_demand=True,
+        )
 
     return ft.Column(
         controls=[

@@ -7,6 +7,7 @@ Premium onboarding with swipe gestures, animated dots, and gradient backdrop.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import flet as ft
@@ -15,7 +16,6 @@ from flet import Control
 from core import tokens
 from core.constants import STORAGE_ONBOARDING_DONE
 from core.theme import AppColors, is_dark_mode
-from flet import context as flet_context
 
 logger = logging.getLogger("OnboardingScreen")
 
@@ -46,15 +46,16 @@ _SLIDES = [
         "color": AppColors.PRIMARY,
         "title": "Premium\nData Exports",
         "body": (
-            "Export complete scanning reports as beautifully formatted "
-            "Excel, CSV, or Text lists — directly to your device in one tap."
+            "Export complete scanning reports as gold-branded PDF dossiers, "
+            "XMind mind maps, CSV/JSON datasets, and plain text — directly to "
+            "your device in one tap."
         ),
     },
 ]
 
 
 def _build_slide(s: dict) -> ft.Column:
-    is_dark = is_dark_mode(flet_context.page)
+    is_dark = is_dark_mode(None)
     if s.get("use_app_icon"):
         icon_content = ft.Image(
             src="/icon.svg",
@@ -132,34 +133,51 @@ def OnboardingScreen() -> Control:
         state.is_first_launch = False
 
     def _on_next(e=None):
+        with contextlib.suppress(Exception):
+            asyncio.create_task(ft.HapticFeedback().light_impact())
         if is_last:
             asyncio.create_task(_finish())
         else:
             set_page_idx(page_idx + 1)
 
     def _on_skip(e):
+        with contextlib.suppress(Exception):
+            asyncio.create_task(ft.HapticFeedback().light_impact())
         asyncio.create_task(_finish())
 
     def _on_swipe(e: ft.DragEndEvent):
         if e.primary_velocity is not None:
             if e.primary_velocity < -200 and not is_last:
+                with contextlib.suppress(Exception):
+                    asyncio.create_task(ft.HapticFeedback().light_impact())
                 set_page_idx(min(page_idx + 1, len(_SLIDES) - 1))
             elif e.primary_velocity > 200 and page_idx > 0:
+                with contextlib.suppress(Exception):
+                    asyncio.create_task(ft.HapticFeedback().light_impact())
                 set_page_idx(page_idx - 1)
 
-    # Dot indicators
+    def _on_dot_click(idx: int):
+        with contextlib.suppress(Exception):
+            asyncio.create_task(ft.HapticFeedback().light_impact())
+        set_page_idx(idx)
+
+    # Dot indicators (tappable)
     dots = []
     for i in range(len(_SLIDES)):
         is_active = i == page_idx
+        dot_container = ft.Container(
+            width=24 if is_active else 8,
+            height=8,
+            border_radius=4,
+            bgcolor=ft.Colors.PRIMARY
+            if is_active
+            else ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE),
+            animate=ft.Animation(tokens.ANIM_SLOW, "easeOut"),
+        )
         dots.append(
-            ft.Container(
-                width=24 if is_active else 8,
-                height=8,
-                border_radius=4,
-                bgcolor=ft.Colors.PRIMARY
-                if is_active
-                else ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE),
-                animate=ft.Animation(tokens.ANIM_SLOW, "easeOut"),
+            ft.GestureDetector(
+                content=dot_container,
+                on_tap=lambda e, idx=i: _on_dot_click(idx),
             )
         )
 
@@ -177,7 +195,7 @@ def OnboardingScreen() -> Control:
             expand=True,
             spacing=0,
             controls=[
-                # Top bar — Skip button
+                # Top bar — Skip button (hidden on last slide)
                 ft.Container(
                     padding=ft.Padding(
                         tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, 0
@@ -187,6 +205,7 @@ def OnboardingScreen() -> Control:
                         controls=[
                             ft.TextButton(
                                 "Skip",
+                                visible=not is_last,
                                 on_click=_on_skip,
                                 style=ft.ButtonStyle(
                                     color=ft.Colors.ON_SURFACE_VARIANT,
@@ -208,14 +227,14 @@ def OnboardingScreen() -> Control:
                         on_horizontal_drag_end=_on_swipe,
                     ),
                 ),
-                # Bottom — dots + CTA button pinned to bottom
+                # Bottom — dots + CTA button + disclaimer pinned to bottom
                 ft.Container(
                     padding=ft.Padding(
-                        tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_XXL
+                        tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_LG
                     ),
                     content=ft.Column(
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=tokens.SPACE_LG,
+                        spacing=tokens.SPACE_MD,
                         controls=[
                             # Dot indicators
                             ft.Row(
@@ -243,6 +262,16 @@ def OnboardingScreen() -> Control:
                                         radius=tokens.RADIUS_XL
                                     ),
                                 ),
+                            ),
+                            # Responsible OSINT use & privacy disclaimer
+                            ft.Text(
+                                "By continuing, you agree to responsible OSINT use in compliance with platform Terms of Service and privacy regulations (GDPR/CCPA).",
+                                size=tokens.FONT_XS - 1,
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
+                                ),
+                                text_align=ft.TextAlign.CENTER,
+                                max_lines=2,
                             ),
                         ],
                     ),

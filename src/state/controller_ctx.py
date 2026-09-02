@@ -42,7 +42,7 @@ class ControllerMethods:
     go_home, back, etc.) during its render.
     """
 
-    # AppController-populated (heavy, async)
+    # AppController-populated (heavy, async or cache)
     refresh_sites: Callable[[], Awaitable[None]] = _noop_async
     start_search: Callable[[str], Awaitable[None]] = _noop_search
     cancel_search: Callable[[], None] = _noop_sync
@@ -52,6 +52,7 @@ class ControllerMethods:
     check_for_updates: Callable[[], Awaitable[None]] = _noop_async
     open_update_dialog: Callable[[], None] = _noop_sync
     set_onboarding_done: Callable[[], Awaitable[None]] = _noop_async
+    open_cached_result: Callable[[str, str], bool] = lambda _q, _m: False
 
     # AppShell-populated (view-local, sync closures)
     show_results: Callable[[], None] = _noop_sync

@@ -388,27 +388,43 @@ def ResultsScreen() -> Control:
 
         def _make_username_card(r):
             return ResultCard(
-                site_name=r.site_name,
-                status=r.status,
-                url_user=r.url_user,
-                url_main=r.url_main,
-                query_time=r.query_time,
+                site_name=getattr(r, "site_name", "unknown"),
+                status=getattr(r, "status", "Claimed"),
+                url_user=getattr(r, "url_user", None),
+                url_main=getattr(r, "url_main", None),
+                query_time=getattr(r, "query_time", None),
                 on_open=lambda url: _open_url(url),
                 on_tap=lambda item=r: _show_username_details(item),
-                enrichment=state.enrichments.get(r.url_user or r.url_main or "", None)
+                enrichment=state.enrichments.get(
+                    getattr(r, "url_user", None) or getattr(r, "url_main", None) or "",
+                    None,
+                )
                 if state.enrichments
                 else None,
-                tags=getattr(r, "tags", []),
+                tags=tuple(getattr(r, "tags", None) or ()),
             )
 
-        # _resolve_username_view_data guarantees these are always
-        # username-scan shaped — a stale EmailSearchProgress (left in
-        # state.search_progress after an email search, before the first
-        # username tick lands) used to raise AttributeError mid-render,
-        # killing Flet's updates scheduler and freezing the whole UI.
-        found_items = _filter_by_name(username_view.found, lambda r: r.site_name)
-        notfound_items = _filter_by_name(username_view.not_found, lambda r: r.site_name)
-        error_items = _filter_by_name(username_view.errors, lambda r: r.site_name)
+        def _username_filter_key(r):
+            parts = [
+                getattr(r, "site_name", "") or "",
+                getattr(r, "url_user", "") or "",
+                getattr(r, "url_main", "") or "",
+            ]
+            t_list = getattr(r, "tags", None)
+            if t_list:
+                parts.extend(t_list)
+            u_key = getattr(r, "url_user", None) or getattr(r, "url_main", None) or ""
+            enrich = state.enrichments.get(u_key) if state.enrichments else None
+            if enrich and isinstance(enrich, dict):
+                if enrich.get("name"):
+                    parts.append(str(enrich["name"]))
+                if enrich.get("fullname"):
+                    parts.append(str(enrich["fullname"]))
+            return " ".join(parts)
+
+        found_items = _filter_by_name(username_view.found, _username_filter_key)
+        notfound_items = _filter_by_name(username_view.not_found, _username_filter_key)
+        error_items = _filter_by_name(username_view.errors, _username_filter_key)
         total = username_view.total
         checked = username_view.checked
 
@@ -476,13 +492,13 @@ def ResultsScreen() -> Control:
         )
         stats_row = ft.Row(
             controls=[
-                StatCard("Found", str(len(found_items)), AppColors.SUCCESS),
+                StatCard("Found", str(len(username_view.found)), AppColors.SUCCESS),
                 StatCard(
                     "Not Found",
-                    str(len(notfound_items)),
+                    str(len(username_view.not_found)),
                     ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
                 ),
-                StatCard("Errors", str(len(error_items)), AppColors.WARNING),
+                StatCard("Errors", str(len(username_view.errors)), AppColors.WARNING),
                 StatCard("Total", str(total), ft.Colors.PRIMARY),
             ],
             spacing=tokens.SPACE_SM,
@@ -551,9 +567,9 @@ def ResultsScreen() -> Control:
             padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, 0),
         )
     filter_hint = (
-        "Filter results by platform name..."
+        "Filter by platform, domain, or recovery hint..."
         if is_email_mode
-        else "Filter results by site name..."
+        else "Filter by network, domain, tag, or name..."
     )
     filter_box = ft.Container(
         content=ft.TextField(
@@ -582,11 +598,12 @@ def ResultsScreen() -> Control:
     )
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
+        progress_val = (checked / max(total, 1)) if total > 0 else None
         progress_section = ft.Container(
             content=ft.Column(
                 controls=[
                     ft.ProgressBar(
-                        value=None,
+                        value=progress_val,
                         color=ft.Colors.PRIMARY,
                         bgcolor=ft.Colors.with_opacity(
                             tokens.OPACITY_LIGHT, ft.Colors.PRIMARY

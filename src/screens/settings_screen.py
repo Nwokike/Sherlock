@@ -450,9 +450,9 @@ def SettingsScreen() -> Control:
                         ft.Segment(value="1000", label=ft.Text("Top 1k", size=10)),
                         ft.Segment(value="500", label=ft.Text("Top 500", size=10)),
                     ],
-                    selected={state.scan_depth or "all"},
+                    selected=[state.scan_depth or "all"],
                     on_change=lambda e: _on_scan_depth_change(
-                        list(e.control.selected)[0]
+                        e.control.selected[0] if e.control.selected else "all"
                     ),
                     show_selected_icon=False,
                 ),

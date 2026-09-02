@@ -1,6 +1,6 @@
 {
-  "build_number": 9,
-  "version": "2.0.0",
+  "build_number": 10,
+  "version": "2.0.1",
   "type": "update",
   "title": "Sherlock 2.0 is here!",
   "release_notes": "• Dual-Mode OSINT: Username & Email search\n• 120+ platforms email check via holehe\n• Profile enrichment (bio, location, followers)\n• Redesigned results with recovery hints\n• Privacy-first: 100% on-device OSINT",

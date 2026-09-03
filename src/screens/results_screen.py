@@ -111,15 +111,13 @@ def _build_result_list(
     empty_msg: str,
     build_card,
     debounced_filter: str = "",
-    live_cap: int = 0,
 ) -> Control:
     """Shared list builder with virtualization for large result sets.
 
-    `live_cap` bounds how many cards get BUILT while a scan is running:
-    every card is ~12-15 controls, and Flet re-renders + re-diffs this
-    whole list on each ~2Hz progress tick, so an uncapped list of hundreds
-    of cards saturated the main loop (the scan freeze). The overflow is
-    shown as a footer; the full list renders when the scan completes.
+    Always renders the FULL result set — no capping, no "+N more" footers.
+    Performance is handled by ListView virtualization (build_controls_on_demand,
+    only visible cards are materialized) and the worker-thread engine isolation;
+    hiding a user's results was never an acceptable trade-off.
     """
     if not items:
         from components.empty_state import EmptyState
@@ -131,36 +129,10 @@ def _build_result_list(
             else empty_msg,
             icon=ft.Icons.SEARCH_OFF_ROUNDED,
         )
-    shown = items
-    footer = None
-    if live_cap and len(items) > live_cap:
-        shown = items[:live_cap]
-        msg = (
-            f"+ {len(items) - live_cap} more matches"
-            if debounced_filter
-            else (
-                f"+ {len(items) - live_cap} more — scan in progress"
-                if "scan in progress" in str(empty_msg)
-                else f"+ {len(items) - live_cap} more — filter with search above"
-            )
-        )
-        footer = ft.Container(
-            content=ft.Text(
-                msg,
-                size=12,
-                italic=True,
-                color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE),
-                text_align=ft.TextAlign.CENTER,
-            ),
-            padding=ft.Padding(0, 10, 0, 14),
-            alignment=ft.Alignment.CENTER,
-        )
-    shown_controls = [build_card(r) for r in shown]
-    if footer:
-        shown_controls.append(footer)
-    # Use ListView with build_controls_on_demand for virtualization on large lists (400+).
+    # ListView with build_controls_on_demand: cards materialize lazily as the
+    # user scrolls, so even 3,300 entries stay smooth.
     return ft.ListView(
-        controls=shown_controls,
+        controls=[build_card(r) for r in items],
         spacing=0,
         expand=True,
         build_controls_on_demand=True,
@@ -418,7 +390,6 @@ def ResultsScreen() -> Control:
                                 "No platforms matched this email address.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 150,
                             )
                             if tab_index == 0
                             else ft.Container(),
@@ -428,7 +399,6 @@ def ResultsScreen() -> Control:
                                 "Every platform confirmed this email is registered.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 100,
                             )
                             if tab_index == 1
                             else ft.Container(),
@@ -438,7 +408,6 @@ def ResultsScreen() -> Control:
                                 "All checks completed without rate limiting.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 100,
                             )
                             if tab_index == 2
                             else ft.Container(),
@@ -448,7 +417,6 @@ def ResultsScreen() -> Control:
                                 "Every platform check is currently supported.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 100,
                             )
                             if tab_index == 3
                             else ft.Container(),
@@ -571,7 +539,6 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 150,
                             )
                             if tab_index == 0
                             else ft.Container(),
@@ -583,7 +550,6 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 100,
                             )
                             if tab_index == 1
                             else ft.Container(),
@@ -595,7 +561,6 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 100,
                             )
                             if tab_index == 2
                             else ft.Container(),

@@ -535,7 +535,20 @@ class SherlockService:
 
         proxy = getattr(state, "proxy_url", "") or None
         max_conns = getattr(state, "max_connections", 50)
-        dns_res = getattr(state, "dns_resolver", "async")
+        dns_res = getattr(state, "dns_resolver", "threaded")
+        # On Android / mobile platforms, always use ThreadedResolver (getaddrinfo via OS netd).
+        # aiodns / c-ares requires /etc/resolv.conf which does not exist on Android,
+        # causing [Could not contact DNS servers] for all major platforms.
+        is_mobile = False
+        try:
+            from flet import context
+
+            if context.page and hasattr(context.page, "platform"):
+                is_mobile = context.page.platform.is_mobile()
+        except Exception:
+            pass
+        if is_mobile or not dns_res:
+            dns_res = "threaded"
         extract_info = getattr(state, "extract_info", True)
         retry_count = getattr(state, "retries", 0)
 

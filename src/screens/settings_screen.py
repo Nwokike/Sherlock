@@ -164,6 +164,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     # Narrow screens stack each setting's control under its description —
     # one-line rows squeeze subtitles and overflow SegmentedButtons.
     narrow = bool(page and getattr(page, "width", None) and page.width < 600)
+    is_mobile = bool(page and hasattr(page, "platform") and page.platform.is_mobile())
 
     async def _on_theme_change(val: str):
         if val == "system":
@@ -434,110 +435,118 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     )
 
     # Scan Parameters (Maigret Engine)
-    scan_card = _settings_card(
-        [
-            _setting_row(
-                ft.Icons.SAVED_SEARCH_ROUNDED,
-                "Recursive OSINT Search",
-                "Extract discovered usernames & IDs to automatically expand search",
-                ft.Switch(
-                    value=getattr(state, "recursive_search", False),
-                    on_change=lambda e: _toggle_recursive_search(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
+    scan_controls = [
+        _setting_row(
+            ft.Icons.SAVED_SEARCH_ROUNDED,
+            "Recursive OSINT Search",
+            "Extract discovered usernames & IDs to automatically expand search",
+            ft.Switch(
+                value=getattr(state, "recursive_search", False),
+                on_change=lambda e: _toggle_recursive_search(e.control.value),
+                active_color=ft.Colors.PRIMARY,
+            ),
+            stacked=narrow,
+        ),
+        ft.Divider(
+            height=1,
+            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+        ),
+        _setting_row(
+            ft.Icons.ACCOUNT_BOX_ROUNDED,
+            "Profile Data Extraction",
+            "Parse claimed profile HTML for names, bios, avatars, and locations",
+            ft.Switch(
+                value=getattr(state, "extract_info", True),
+                on_change=lambda e: _toggle_extract_info(e.control.value),
+                active_color=ft.Colors.PRIMARY,
+            ),
+            stacked=narrow,
+        ),
+        ft.Divider(
+            height=1,
+            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+        ),
+        _setting_row(
+            ft.Icons.SHIELD_ROUNDED,
+            "Include Disabled Sites",
+            "Scan unstable or broken networks (may increase false positives)",
+            ft.Switch(
+                value=state.ignore_exclusions,
+                on_change=lambda e: _toggle_exclusions(e.control.value),
+                active_color=ft.Colors.PRIMARY,
+            ),
+            stacked=narrow,
+        ),
+        ft.Divider(
+            height=1,
+            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+        ),
+        _setting_row(
+            ft.Icons.BLOCK_ROUNDED,
+            "Include Adult Sites",
+            "Include NSFW, dating, and adult networks in scans",
+            ft.Switch(
+                value=state.nsfw_enabled,
+                on_change=lambda e: _toggle_nsfw(e.control.value),
+                active_color=ft.Colors.PRIMARY,
+            ),
+            stacked=narrow,
+        ),
+        ft.Divider(
+            height=1,
+            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+        ),
+        _setting_row(
+            ft.Icons.REPLAY_ROUNDED,
+            "Request Retries",
+            "Number of retries when a network request drops or times out",
+            ft.SegmentedButton(
+                segments=[
+                    ft.Segment(value="0", label=ft.Text("0", size=10)),
+                    ft.Segment(value="1", label=ft.Text("1", size=10)),
+                    ft.Segment(value="2", label=ft.Text("2", size=10)),
+                    ft.Segment(value="3", label=ft.Text("3", size=10)),
+                ],
+                selected=[str(getattr(state, "retries", 0))],
+                on_change=lambda e: _on_retries_change(
+                    e.control.selected[0] if e.control.selected else "0"
                 ),
-                stacked=narrow,
+                show_selected_icon=False,
             ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.ACCOUNT_BOX_ROUNDED,
-                "Profile Data Extraction",
-                "Parse claimed profile HTML for names, bios, avatars, and locations",
-                ft.Switch(
-                    value=getattr(state, "extract_info", True),
-                    on_change=lambda e: _toggle_extract_info(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
-                ),
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.SHIELD_ROUNDED,
-                "Include Disabled Sites",
-                "Scan unstable or broken networks (may increase false positives)",
-                ft.Switch(
-                    value=state.ignore_exclusions,
-                    on_change=lambda e: _toggle_exclusions(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
-                ),
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.BLOCK_ROUNDED,
-                "Include Adult Sites",
-                "Include NSFW, dating, and adult networks in scans",
-                ft.Switch(
-                    value=state.nsfw_enabled,
-                    on_change=lambda e: _toggle_nsfw(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
-                ),
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.REPLAY_ROUNDED,
-                "Request Retries",
-                "Number of retries when a network request drops or times out",
-                ft.SegmentedButton(
-                    segments=[
-                        ft.Segment(value="0", label=ft.Text("0", size=10)),
-                        ft.Segment(value="1", label=ft.Text("1", size=10)),
-                        ft.Segment(value="2", label=ft.Text("2", size=10)),
-                        ft.Segment(value="3", label=ft.Text("3", size=10)),
-                    ],
-                    selected=[str(getattr(state, "retries", 0))],
-                    on_change=lambda e: _on_retries_change(
-                        e.control.selected[0] if e.control.selected else "0"
+            stacked=narrow,
+        ),
+    ]
+    if not is_mobile:
+        scan_controls.extend(
+            [
+                ft.Divider(
+                    height=1,
+                    color=ft.Colors.with_opacity(
+                        tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE
                     ),
-                    show_selected_icon=False,
                 ),
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.DNS_ROUNDED,
-                "DNS Resolver Mode",
-                "Async (c-ares) for speed · System (Threaded) for network compat",
-                ft.SegmentedButton(
-                    segments=[
-                        ft.Segment(value="async", label=ft.Text("Async", size=10)),
-                        ft.Segment(value="threaded", label=ft.Text("System", size=10)),
-                    ],
-                    selected=[getattr(state, "dns_resolver", "async")],
-                    on_change=lambda e: _on_dns_resolver_change(
-                        e.control.selected[0] if e.control.selected else "async"
+                _setting_row(
+                    ft.Icons.DNS_ROUNDED,
+                    "DNS Resolver Mode",
+                    "Async (c-ares) for speed · System (Threaded) for network compat",
+                    ft.SegmentedButton(
+                        segments=[
+                            ft.Segment(value="async", label=ft.Text("Async", size=10)),
+                            ft.Segment(
+                                value="threaded", label=ft.Text("System", size=10)
+                            ),
+                        ],
+                        selected=[getattr(state, "dns_resolver", "threaded")],
+                        on_change=lambda e: _on_dns_resolver_change(
+                            e.control.selected[0] if e.control.selected else "threaded"
+                        ),
+                        show_selected_icon=False,
                     ),
-                    show_selected_icon=False,
+                    stacked=narrow,
                 ),
-                stacked=narrow,
-            ),
-        ]
-    )
+            ]
+        )
+    scan_card = _settings_card(scan_controls)
 
     # Email Intelligence (Holehe + curl-cffi)
     email_card = _settings_card(

@@ -84,7 +84,7 @@ class AppState:
     extract_info: bool = True
     max_connections: int = 50
     retries: int = 0
-    dns_resolver: str = "async"
+    dns_resolver: str = "threaded"
     use_curl_cffi: bool = True
     safe_search: bool = False
 

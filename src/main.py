@@ -778,6 +778,14 @@ class AppController:
         """Cancel a running search (sync — called from UI)."""
         logger.info("CANCEL requested by user (username mode)")
         self._kill_all_activity("user-cancel[username]")
+        if state.search_progress:
+            state.search_progress.is_running = False
+            state.search_progress.is_cancelled = True
+        state.progress_version += 1
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     # --- Email Search -------------------------------------------------
 
@@ -956,6 +964,14 @@ class AppController:
         """Cancel a running email search (sync — called from UI)."""
         logger.info("CANCEL requested by user (email mode)")
         self._kill_all_activity("user-cancel[email]")
+        if state.search_progress:
+            state.search_progress.is_running = False
+            state.search_progress.is_cancelled = True
+        state.progress_version += 1
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     async def save_selected_sites(self, sites: list[str]) -> None:
         """Persist the network-selection scope and update observable state.

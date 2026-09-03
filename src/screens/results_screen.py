@@ -131,9 +131,18 @@ def _build_result_list(
     footer = None
     if live_cap and len(items) > live_cap:
         shown = items[:live_cap]
+        msg = (
+            f"+ {len(items) - live_cap} more matches"
+            if debounced_filter
+            else (
+                f"+ {len(items) - live_cap} more — scan in progress"
+                if "scan in progress" in str(empty_msg)
+                else f"+ {len(items) - live_cap} more — filter with search above"
+            )
+        )
         footer = ft.Container(
             content=ft.Text(
-                f"+ {len(items) - live_cap} more — scan in progress",
+                msg,
                 size=12,
                 italic=True,
                 color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE),
@@ -166,6 +175,7 @@ def ResultsScreen() -> Control:
 
     filter_query, set_filter_query = ft.use_state("")
     debounced_filter = use_debounce(filter_query, 250)
+    tab_index, set_tab_index = ft.use_state(0)
 
     active_progress = state.search_progress
     # Typed snapshot for username mode — never dereference the raw
@@ -357,8 +367,9 @@ def ResultsScreen() -> Control:
         email_unavailable_filtered.sort(key=lambda r: (r.get("name") or "").lower())
 
         tabs = ft.Tabs(
-            selected_index=0,
+            selected_index=tab_index,
             length=4,
+            on_change=lambda e: set_tab_index(e.control.selected_index),
             content=ft.Column(
                 [
                     ft.TabBar(
@@ -395,32 +406,40 @@ def ResultsScreen() -> Control:
                                 "No platforms matched this email address.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 0,
-                            ),
+                                live_cap=60 if is_running else 150,
+                            )
+                            if tab_index == 0
+                            else ft.Container(),
                             _build_result_list(
                                 email_not_found_filtered,
                                 "All found",
                                 "Every platform confirmed this email is registered.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 0,
-                            ),
+                                live_cap=60 if is_running else 100,
+                            )
+                            if tab_index == 1
+                            else ft.Container(),
                             _build_result_list(
                                 email_rate_limited_filtered,
                                 "No rate limits",
                                 "All checks completed without rate limiting.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 0,
-                            ),
+                                live_cap=60 if is_running else 100,
+                            )
+                            if tab_index == 2
+                            else ft.Container(),
                             _build_result_list(
                                 email_unavailable_filtered,
                                 "No unavailable platforms",
                                 "Every platform check is currently supported.",
                                 _make_email_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 0,
-                            ),
+                                live_cap=60 if is_running else 100,
+                            )
+                            if tab_index == 3
+                            else ft.Container(),
                         ],
                         expand=True,
                     ),
@@ -503,8 +522,9 @@ def ResultsScreen() -> Control:
         checked = username_view.checked
 
         tabs = ft.Tabs(
-            selected_index=0,
+            selected_index=tab_index,
             length=3,
+            on_change=lambda e: set_tab_index(e.control.selected_index),
             content=ft.Column(
                 [
                     ft.TabBar(
@@ -536,8 +556,10 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 0,
-                            ),
+                                live_cap=60 if is_running else 150,
+                            )
+                            if tab_index == 0
+                            else ft.Container(),
                             _build_result_list(
                                 notfound_items,
                                 "No matches" if debounced_filter else "No results yet",
@@ -546,8 +568,10 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 0,
-                            ),
+                                live_cap=60 if is_running else 100,
+                            )
+                            if tab_index == 1
+                            else ft.Container(),
                             _build_result_list(
                                 error_items,
                                 "No matches" if debounced_filter else "No results yet",
@@ -556,8 +580,10 @@ def ResultsScreen() -> Control:
                                 else "Results will appear as the scan progresses.",
                                 _make_username_card,
                                 debounced_filter,
-                                live_cap=60 if is_running else 0,
-                            ),
+                                live_cap=60 if is_running else 100,
+                            )
+                            if tab_index == 2
+                            else ft.Container(),
                         ],
                         expand=True,
                     ),

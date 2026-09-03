@@ -432,6 +432,10 @@ def _username_dossier(
         avatar_url and isinstance(avatar_url, str) and avatar_url.startswith("http")
     )
 
+    is_claimed = status == "Claimed"
+    is_available = status in ("Available", "Illegal")
+    is_error = not is_claimed and not is_available
+
     if has_valid_avatar:
         from services.cache_service import (
             ensure_cached_avatar,
@@ -461,16 +465,20 @@ def _username_dossier(
     else:
         status_color = (
             AppColors.SUCCESS
-            if status == "Claimed"
+            if is_claimed
             else AppColors.WARNING
-            if status in ("WAF", "Error")
+            if is_error
             else ft.Colors.ON_SURFACE_VARIANT
         )
         avatar_control = ft.Container(
             content=ft.Icon(
                 ft.Icons.CHECK_CIRCLE_ROUNDED
-                if status == "Claimed"
-                else ft.Icons.LANGUAGE_ROUNDED,
+                if is_claimed
+                else (
+                    ft.Icons.INFO_OUTLINE_ROUNDED
+                    if is_available
+                    else ft.Icons.LANGUAGE_ROUNDED
+                ),
                 size=28,
                 color=status_color,
             ),
@@ -483,16 +491,16 @@ def _username_dossier(
 
     chip_color = (
         AppColors.SUCCESS
-        if status == "Claimed"
+        if is_claimed
         else AppColors.WARNING
-        if status in ("WAF", "Error")
+        if is_error
         else ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)
     )
     chip_bg = (
         ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.SUCCESS)
-        if status == "Claimed"
+        if is_claimed
         else ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.WARNING)
-        if status in ("WAF", "Error")
+        if is_error
         else ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE)
     )
 
@@ -756,10 +764,32 @@ def _username_dossier(
     def _dismiss(e):
         page.pop_dialog()
 
+    dialog_title = (
+        "Confirmed Profile Dossier"
+        if is_claimed
+        else ("Target Unregistered" if is_available else "Inspection Inconclusive")
+    )
+
+    empty_fallback_text = (
+        "Profile confirmed on platform. Tap Open Profile to view."
+        if is_claimed
+        else (
+            "Username is available or not registered on this platform."
+            if is_available
+            else "Verification was blocked by anti-bot challenge (Cloudflare/Captcha) or network error."
+        )
+    )
+
+    action_button_text = "Open Profile" if is_claimed else "Visit Website"
+    action_button_icon = (
+        ft.Icons.OPEN_IN_BROWSER_ROUNDED if is_claimed else ft.Icons.LANGUAGE_ROUNDED
+    )
+    copy_button_text = "Copy Profile Link" if is_claimed else "Copy Website Link"
+
     dlg = ft.AlertDialog(
         modal=False,
         title=ft.Text(
-            "User Social Profile Dossier",
+            dialog_title,
             size=tokens.FONT_MD,
             weight=ft.FontWeight.BOLD,
             font_family="Outfit",
@@ -777,11 +807,31 @@ def _username_dossier(
                         controls=items
                         if items
                         else [
-                            ft.Text(
-                                "Profile found. Tap Open Profile to view on platform.",
-                                size=tokens.FONT_SM,
-                                color=ft.Colors.ON_SURFACE_VARIANT,
-                                italic=True,
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED
+                                            if is_claimed
+                                            else (
+                                                ft.Icons.INFO_OUTLINE_ROUNDED
+                                                if is_available
+                                                else ft.Icons.WARNING_AMBER_ROUNDED
+                                            ),
+                                            size=16,
+                                            color=status_color,
+                                        ),
+                                        ft.Text(
+                                            empty_fallback_text,
+                                            size=tokens.FONT_SM,
+                                            color=ft.Colors.ON_SURFACE_VARIANT,
+                                            italic=True,
+                                            expand=True,
+                                        ),
+                                    ],
+                                    spacing=tokens.SPACE_SM,
+                                ),
+                                padding=tokens.SPACE_SM,
                             )
                         ],
                         spacing=tokens.SPACE_XS,
@@ -797,17 +847,19 @@ def _username_dossier(
         ),
         actions=[
             ft.TextButton(
-                "Copy Profile Link",
+                copy_button_text,
                 icon=ft.Icons.LINK_ROUNDED,
                 on_click=lambda e: asyncio.create_task(
-                    _copy_text(page, profile_url, "Profile link")
+                    _copy_text(page, profile_url, "Platform link")
                 ),
             ),
             ft.FilledButton(
                 content=ft.Text(
-                    "Open Profile", weight=ft.FontWeight.W_600, color=ft.Colors.WHITE
+                    action_button_text,
+                    weight=ft.FontWeight.W_600,
+                    color=ft.Colors.WHITE,
                 ),
-                icon=ft.Icons.OPEN_IN_BROWSER_ROUNDED,
+                icon=action_button_icon,
                 on_click=lambda e: asyncio.create_task(_launch_profile_url()),
             ),
             ft.TextButton("Close", on_click=_dismiss),

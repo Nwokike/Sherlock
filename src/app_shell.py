@@ -84,6 +84,9 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
             async def _share():
                 from core.state import state as app_state
+                from flet import context
+
+                page = context.page
 
                 if not (app_state.search_progress and app_state.search_progress.found):
                     return
@@ -92,8 +95,12 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 ]
                 if not urls:
                     return
+                share_text_content = "\n".join(urls[:20])
                 try:
-                    await ft.Share().share("\n".join(urls[:20]))
+                    share_service = ft.Share()
+                    if page:
+                        page.services.append(share_service)
+                    await share_service.share_text(share_text_content)
                 except Exception as ex:
                     logger.warning("Share failed: %s", ex)
 
@@ -520,93 +527,104 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             if not app_state.search_progress:
                 return
             sheet = ft.BottomSheet(
-                content=ft.Column(
-                    [
-                        ft.ListTile(
-                            title=ft.Text(
-                                "Identity Network Analysis",
-                                weight=ft.FontWeight.W_600,
-                            ),
-                            subtitle=ft.Text("Graph clustering & hub analytics"),
-                            leading=ft.Icon(
-                                ft.Icons.ACCOUNT_TREE_ROUNDED, color=AppColors.PRIMARY
-                            ),
-                            on_click=lambda e: (
-                                page.pop_dialog(),
-                                _show_graph_analysis_dialog(
-                                    app_state.search_progress, app_state
+                content=ft.Container(
+                    content=ft.ListView(
+                        controls=[
+                            ft.ListTile(
+                                title=ft.Text(
+                                    "Identity Network Analysis",
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                subtitle=ft.Text("Graph clustering & hub analytics"),
+                                leading=ft.Icon(
+                                    ft.Icons.ACCOUNT_TREE_ROUNDED,
+                                    color=AppColors.PRIMARY,
+                                ),
+                                on_click=lambda e: (
+                                    page.pop_dialog(),
+                                    _show_graph_analysis_dialog(
+                                        app_state.search_progress, app_state
+                                    ),
                                 ),
                             ),
-                        ),
-                        ft.ListTile(
-                            title=ft.Text(
-                                "PDF Intelligence Dossier (.pdf)",
-                                weight=ft.FontWeight.W_600,
+                            ft.ListTile(
+                                title=ft.Text(
+                                    "PDF Intelligence Dossier (.pdf)",
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                subtitle=ft.Text("Gold-branded printable report"),
+                                leading=ft.Icon(
+                                    ft.Icons.PICTURE_AS_PDF_ROUNDED,
+                                    color=AppColors.PRIMARY,
+                                ),
+                                on_click=lambda e: (
+                                    page.pop_dialog(),
+                                    _on_export_click("pdf"),
+                                ),
                             ),
-                            subtitle=ft.Text("Gold-branded printable report"),
-                            leading=ft.Icon(
-                                ft.Icons.PICTURE_AS_PDF_ROUNDED, color=AppColors.PRIMARY
+                            ft.ListTile(
+                                title=ft.Text(
+                                    "XMind Mind Map (.xmind)",
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                subtitle=ft.Text("Visual intelligence case file"),
+                                leading=ft.Icon(
+                                    ft.Icons.HUB_ROUNDED, color=AppColors.PRIMARY
+                                ),
+                                on_click=lambda e: (
+                                    page.pop_dialog(),
+                                    _on_export_click("xmind"),
+                                ),
                             ),
-                            on_click=lambda e: (
-                                page.pop_dialog(),
-                                _on_export_click("pdf"),
+                            ft.ListTile(
+                                title=ft.Text(
+                                    "CSV Spreadsheet (.csv)", weight=ft.FontWeight.W_600
+                                ),
+                                subtitle=ft.Text("Spreadsheet compatible data"),
+                                leading=ft.Icon(
+                                    ft.Icons.TABLE_CHART_ROUNDED,
+                                    color=AppColors.PRIMARY,
+                                ),
+                                on_click=lambda e: (
+                                    page.pop_dialog(),
+                                    _on_export_click("csv"),
+                                ),
                             ),
-                        ),
-                        ft.ListTile(
-                            title=ft.Text(
-                                "XMind Mind Map (.xmind)", weight=ft.FontWeight.W_600
+                            ft.ListTile(
+                                title=ft.Text(
+                                    "JSON Data (.json)", weight=ft.FontWeight.W_600
+                                ),
+                                subtitle=ft.Text("Structured JSON export"),
+                                leading=ft.Icon(
+                                    ft.Icons.DATA_OBJECT_ROUNDED,
+                                    color=AppColors.PRIMARY,
+                                ),
+                                on_click=lambda e: (
+                                    page.pop_dialog(),
+                                    _on_export_click("json"),
+                                ),
                             ),
-                            subtitle=ft.Text("Visual intelligence case file"),
-                            leading=ft.Icon(
-                                ft.Icons.HUB_ROUNDED, color=AppColors.PRIMARY
+                            ft.ListTile(
+                                title=ft.Text(
+                                    "Plain Text List (.txt)", weight=ft.FontWeight.W_600
+                                ),
+                                subtitle=ft.Text("Discovered URLs only"),
+                                leading=ft.Icon(
+                                    ft.Icons.ARTICLE_ROUNDED, color=AppColors.PRIMARY
+                                ),
+                                on_click=lambda e: (
+                                    page.pop_dialog(),
+                                    _on_export_click("txt"),
+                                ),
                             ),
-                            on_click=lambda e: (
-                                page.pop_dialog(),
-                                _on_export_click("xmind"),
-                            ),
-                        ),
-                        ft.ListTile(
-                            title=ft.Text(
-                                "CSV Spreadsheet (.csv)", weight=ft.FontWeight.W_600
-                            ),
-                            subtitle=ft.Text("Spreadsheet compatible data"),
-                            leading=ft.Icon(
-                                ft.Icons.TABLE_CHART_ROUNDED, color=AppColors.PRIMARY
-                            ),
-                            on_click=lambda e: (
-                                page.pop_dialog(),
-                                _on_export_click("csv"),
-                            ),
-                        ),
-                        ft.ListTile(
-                            title=ft.Text(
-                                "JSON Data (.json)", weight=ft.FontWeight.W_600
-                            ),
-                            subtitle=ft.Text("Structured JSON export"),
-                            leading=ft.Icon(
-                                ft.Icons.DATA_OBJECT_ROUNDED, color=AppColors.PRIMARY
-                            ),
-                            on_click=lambda e: (
-                                page.pop_dialog(),
-                                _on_export_click("json"),
-                            ),
-                        ),
-                        ft.ListTile(
-                            title=ft.Text(
-                                "Plain Text List (.txt)", weight=ft.FontWeight.W_600
-                            ),
-                            subtitle=ft.Text("Discovered URLs only"),
-                            leading=ft.Icon(
-                                ft.Icons.ARTICLE_ROUNDED, color=AppColors.PRIMARY
-                            ),
-                            on_click=lambda e: (
-                                page.pop_dialog(),
-                                _on_export_click("txt"),
-                            ),
-                        ),
-                    ],
-                    tight=True,
+                        ],
+                        spacing=0,
+                        padding=ft.Padding(0, 0, 0, tokens.SPACE_MD),
+                    ),
+                    padding=ft.Padding(0, tokens.SPACE_XS, 0, tokens.SPACE_MD),
+                    height=360,
                 ),
+                scrollable=True,
                 show_drag_handle=True,
             )
             page.show_dialog(sheet)

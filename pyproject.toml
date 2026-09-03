@@ -61,5 +61,6 @@ dev = [
     "ruff>=0.15.14",
 ]
 
-[ruff]
-lint.extend-ignore = ["BLE001", "S110"]
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]

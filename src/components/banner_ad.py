@@ -5,11 +5,12 @@ the exact same ad. Production unit ID lives in core/constants.py
 (AD_BANNER_UNIT_ID).
 
 Revenue-critical sizing: the ad is pinned in an explicit 320x50 box (the
-native AdView reports AdSize.banner). Centering comes from the
-CrossAxisAlignment.CENTER column — NEVER from ``alignment`` on a wide
+native AdView reports AdSize.banner), centered via a tight
+CrossAxisAlignment.CENTER column — NEVER via ``alignment`` on a wide
 Container, which can expand to fill the parent's offered space instead of
 shrink-wrapping (the full-page banner regression). This matches how the
-other Kiri apps (spaninsight) wrap their working banners.
+other Kiri apps (spaninsight) wrap their working banners. No SPONSORED
+label by design (removed intentionally 2026-09-03).
 
 The mounted-but-unfilled AdView renders as an empty box ("#" placeholder on
 some devices): if this banner ever appears empty on mobile, open Settings →
@@ -74,13 +75,6 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
     return ft.Container(
         content=ft.Column(
             [
-                ft.Text(
-                    "SPONSORED",
-                    size=tokens.FONT_XS,
-                    weight=ft.FontWeight.W_700,
-                    color=ft.Colors.ON_SURFACE_VARIANT,
-                    style=ft.TextStyle(letter_spacing=1),
-                ),
                 ft.Container(content=ad, width=320, height=50),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,

@@ -819,17 +819,29 @@ def AppShell() -> Control:
     else:
         active_banner = None
         if state.is_searching and state.current_username:
+            from core.constants import MODE_EMAIL, MODE_USERNAME
+
             prog = state.search_progress
             checked = getattr(prog, "checked_sites", 0) or getattr(
                 prog, "checked_modules", 0
             )
             total = getattr(prog, "total_sites", 0) or getattr(prog, "total_modules", 0)
+            active_scan_mode = (
+                MODE_EMAIL
+                if (prog and hasattr(prog, "checked_modules"))
+                else MODE_USERNAME
+            )
+
+            def _view_active_scan(mode=active_scan_mode):
+                state.search_mode = mode
+                controller.show_results()
+
             active_banner = ActiveScanBanner(
                 target_query=state.current_username,
-                search_mode=state.search_mode,
+                search_mode=active_scan_mode,
                 checked=checked,
                 total=total,
-                on_tap=controller.show_results,
+                on_tap=_view_active_scan,
             )
 
         if active_tab == 0:

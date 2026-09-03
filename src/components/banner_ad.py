@@ -51,11 +51,26 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
     try:
         import flet_ads as fta
 
+        req = fta.AdRequest(
+            keywords=[
+                "osint",
+                "security",
+                "search",
+                "technology",
+                "investigation",
+                "software",
+                "tools",
+            ]
+        )
         ad = fta.BannerAd(
             unit_id=_UNIT_ID,
             width=320,
             height=50,
-            on_error=lambda e: None,
+            request=req,
+            on_load=lambda e: logger.info("BannerAd loaded successfully!"),
+            on_error=lambda e: logger.warning(
+                "BannerAd load error: %s", getattr(e, "data", e)
+            ),
         )
     except Exception as e:
         logger.warning("Failed to load BannerAd: %s", e)

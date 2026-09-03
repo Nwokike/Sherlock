@@ -818,6 +818,45 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         ]
     )
 
+    # Personalized Ads & Consent (mobile only — ad_service)
+    privacy_card = ft.Container(width=0, height=0)
+    if is_mobile:
+
+        def _open_privacy_options(e):
+            async def _do_open():
+                from flet import context
+
+                page = context.page
+                if not page:
+                    return
+                ad_svc = getattr(page, "_ad_service", None)
+                if ad_svc:
+                    await ad_svc.show_privacy_options()
+                else:
+                    show_snack(
+                        page,
+                        "Ad consent is managed automatically by your region.",
+                        bgcolor=AppColors.PRIMARY,
+                    )
+
+            asyncio.create_task(_do_open())
+
+        privacy_card = _settings_card(
+            [
+                _setting_row(
+                    ft.Icons.PRIVACY_TIP_ROUNDED,
+                    "Personalized Ads & Consent",
+                    "Manage ad preferences and GDPR consent settings",
+                    ft.FilledTonalButton(
+                        "Manage",
+                        icon=ft.Icons.TUNE_ROUNDED,
+                        on_click=_open_privacy_options,
+                    ),
+                    stacked=narrow,
+                ),
+            ]
+        )
+
     # About & Updates
     def _open_version_dialog(e=None):
         from components.update_dialog import show_update_dialog
@@ -1105,6 +1144,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             build_banner_ad(),
             SectionHeader("TROUBLESHOOTING & LOGS"),
             logs_card,
+            SectionHeader("PRIVACY"),
+            privacy_card,
             SectionHeader("ABOUT"),
             about_card,
             ft.Container(height=tokens.SPACE_XXXL),

@@ -118,18 +118,43 @@ class AdService:
             return ft.Container(width=0, height=0)
 
     async def preload_interstitial(self, on_close: Callable | None = None):
-        """Pre-load an interstitial ad for later display."""
+        """Pre-load an interstitial ad for later display.
+
+        Registers InterstitialAd with page.services so Flutter's native
+        AdMob layer attaches and starts loading immediately.
+        """
         self._on_close = on_close
         if not _HAS_ADS or not self._is_mobile() or not self._can_request_ads:
             return
         try:
+            req = fta.AdRequest(
+                keywords=[
+                    "osint",
+                    "investigation",
+                    "search",
+                    "security",
+                    "technology",
+                    "privacy",
+                    "developer",
+                    "software",
+                ]
+            )
             self.interstitial = fta.InterstitialAd(
                 unit_id=self.interstitial_id,
-                on_load=lambda e: None,
-                on_error=lambda e: None,
+                request=req,
+                on_load=lambda e: logger.info("InterstitialAd loaded successfully!"),
+                on_error=lambda e: logger.warning(
+                    "InterstitialAd load error: %s", getattr(e, "data", e)
+                ),
                 on_close=self._handle_close,
             )
-        except Exception:
+            if (
+                hasattr(self.page, "services")
+                and self.interstitial not in self.page.services
+            ):
+                self.page.services.append(self.interstitial)
+        except Exception as exc:
+            logger.warning("Failed to construct InterstitialAd: %s", exc)
             self.interstitial = None
 
     async def _handle_close(self, e):
@@ -142,13 +167,35 @@ class AdService:
             await self.preload_interstitial(on_close=self._on_close)
 
     async def show_interstitial(self) -> bool:
-        """Show a preloaded interstitial — on every search (original behavior)."""
+        """Show a preloaded interstitial — on every search for maximum revenue.
+
+        Per Flet docs, an InterstitialAd instance is single-use. We immediately
+        preload a fresh replacement in the background so the next search has an
+        ad ready.
+        """
         if self.interstitial and self._can_request_ads:
             try:
-                await self.interstitial.show()
+                ad_to_show = self.interstitial
+                # Detach reference and immediately queue the next ad preload
+                self.interstitial = None
+                if not self._is_shutting_down:
+                    asyncio.create_task(
+                        self.preload_interstitial(on_close=self._on_close)
+                    )
+                await ad_to_show.show()
                 return True
-            except Exception:
+            except Exception as e:
+                logger.warning("Interstitial show failed: %s", e)
+                self.interstitial = None
+                if not self._is_shutting_down:
+                    asyncio.create_task(
+                        self.preload_interstitial(on_close=self._on_close)
+                    )
                 return False
+
+        # If no interstitial was ready, trigger a background preload now
+        if not self.interstitial and not self._is_shutting_down:
+            asyncio.create_task(self.preload_interstitial(on_close=self._on_close))
         return False
 
     async def close(self):

@@ -171,12 +171,6 @@ def ResultsScreen() -> Control:
     # Force re-render on each progress_version bump
     _ = state.progress_version
 
-    is_email_mode = state.search_mode == MODE_EMAIL
-
-    filter_query, set_filter_query = ft.use_state("")
-    debounced_filter = use_debounce(filter_query, 250)
-    tab_index, set_tab_index = ft.use_state(0)
-
     active_progress = state.search_progress
     # Typed snapshot for username mode — never dereference the raw
     # progress object for username rendering (see _resolve_username_view_data).
@@ -186,6 +180,18 @@ def ResultsScreen() -> Control:
         if (active_progress is not None and hasattr(active_progress, "is_running"))
         else False
     )
+
+    # When a scan is actively running, derive the display mode from the
+    # progress object itself — not from state.search_mode, which the user
+    # can flip via the Home screen chips without affecting the running scan.
+    if is_running and active_progress is not None:
+        is_email_mode = hasattr(active_progress, "checked_modules")
+    else:
+        is_email_mode = state.search_mode == MODE_EMAIL
+
+    filter_query, set_filter_query = ft.use_state("")
+    debounced_filter = use_debounce(filter_query, 250)
+    tab_index, set_tab_index = ft.use_state(0)
 
     def _open_url(url: str):
         async def _launch():

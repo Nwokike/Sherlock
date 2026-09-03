@@ -350,6 +350,12 @@ def ResultsScreen() -> Control:
             raw_unavailable, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
         )
 
+        # Predictable alphabetical ordering (A-Z by platform name) across all tabs
+        email_found_filtered.sort(key=lambda r: (r.get("name") or "").lower())
+        email_not_found_filtered.sort(key=lambda r: (r.get("name") or "").lower())
+        email_rate_limited_filtered.sort(key=lambda r: (r.get("name") or "").lower())
+        email_unavailable_filtered.sort(key=lambda r: (r.get("name") or "").lower())
+
         tabs = ft.Tabs(
             selected_index=0,
             length=4,
@@ -488,6 +494,11 @@ def ResultsScreen() -> Control:
         found_items = _filter_by_name(username_view.found, _username_filter_key)
         notfound_items = _filter_by_name(username_view.not_found, _username_filter_key)
         error_items = _filter_by_name(username_view.errors, _username_filter_key)
+
+        # Predictable alphabetical ordering (A-Z by site name) across all tabs
+        found_items.sort(key=lambda r: (getattr(r, "site_name", "") or "").lower())
+        notfound_items.sort(key=lambda r: (getattr(r, "site_name", "") or "").lower())
+        error_items.sort(key=lambda r: (getattr(r, "site_name", "") or "").lower())
         total = username_view.total
         checked = username_view.checked
 

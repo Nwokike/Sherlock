@@ -45,7 +45,7 @@ ICON_XL = 34
 ICON_FEATURE = 56  # onboarding / empty-state hero icons
 ICON_EMPTY = 48  # empty-state icon inside circle backdrop
 RESULT_ICON = 20  # result card status icon
-STAT_NUMBER = 28  # stat card large number
+STAT_NUMBER = 18  # stat card large number
 
 # ─── ANIMATION DURATIONS (ms) ───────────────────────────────────────────────
 ANIM_FAST = 120

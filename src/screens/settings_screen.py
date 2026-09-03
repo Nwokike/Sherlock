@@ -206,7 +206,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                         color=AppColors.PRIMARY
                         if is_sel
                         else ft.Colors.ON_SURFACE_VARIANT,
-                        size=tokens.ICON_SM + 2,
+                        size=tokens.ICON_SM,
                     ),
                     ft.Text(
                         label,
@@ -219,22 +219,23 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=6,
             ),
-            padding=ft.Padding(10, 10, 10, 10),
-            border_radius=tokens.RADIUS_MD,
-            border=(
-                ft.Border.all(2, AppColors.PRIMARY)
+            padding=ft.Padding(8, 8, 8, 8),
+            border_radius=tokens.RADIUS_SM,
+            border=ft.Border.all(
+                1.5 if is_sel else 1,
+                AppColors.PRIMARY
                 if is_sel
-                else ft.Border.all(1, ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE))
+                else ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
             ),
             bgcolor=(
-                ft.Colors.with_opacity(0.1, AppColors.PRIMARY)
+                ft.Colors.with_opacity(0.10, AppColors.PRIMARY)
                 if is_sel
-                else ft.Colors.SURFACE_CONTAINER_HIGHEST
+                else ft.Colors.TRANSPARENT
             ),
             expand=True,
             ink=True,
             on_click=lambda e, m=mode: asyncio.create_task(_on_theme_change(m)),
-            animate=ft.Animation(150, "easeOut"),
+            animate=ft.Animation(tokens.ANIM_FAST, "easeOut"),
         )
 
     def _toggle_nsfw(val: bool):

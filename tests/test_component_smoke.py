@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(
     0,
     os.path.join(
-        os.path.dirname(__file__), "..", ".venv", "lib", "python3.13", "site-packages"
+        os.path.dirname(__file__), "..", ".venv", "lib", "python3.14", "site-packages"
     ),
 )
 

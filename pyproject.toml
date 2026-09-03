@@ -3,7 +3,7 @@ name = "sherlock"
 version = "2.1.0"
 description = "Sherlock: Hunt down social media accounts by username across 3,300+ networks."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "flet>=0.86.5",
     "flet-ads>=0.86.5",

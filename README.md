@@ -12,7 +12,7 @@
   <a href="https://github.com/Nwokike/Sherlock/releases/latest"><img src="https://img.shields.io/badge/Download_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" /></a>
   <a href="https://github.com/Nwokike/Sherlock/releases/latest"><img src="https://img.shields.io/badge/Download_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" /></a>
   <img src="https://img.shields.io/badge/Built%20with-Flet%200.86.5-00B0FF?style=for-the-badge&logo=flutter&logoColor=white" alt="Flet" />
-  <img src="https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/Python-3.14-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
 ---

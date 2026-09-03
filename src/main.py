@@ -530,8 +530,10 @@ class AppController:
 
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
-            with contextlib.suppress(Exception):
+            try:
                 await self.ad_service.show_interstitial()
+            except Exception as exc:
+                logger.warning("Interstitial show failed: %s", exc)
 
         # Initialize streaming real-time enrichment queue & worker task
         self._enriched_seen.clear()
@@ -843,8 +845,10 @@ class AppController:
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:
-            with contextlib.suppress(Exception):
+            try:
                 await self.ad_service.show_interstitial()
+            except Exception as exc:
+                logger.warning("Interstitial show failed: %s", exc)
 
         try:
             result = await self.email_service.search(

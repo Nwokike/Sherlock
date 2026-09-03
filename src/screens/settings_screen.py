@@ -824,14 +824,45 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
         def _open_privacy_options(e):
             async def _do_open():
-                ad_svc = getattr(controller, "ad_service", None)
-                if ad_svc:
-                    await ad_svc.show_privacy_options()
-                else:
+                svc = getattr(controller, "ad_service", None)
+                if not svc:
+                    logger.warning("Privacy Manage: ad service unavailable")
                     show_snack(
                         page,
-                        "Ad consent is managed automatically by your region.",
+                        "Ad service unavailable in this session.",
+                        bgcolor=AppColors.ERROR,
+                    )
+                    return
+                try:
+                    outcome = await svc.show_privacy_options()
+                except Exception as exc:
+                    logger.warning("Privacy Manage: unexpected failure: %s", exc)
+                    show_snack(
+                        page,
+                        f"Could not open privacy options: {exc}",
+                        bgcolor=AppColors.ERROR,
+                    )
+                    return
+                if outcome == "form_shown":
+                    return  # the form itself is the feedback
+                if outcome == "not_required":
+                    show_snack(
+                        page,
+                        "Consent is not required in your region — ads already run.",
                         bgcolor=AppColors.PRIMARY,
+                    )
+                elif outcome == "no_manager":
+                    show_snack(
+                        page,
+                        "Consent service did not start — see Troubleshooting & Logs.",
+                        bgcolor=AppColors.ERROR,
+                    )
+                else:
+                    detail = outcome.split(":", 1)[1] if ":" in outcome else outcome
+                    show_snack(
+                        page,
+                        f"Could not open privacy options: {detail}",
+                        bgcolor=AppColors.ERROR,
                     )
 
             asyncio.create_task(_do_open())

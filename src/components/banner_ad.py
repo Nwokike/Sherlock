@@ -1,16 +1,21 @@
 """BannerAd — single canonical banner ad builder (mobile only).
 
-Plain helper so every screen (Home, Results, History, Settings, Sites)
-shows the exact same ad. Production unit ID lives in core/constants.py
-(AD_BANNER_UNIT_ID) — AdService reads the same constant's home, keeping
-one source of truth for the banner ID.
+One helper so every screen (Home, Results, History, Settings, Sites) shows
+the exact same ad. Production unit ID lives in core/constants.py
+(AD_BANNER_UNIT_ID).
 
-Revenue-critical sizing: the ad is pinned in an explicit 320x50 box and
-the glass wrapper carries NO alignment — Flet Containers with alignment
-non-None may expand to fill the parent's offered space instead of
-shrink-wrapping their content, which is exactly the full-page banner
-regression. flet_ads 0.86.5 has no dispose() API, so no lifecycle hooks
-here; Flet's renderer unmounts the native ad view with the tree.
+Revenue-critical sizing: the ad is pinned in an explicit 320x50 box (the
+native AdView reports AdSize.banner). Centering comes from the
+CrossAxisAlignment.CENTER column — NEVER from ``alignment`` on a wide
+Container, which can expand to fill the parent's offered space instead of
+shrink-wrapping (the full-page banner regression). This matches how the
+other Kiri apps (spaninsight) wrap their working banners.
+
+The mounted-but-unfilled AdView renders as an empty box ("#" placeholder on
+some devices): if this banner ever appears empty on mobile, open Settings →
+Troubleshooting & Logs — the on_error handler writes the exact AdMob failure
+code there. flet_ads has no dispose() API; Flet's renderer unmounts the
+native ad view with the tree.
 """
 
 import logging
@@ -53,23 +58,11 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
     try:
         import flet_ads as fta
 
-        req = fta.AdRequest(
-            keywords=[
-                "osint",
-                "security",
-                "search",
-                "technology",
-                "investigation",
-                "software",
-                "tools",
-            ]
-        )
         ad = fta.BannerAd(
             unit_id=AD_BANNER_UNIT_ID,
             width=320,
             height=50,
-            request=req,
-            on_load=lambda e: logger.info("BannerAd loaded successfully!"),
+            on_load=lambda e: logger.info("BannerAd loaded"),
             on_error=lambda e: logger.warning(
                 "BannerAd load error: %s", getattr(e, "data", e)
             ),
@@ -79,11 +72,21 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
         return ft.Container(width=0, height=0)
 
     return ft.Container(
-        content=ft.Container(content=ad, width=320, height=50),
-        # No alignment on the wrapper and an explicit 320x50 inner box mean
-        # the wrapper can only shrink-wrap the ad — Flet Containers with
-        # alignment non-None may expand to fill the parent's offer instead
-        # (the full-page banner regression).
+        content=ft.Column(
+            [
+                ft.Text(
+                    "SPONSORED",
+                    size=tokens.FONT_XS,
+                    weight=ft.FontWeight.W_700,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    style=ft.TextStyle(letter_spacing=1),
+                ),
+                ft.Container(content=ad, width=320, height=50),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=tokens.SPACE_XS,
+            tight=True,
+        ),
         padding=tokens.SPACE_SM,
         border_radius=tokens.RADIUS_LG,
         bgcolor=adaptive_glass_bg(page),

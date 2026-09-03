@@ -110,7 +110,7 @@
 - **Network & Proxy** — Maigret proxy support via Settings → Network & Proxy (`socks5://` / `http://`).
 - **Email Concurrency + Filters** — Slider 4–30, Found-Only toggle, method filter (`All` / `Register` / `Login` / `Recovery`).
 - **History** — `Dismissible` swipe-to-delete rows, `Banner` offline strip, `SearchBar` history typeahead, type-ahead `Chip` filters.
-- **Interstitial Ads** — Shown on every search with background preload rotation; requests carry high-value keyword targeting for premium fill. Mobile-only privacy options row in Settings (UMP).
+- **Interstitial Ads** — Shown on every search with background preload rotation. Mobile-only privacy options row in Settings (UMP).
 - **Custom Database Manifest** — Point the scanner at your own site-database JSON (via Settings) for specialized investigations.
 - **Markdown Release Notes** — `UpdateDialog` renders rich `Markdown(GITHUB_WEB)` changelogs with tappable links.
 - **Export BottomSheet** — Material 3 `BottomSheet` (drag handle, scrollable `ListTile` per format) replaces `AlertDialog`.

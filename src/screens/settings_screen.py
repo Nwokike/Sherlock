@@ -151,7 +151,7 @@ def _settings_card(controls: list[Control]) -> ft.Container:
 
 
 @ft.component
-def SettingsScreen() -> Control:
+def SettingsScreen(banner: Control | None = None) -> Control:
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
     from flet import context
@@ -1102,14 +1102,20 @@ def SettingsScreen() -> Control:
         expand=True,
     )
 
+    header_controls: list[Control] = [
+        AppHeader(
+            page,
+            title="Settings",
+            subtitle="Preferences & site database",
+            show_settings=False,
+        ),
+    ]
+    if banner:
+        header_controls.append(banner)
+
     return ft.Column(
         controls=[
-            AppHeader(
-                page,
-                title="Settings",
-                subtitle="Preferences & site database",
-                show_settings=False,
-            ),
+            *header_controls,
             content,
         ],
         expand=True,

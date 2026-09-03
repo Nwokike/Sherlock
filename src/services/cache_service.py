@@ -189,7 +189,7 @@ def save_compiled_db(source_path: str, db: Any) -> None:
 def avatar_cache_path(url: str) -> Path:
     """Deterministic on-device path for a remote avatar URL."""
     key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    return _cache_root() / "avatars" / f"{key}.img"
+    return _cache_root() / "avatars" / f"{key}.png"
 
 
 def ensure_cached_avatar(url: str) -> str:

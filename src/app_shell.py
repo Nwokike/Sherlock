@@ -31,20 +31,8 @@ def _should_show_onboarding(state) -> bool:
     return state.is_first_launch or not state.has_accepted_terms
 
 
-def _dashboard_scaffold(body: Control, banner: Control | None = None) -> Control:
-    """Build the dashboard body container with optional active scan banner."""
-    if banner:
-        return ft.Container(
-            content=ft.Column(
-                controls=[
-                    banner,
-                    ft.Container(content=body, expand=True),
-                ],
-                spacing=0,
-                expand=True,
-            ),
-            expand=True,
-        )
+def _dashboard_scaffold(body: Control) -> Control:
+    """Build the dashboard body container."""
     return ft.Container(content=body, expand=True)
 
 
@@ -811,13 +799,6 @@ def AppShell() -> Control:
     elif active_view == "sites":
         screen = SitesScreen()
     else:
-        if active_tab == 0:
-            tab_body = HomeScreen()
-        elif active_tab == 1:
-            tab_body = HistoryScreen()
-        else:
-            tab_body = SettingsScreen()
-
         active_banner = None
         if state.is_searching and state.current_username:
             prog = state.search_progress
@@ -833,6 +814,13 @@ def AppShell() -> Control:
                 on_tap=controller.show_results,
             )
 
-        screen = _dashboard_scaffold(body=tab_body, banner=active_banner)
+        if active_tab == 0:
+            tab_body = HomeScreen(banner=active_banner)
+        elif active_tab == 1:
+            tab_body = HistoryScreen(banner=active_banner)
+        else:
+            tab_body = SettingsScreen(banner=active_banner)
+
+        screen = _dashboard_scaffold(body=tab_body)
 
     return ft.SafeArea(content=screen, expand=True)

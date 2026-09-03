@@ -643,6 +643,22 @@ class AppController:
                         # observable write re-renders the whole tree.
                         self._pending_enrichments[url] = data
                         self._render_dirty = True
+
+                        # Warm the on-device avatar cache in the background once
+                        # per found profile (never on the render path).
+                        avatar_url = (
+                            data.get("image") or data.get("avatar") or data.get("photo")
+                        )
+                        if (
+                            avatar_url
+                            and isinstance(avatar_url, str)
+                            and avatar_url.startswith("http")
+                        ):
+                            from services.cache_service import (
+                                schedule_avatar_download,
+                            )
+
+                            asyncio.create_task(schedule_avatar_download(avatar_url))
                 except Exception as exc:
                     logger.warning("Streaming enrichment error for %s: %s", url, exc)
 

@@ -314,7 +314,7 @@ def _step_row(number: str, title: str, desc: str) -> ft.Row:
 
 
 @ft.component
-def HomeScreen() -> Control:
+def HomeScreen(banner: Control | None = None) -> Control:
     """Compact search-first home dashboard (DDGS style)."""
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
@@ -772,16 +772,22 @@ def HomeScreen() -> Control:
 
     # ── Assemble ──
 
+    header_controls: list[Control] = [
+        # Compact header
+        AppHeader(
+            _get_page(),
+            title=APP_NAME,
+            on_settings=lambda e: (
+                controller.show_settings() if controller.show_settings else None
+            ),
+        ),
+    ]
+    if banner:
+        header_controls.append(banner)
+
     content = ft.Column(
         controls=[
-            # Compact header
-            AppHeader(
-                _get_page(),
-                title=APP_NAME,
-                on_settings=lambda e: (
-                    controller.show_settings() if controller.show_settings else None
-                ),
-            ),
+            *header_controls,
             # Offline — subtle inline banner (visible only when offline)
             ft.Container(
                 content=ft.Row(

@@ -25,7 +25,7 @@ logger = logging.getLogger("HistoryScreen")
 
 
 @ft.component
-def HistoryScreen() -> Control:
+def HistoryScreen(banner: Control | None = None) -> Control:
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
     from flet import context
@@ -329,17 +329,23 @@ def HistoryScreen() -> Control:
             )
         )
 
+    header_controls: list[Control] = [
+        AppHeader(
+            page,
+            title="History",
+            subtitle="Recent searches & targets",
+            on_settings=lambda e: (
+                controller.show_settings() if controller.show_settings else None
+            ),
+            extra_actions=header_actions,
+        ),
+    ]
+    if banner:
+        header_controls.append(banner)
+
     return ft.Column(
         controls=[
-            AppHeader(
-                page,
-                title="History",
-                subtitle="Recent searches & targets",
-                on_settings=lambda e: (
-                    controller.show_settings() if controller.show_settings else None
-                ),
-                extra_actions=header_actions,
-            ),
+            *header_controls,
             ft.Container(content=body, expand=True),
             build_banner_ad(),
         ],

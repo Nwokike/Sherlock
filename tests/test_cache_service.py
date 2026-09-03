@@ -161,7 +161,7 @@ def test_avatar_path_is_deterministic(cache_dir):
     assert p1 == p2
     assert p1 != p3
     assert p1.parent == cache_dir / "avatars"
-    assert p1.name.endswith(".img")
+    assert p1.name.endswith(".png")
 
 
 def test_ensure_cached_avatar_returns_url_when_uncached(cache_dir):
@@ -529,7 +529,7 @@ def test_clear_all_caches_wipes_every_layer(cache_dir):
     save_geo_cache({"x": ["y"]})
     save_sites_indices(build_sites_indices(_fake_sites_dict()))
     (cache_dir / "avatars").mkdir(parents=True)
-    (cache_dir / "avatars" / "a.img").write_bytes(b"x")
+    (cache_dir / "avatars" / "a.png").write_bytes(b"x")
     (cache_dir / "compiled_db.pkl").write_bytes(pickle.dumps(FakeDB()))
 
     removed = clear_all_caches()

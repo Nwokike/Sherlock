@@ -282,6 +282,7 @@ def generate_xmind_case(
         # same username no longer clobber each other's case files.
         output_path = cached_report_path("xmind", username, found, "xmind")
     output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if output_path.exists():
         try:

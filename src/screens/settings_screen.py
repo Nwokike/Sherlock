@@ -818,70 +818,11 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         ]
     )
 
-    # Personalized Ads & Consent (mobile only — ads don't run on desktop)
-    privacy_card = ft.Container(width=0, height=0)
-    if is_mobile:
-
-        def _open_privacy_options(e):
-            async def _do_open():
-                svc = getattr(controller, "ad_service", None)
-                if not svc:
-                    logger.warning("Privacy Manage: ad service unavailable")
-                    show_snack(
-                        page,
-                        "Ad service unavailable in this session.",
-                        bgcolor=AppColors.ERROR,
-                    )
-                    return
-                try:
-                    outcome = await svc.show_privacy_options()
-                except Exception as exc:
-                    logger.warning("Privacy Manage: unexpected failure: %s", exc)
-                    show_snack(
-                        page,
-                        f"Could not open privacy options: {exc}",
-                        bgcolor=AppColors.ERROR,
-                    )
-                    return
-                if outcome == "form_shown":
-                    return  # the form itself is the feedback
-                if outcome == "not_required":
-                    show_snack(
-                        page,
-                        "Consent is not required in your region — ads already run.",
-                        bgcolor=AppColors.PRIMARY,
-                    )
-                elif outcome == "no_manager":
-                    show_snack(
-                        page,
-                        "Consent service did not start — see Troubleshooting & Logs.",
-                        bgcolor=AppColors.ERROR,
-                    )
-                else:
-                    detail = outcome.split(":", 1)[1] if ":" in outcome else outcome
-                    show_snack(
-                        page,
-                        f"Could not open privacy options: {detail}",
-                        bgcolor=AppColors.ERROR,
-                    )
-
-            asyncio.create_task(_do_open())
-
-        privacy_card = _settings_card(
-            [
-                _setting_row(
-                    ft.Icons.PRIVACY_TIP_ROUNDED,
-                    "Personalized Ads & Consent",
-                    "Manage ad preferences and GDPR consent settings",
-                    ft.FilledTonalButton(
-                        "Manage",
-                        icon=ft.Icons.TUNE_ROUNDED,
-                        on_click=_open_privacy_options,
-                    ),
-                    stacked=narrow,
-                ),
-            ]
-        )
+    # NOTE: the UMP consent form is intentionally NOT surfaced as a
+    # settings entry. It appears on its own when the user's region requires
+    # it (gather_consent at startup), and there is no "Manage/withdraw
+    # consent" row: a revocation path mostly serves users who already
+    # consented — revenue-negative by design decision (owner, 2026-09-03).
 
     # About & Updates
     def _open_version_dialog(e=None):
@@ -921,7 +862,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                         ),
                         ft.Container(height=tokens.SPACE_XS),
                         ft.Text(
-                            "A UI for Sherlock & holehe.\nUsername & Email OSINT made easy.",
+                            "A UI for Maigret & holehe.\nUsername & Email OSINT made easy.",
                             size=tokens.FONT_SM,
                             color=ft.Colors.with_opacity(
                                 tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
@@ -1148,11 +1089,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         ]
     )
 
-    # Privacy section (header + card) only exists on mobile
-    privacy_section = []
-    if is_mobile:
-        privacy_section = [SectionHeader("PRIVACY"), privacy_card]
-
     content = ft.ListView(
         controls=[
             ft.Container(height=tokens.SPACE_SM),
@@ -1175,7 +1111,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             build_banner_ad(),
             SectionHeader("TROUBLESHOOTING & LOGS"),
             logs_card,
-            *privacy_section,
             SectionHeader("ABOUT"),
             about_card,
             ft.Container(height=tokens.SPACE_XXXL),

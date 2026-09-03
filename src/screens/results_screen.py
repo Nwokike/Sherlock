@@ -47,6 +47,7 @@ class _UsernameViewData(NamedTuple):
     errors: list
     total: int
     checked: int
+    engine_total: int
     has_progress: bool
     is_cancelled: bool
     is_running: bool
@@ -62,7 +63,8 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
         found = list(progress.found)
         not_found = list(progress.not_found)
         errors = list(progress.errors)
-        total = progress.total_sites or state.sites_total or 3300
+        engine_total = progress.total_sites or 0
+        total = engine_total or state.sites_total or 3300
         checked = progress.checked_sites
         is_cancelled = bool(getattr(progress, "is_cancelled", False))
         is_running = bool(getattr(progress, "is_running", False))
@@ -82,6 +84,7 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
             for r in last.values()
             if getattr(r, "status", "") not in ("Claimed", "Available", "Illegal")
         ]
+        engine_total = 0
         total = state.sites_total or len(last) or 3300
         checked = len(last)
         is_cancelled = False
@@ -94,6 +97,7 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
         errors=errors,
         total=total,
         checked=checked,
+        engine_total=engine_total,
         has_progress=has_progress,
         is_cancelled=is_cancelled,
         is_running=is_running,
@@ -293,7 +297,8 @@ def ResultsScreen() -> Control:
             raw_not_found = [_to_dict(r) for r in active_progress.not_found]
             raw_rate_limited = [_to_dict(r) for r in active_progress.rate_limited]
             raw_unavailable = [_to_dict(r) for r in active_progress.unavailable]
-            total = active_progress.total_modules or state.email_total_modules or 121
+            engine_total = active_progress.total_modules or 0
+            total = engine_total or state.email_total_modules or 121
             checked = active_progress.checked_modules
         else:
             all_email = list(state.email_results) if state.email_results else []
@@ -311,6 +316,7 @@ def ResultsScreen() -> Control:
                 r for r in all_email if r.get("rateLimit") and not r.get("unavailable")
             ]
             raw_unavailable = [r for r in all_email if r.get("unavailable")]
+            engine_total = 0
             total = state.email_total_modules or len(all_email) or 121
             checked = total if all_email else 0
 
@@ -471,6 +477,9 @@ def ResultsScreen() -> Control:
         )
         if active_progress and getattr(active_progress, "is_cancelled", False):
             progress_label = f"Cancelled — {checked}/{total} checked"
+        elif checked == 0 and engine_total == 0:
+            # Initializing phase — same rationale as the username branch.
+            progress_label = "Initializing..."
         else:
             pct = int(checked / max(total, 1) * 100)
             progress_label = f"Checking {checked}/{total} platforms ({pct}%)..."
@@ -615,6 +624,12 @@ def ResultsScreen() -> Control:
         )
         if username_view.is_cancelled:
             progress_label = f"Cancelled — {checked}/{total} checked"
+        elif checked == 0 and username_view.engine_total == 0:
+            # Initializing phase — mirrors the ActiveScanBanner: the engine
+            # has not reported a single site yet, so a 0/N denominator is
+            # meaningless; show the same "Initializing..." state the banner
+            # shows instead of a frozen 0/total bar.
+            progress_label = "Initializing..."
         else:
             pct = int(checked / max(total, 1) * 100)
             progress_label = f"Checking {checked}/{total} sites ({pct}%)..."
@@ -707,7 +722,20 @@ def ResultsScreen() -> Control:
     )
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
-        progress_val = (checked / max(total, 1)) if total > 0 else None
+        # Indeterminate (value=None) while the engine has reported nothing —
+        # the same continuously-filling "Initializing" animation the
+        # ActiveScanBanner shows. Once the first site completes (or the
+        # engine publishes its real denominator), switch to a determinate
+        # 0..1 fraction.
+        engine_known_total = username_view.engine_total or (
+            getattr(active_progress, "total_modules", 0) or 0
+        )
+        if checked == 0 and engine_known_total == 0:
+            progress_val = None
+        elif total > 0:
+            progress_val = checked / total
+        else:
+            progress_val = None
         progress_section = ft.Container(
             content=ft.Column(
                 controls=[

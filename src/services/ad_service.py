@@ -94,17 +94,27 @@ class AdService:
             await self._consent_manager.load_and_show_consent_form_if_required()
             self._can_request_ads = await self._consent_manager.can_request_ads()
             try:
-                status = await self._consent_manager.get_privacy_options_requirement_status()
+                status = (
+                    await self._consent_manager.get_privacy_options_requirement_status()
+                )
                 self._privacy_options_required = (
                     status == fta.PrivacyOptionsRequirementStatus.REQUIRED
                 )
-                logger.info("AdService: consent status=%s can_request_ads=%s", status, self._can_request_ads)
+                logger.info(
+                    "AdService: consent status=%s can_request_ads=%s",
+                    status,
+                    self._can_request_ads,
+                )
             except Exception as exc:
                 logger.warning("AdService: privacy-requirement probe failed: %s", exc)
             if not self._can_request_ads:
-                logger.warning("AdService: UMP says ads cannot be requested — interstitials disabled this session")
+                logger.warning(
+                    "AdService: UMP says ads cannot be requested — interstitials disabled this session"
+                )
         except Exception as e:
-            logger.warning("AdService: UMP consent flow failed, defaulting to allow ads: %s", e)
+            logger.warning(
+                "AdService: UMP consent flow failed, defaulting to allow ads: %s", e
+            )
             self._can_request_ads = True
 
     async def show_privacy_options(self) -> str:
@@ -119,20 +129,29 @@ class AdService:
         * ``"error:<message>"`` — something failed; details also logged.
         """
         if not self._consent_manager:
-            logger.warning("AdService: privacy options requested but consent manager is missing")
+            logger.warning(
+                "AdService: privacy options requested but consent manager is missing"
+            )
             return "no_manager"
         try:
-            status = await self._consent_manager.get_privacy_options_requirement_status()
+            status = (
+                await self._consent_manager.get_privacy_options_requirement_status()
+            )
         except Exception as e:
             logger.warning("AdService: privacy options status check failed: %s", e)
             return f"error:{e}"
         if status != fta.PrivacyOptionsRequirementStatus.REQUIRED:
-            logger.info("AdService: privacy options form not required (status=%s)", status)
+            logger.info(
+                "AdService: privacy options form not required (status=%s)", status
+            )
             return "not_required"
         try:
             await self._consent_manager.show_privacy_options_form()
             self._can_request_ads = await self._consent_manager.can_request_ads()
-            logger.info("AdService: privacy options form shown, can_request_ads=%s", self._can_request_ads)
+            logger.info(
+                "AdService: privacy options form shown, can_request_ads=%s",
+                self._can_request_ads,
+            )
             return "form_shown"
         except Exception as e:
             logger.warning("AdService: privacy options form failed to open: %s", e)
@@ -214,6 +233,7 @@ class AdService:
         # registers under the event-handler page context, then shows itself
         # the moment the native side finishes loading (spaninsight pattern).
         try:
+
             async def _show(e):
                 await e.control.show()
                 logger.info("InterstitialAd shown (fresh instance)")

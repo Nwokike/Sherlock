@@ -4,13 +4,15 @@ One helper so every screen (Home, Results, History, Settings, Sites) shows
 the exact same ad. Production unit ID lives in core/constants.py
 (AD_BANNER_UNIT_ID).
 
-Revenue-critical sizing: the ad is pinned in an explicit 320x50 box (the
-native AdView reports AdSize.banner), centered via a tight
-CrossAxisAlignment.CENTER column — NEVER via ``alignment`` on a wide
-Container, which can expand to fill the parent's offered space instead of
-shrink-wrapping (the full-page banner regression). This matches how the
-other Kiri apps (spaninsight) wrap their working banners. No SPONSORED
-label by design (removed intentionally 2026-09-03).
+Revenue-critical sizing: the glass container stretches FULL WIDTH on every
+screen — Home/History/Results wrap their banners in shrink-wrap Columns
+(320px, left-aligned) while Settings' ListView forces full width, so a
+stretcher Row with an expand=True banner equalizes all screens to the
+Settings look. The ad itself stays pinned at its native 320x50 (AdSize
+banner) and is centered inside the stretched glass. Never set ``alignment``
+on a wide Container — it can expand to fill the parent's offer and caused
+the full-page regression. No SPONSORED label by design (removed
+intentionally 2026-09-03).
 
 The mounted-but-unfilled AdView renders as an empty box ("#" placeholder on
 some devices): if this banner ever appears empty on mobile, open Settings →
@@ -72,7 +74,7 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
         logger.warning("Failed to load BannerAd: %s", e)
         return ft.Container(width=0, height=0)
 
-    return ft.Container(
+    banner = ft.Container(
         content=ft.Column(
             [
                 ft.Container(content=ad, width=320, height=50),
@@ -81,11 +83,20 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
             spacing=tokens.SPACE_XS,
             tight=True,
         ),
+        expand=True,
         padding=tokens.SPACE_SM,
         border_radius=tokens.RADIUS_LG,
         bgcolor=adaptive_glass_bg(page),
         border=ft.Border.all(1, adaptive_glass_border(page)),
-        margin=ft.Margin(
-            tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
-        ),
+    )
+
+    # Full-width wrapper: the glass banner must stretch edge-to-edge on every
+    # screen (Home/History/Results use Columns that shrink-wrap children, so a
+    # bare container stays 320px and left-aligned there; Settings' ListView is
+    # the only parent that already forces full width). A zero-margin stretcher
+    # Row hosting the expand=True banner equalizes all screens. The inner
+    # Column centers the 320x50 ad within the stretched glass.
+    return ft.Row(
+        controls=[banner],
+        alignment=ft.MainAxisAlignment.CENTER,
     )

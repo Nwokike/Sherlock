@@ -303,6 +303,7 @@ class AppController:
             open_update_dialog=self.open_update_dialog,
             set_onboarding_done=self.set_onboarding_done,
             open_cached_result=self.open_cached_result,
+            ad_service=self.ad_service,
         )
         self._controller_methods = methods
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))

@@ -44,6 +44,9 @@ STORAGE_SAFE_SEARCH = "sherlock_safe_search"
 MODE_USERNAME = "username"
 MODE_EMAIL = "email"
 
+# ── AdMob unit IDs ─────────────────────────────────────────────────────
+AD_BANNER_UNIT_ID = "ca-app-pub-5679949845754640/5131365762"
+
 # ── Error messages ────────────────────────────────────────────────────
 ERR_NETWORK = "Network error. Check your connection."
 ERR_GENERIC = "Something went wrong. Please try again."

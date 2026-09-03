@@ -19,14 +19,11 @@ except ImportError:
 
 
 class AdService:
-    """Manages AdMob banner and interstitial ads."""
+    """Manages AdMob interstitial ads and UMP consent."""
 
     USE_TEST_IDS = False
 
-    BANNER_ID_ANDROID_TEST = "ca-app-pub-3940256099942544/9214589741"
     INTERSTITIAL_ID_ANDROID_TEST = "ca-app-pub-3940256099942544/1033173712"
-
-    BANNER_ID_ANDROID_PROD = "ca-app-pub-5679949845754640/5131365762"
     INTERSTITIAL_ID_ANDROID_PROD = "ca-app-pub-5679949845754640/2758003779"
 
     def __init__(self, page: ft.Page):
@@ -36,12 +33,6 @@ class AdService:
         self._can_request_ads: bool = True
         self._consent_manager = None
         self._is_shutting_down: bool = False
-
-    @property
-    def banner_id(self) -> str:
-        if self.USE_TEST_IDS:
-            return self.BANNER_ID_ANDROID_TEST
-        return self.BANNER_ID_ANDROID_PROD
 
     @property
     def interstitial_id(self) -> str:
@@ -71,11 +62,6 @@ class AdService:
             return
         try:
             self._consent_manager = fta.ConsentManager()
-            if (
-                hasattr(self.page, "services")
-                and self._consent_manager not in self.page.services
-            ):
-                self.page.services.append(self._consent_manager)
             await self._consent_manager.request_consent_info_update()
             await self._consent_manager.load_and_show_consent_form_if_required()
             self._can_request_ads = await self._consent_manager.can_request_ads()
@@ -97,33 +83,17 @@ class AdService:
         except Exception:
             pass
 
-    def get_banner_ad(self) -> ft.Control:
-        """Return a banner ad control, or empty container on desktop."""
-        if not _HAS_ADS or not self._is_mobile() or not self._can_request_ads:
-            return ft.Container(width=0, height=0)
-        try:
-            ad = fta.BannerAd(
-                unit_id=self.banner_id,
-                width=320,
-                height=50,
-                on_error=lambda e: None,
-            )
-            return ft.Container(
-                content=ad,
-                width=320,
-                height=50,
-                alignment=ft.Alignment.CENTER,
-            )
-        except Exception:
-            return ft.Container(width=0, height=0)
-
     async def preload_interstitial(self, on_close: Callable | None = None):
         """Pre-load an interstitial ad for later display.
 
-        Registers InterstitialAd with page.services so Flutter's native
-        AdMob layer attaches and starts loading immediately.
+        Service construction itself registers the ad with the page's service
+        registry (Flet's supported path) — appending to `page.services` is
+        both redundant and harmful: that list is never serialized and holds
+        references that defeat Flet's refcount GC of spent single-use ads.
         """
         self._on_close = on_close
+        if self._is_shutting_down:
+            return
         if not _HAS_ADS or not self._is_mobile() or not self._can_request_ads:
             return
         try:
@@ -148,11 +118,6 @@ class AdService:
                 ),
                 on_close=self._handle_close,
             )
-            if (
-                hasattr(self.page, "services")
-                and self.interstitial not in self.page.services
-            ):
-                self.page.services.append(self.interstitial)
         except Exception as exc:
             logger.warning("Failed to construct InterstitialAd: %s", exc)
             self.interstitial = None
@@ -163,39 +128,26 @@ class AdService:
                 await self._on_close()
             else:
                 self._on_close()
-        if not self._is_shutting_down:
-            await self.preload_interstitial(on_close=self._on_close)
 
     async def show_interstitial(self) -> bool:
         """Show a preloaded interstitial — on every search for maximum revenue.
 
-        Per Flet docs, an InterstitialAd instance is single-use. We immediately
-        preload a fresh replacement in the background so the next search has an
-        ad ready.
+        Per flet_ads docs an InterstitialAd instance is single-use. We detach
+        the reference before showing (so GC can reclaim it after close) and
+        preload exactly one replacement — never more.
         """
         if self.interstitial and self._can_request_ads:
+            ad_to_show = self.interstitial
+            self.interstitial = None
             try:
-                ad_to_show = self.interstitial
-                # Detach reference and immediately queue the next ad preload
-                self.interstitial = None
-                if not self._is_shutting_down:
-                    asyncio.create_task(
-                        self.preload_interstitial(on_close=self._on_close)
-                    )
                 await ad_to_show.show()
                 return True
             except Exception as e:
                 logger.warning("Interstitial show failed: %s", e)
-                self.interstitial = None
-                if not self._is_shutting_down:
-                    asyncio.create_task(
-                        self.preload_interstitial(on_close=self._on_close)
-                    )
                 return False
-
-        # If no interstitial was ready, trigger a background preload now
-        if not self.interstitial and not self._is_shutting_down:
-            asyncio.create_task(self.preload_interstitial(on_close=self._on_close))
+            finally:
+                if not self._is_shutting_down:
+                    await self.preload_interstitial(on_close=self._on_close)
         return False
 
     async def close(self):

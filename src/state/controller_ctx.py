@@ -53,6 +53,9 @@ class ControllerMethods:
     open_update_dialog: Callable[[], None] = _noop_sync
     set_onboarding_done: Callable[[], Awaitable[None]] = _noop_async
     open_cached_result: Callable[[str, str], bool] = lambda _q, _m: False
+    # Ad service handle (Settings privacy/consent row calls
+    # ad_service.show_privacy_options). None default keeps tests no-op.
+    ad_service: object = None
 
     # AppShell-populated (view-local, sync closures)
     show_results: Callable[[], None] = _noop_sync

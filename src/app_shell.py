@@ -84,9 +84,6 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
             async def _share():
                 from core.state import state as app_state
-                from flet import context
-
-                page = context.page
 
                 if not (app_state.search_progress and app_state.search_progress.found):
                     return
@@ -97,9 +94,10 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     return
                 share_text_content = "\n".join(urls[:20])
                 try:
+                    # Service construction self-registers with the page —
+                    # appending to page.services is redundant and pins a
+                    # reference that defeats Flet's service GC.
                     share_service = ft.Share()
-                    if page:
-                        page.services.append(share_service)
                     await share_service.share_text(share_text_content)
                 except Exception as ex:
                     logger.warning("Share failed: %s", ex)
@@ -274,8 +272,9 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         report_bytes = "".join(output).encode("utf-8")
 
                     ext = format_type.lower()
+                    # Self-registers on construction; a page.services append
+                    # would pin it against Flet's service GC.
                     file_picker = ft.FilePicker()
-                    page.services.append(file_picker)
                     path = await file_picker.save_file(
                         file_name=f"sherlock_{username}.{ext}",
                         allowed_extensions=[ext],

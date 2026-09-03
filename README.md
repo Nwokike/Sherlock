@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  Dual-mode OSINT — hunt usernames across 400+ networks and emails across 120+ platforms simultaneously
+  Dual-mode OSINT — hunt usernames across 3,300+ networks and emails across 120+ platforms simultaneously
 </p>
 
 <p align="center">
@@ -41,12 +41,14 @@
 
 | Capability | Description |
 | :--- | :--- |
-| **400+ Username Networks** | Username OSINT via `sherlock-project` — GitHub, Instagram, Discord, Telegram, SoundCloud, and more. Wildcard `user{?}name` → 3 variants. |
-| **120+ Email Platforms** | Email OSINT via `holehe` — register/login/recovery checks with masked recovery email + phone hints, method badges, and flaky-platform warnings. |
+| **3,300+ Username Networks** | Username OSINT via the Maigret engine — GitHub, Instagram, Discord, Telegram, SoundCloud, and thousands more across international, regional, and specialized networks. Recursive search expands from discovered IDs. |
+| **120+ Email Platforms** | Email OSINT via `holehe` — register/login/recovery checks with masked recovery email + phone hints, method badges, and honest Unavailable/Rate-Limited separation. |
+| **Stealth TLS Email Checks** | curl-cffi Chrome 124 JA3/TLS fingerprinting bypasses WAF 403 blocks during email scans. |
 | **Profile Enrichment** | `socid-extractor` (164 schemes) — avatar, bio, followers, location, company, verified, personal links. Basic (fast) / Full (API mutations) modes. |
+| **Intelligence Dossiers** | Gold PDF Dossier, XMind Mind Map (.xmind), Identity Network Analysis, JSON, CSV, and TXT exports — all generated on-device. |
+| **6-Layer On-Device Cache** | Compiled database pickle (2.88× faster cold start), avatar images, report fingerprints, geo lookups, inverted tag indices, and TTL DNS cache. |
 | **Fast Offline Scans** | Local-first database — scan instantly without an initial download. |
-| **Selective Target Scope** | Bulk selection: Select All / Deselect All / Popular Only — from the targets card on Home. |
-| **Premium Data Exports** | Plain Text, CSV, and Excel (.xlsx) via system file picker — BottomSheet chooser with drag handle. |
+| **Selective Target Scope** | Scan depth (All 3,300+ / Top 1,000 / Top 500), custom manifest support, and per-category network browsing. |
 | **History + Typeahead** | Local search history with `Dismissible` swipe-to-delete and `SearchBar` typeahead suggestions. |
 
 ---
@@ -59,7 +61,7 @@
     <td width="50%"><img src="screenshots/home_email_search.png" width="100%" alt="Home - Email Search" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Username search across 400+ social networks with quick scan options.</em></td>
+    <td align="center"><em>Username search across 3,300+ social networks with quick scan options.</em></td>
     <td align="center"><em>Email lookup across 120+ platforms with password recovery checks.</em></td>
   </tr>
 </table>
@@ -70,7 +72,7 @@
     <td width="50%"><img src="screenshots/profile_dossier.png" width="100%" alt="Social Profile Dossier" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Live results stream with Excel, CSV, and TXT export.</em></td>
+    <td align="center"><em>Live results stream with PDF, XMind, CSV, JSON, and TXT export.</em></td>
     <td align="center"><em>Enriched profile dossier with bio, follower count, and links.</em></td>
   </tr>
 </table>
@@ -102,18 +104,17 @@
 ## Features
 
 - **Gold-Branded Design System** — Solarized Light (Pure White) and Monokai themes aligned to the bronze-gold detective logo. `ScrollbarTheme` / `ChipTheme` / `TabBarTheme` / `CardTheme` / `PageTransitionsTheme` unified in `AppTheme`.
-- **Dual-Mode OSINT** — Username (sherlock-project) + Email (holehe) with material `SegmentedButton` pill and type-ahead `SearchBar`.
+- **Dual-Mode OSINT** — Username (Maigret, 3,300+ networks) + Email (holehe) with material `SegmentedButton` pill and type-ahead `SearchBar`.
 - **Profile Enrichment** — `socid-extractor` post-scan enrichment: avatar guard (`https` only), bio, followers, location, company, verified badge, personal link — Basic/Full modes via `mutate_url` API schemes.
-- **Live Text-Search Filters** — Instantly filter hundreds of results as the scanner runs. `ListView(build_controls_on_demand=True)` virtualization + `SelectionArea` long-press.
+- **Live Text-Search Filters** — Instantly filter thousands of results as the scanner runs. `ListView(build_controls_on_demand=True)` virtualization + `SelectionArea` long-press. Results sort A–Z by platform.
 - **Tap-to-Open + Share + Haptic** — Tap result → browser; copy/share via `Clipboard` + `Share`; `HapticFeedback` on search/copy/share.
-- **Network & Proxy** — `sherlock(..., proxy=)` via Settings → Network & Proxy (`socks5://` / `http://`).
-- **Wildcard `user{?}name`** — Expands to `user_name`, `user-name`, `user.name` automatically.
-- **Email Concurrency + Filters** — Slider 5–30 (default 5), Found-Only toggle, method filter (`All` / `Register` / `Login` / `Recovery`), flaky-platform threshold.
+- **Network & Proxy** — Maigret proxy support via Settings → Network & Proxy (`socks5://` / `http://`).
+- **Email Concurrency + Filters** — Slider 4–30, Found-Only toggle, method filter (`All` / `Register` / `Login` / `Recovery`).
 - **History** — `Dismissible` swipe-to-delete rows, `Banner` offline strip, `SearchBar` history typeahead, type-ahead `Chip` filters.
-- **Interstitial Frequency Capping** — DDGS-style every-3rd-search cadence (`search_count % 3 == 0` via `state.search_count`).
+- **Interstitial Ads** — Shown on every search with background preload rotation; requests carry high-value keyword targeting for premium fill. Mobile-only privacy options row in Settings (UMP).
 - **Custom Database Manifest** — Point the scanner at your own site-database JSON (via Settings) for specialized investigations.
 - **Markdown Release Notes** — `UpdateDialog` renders rich `Markdown(GITHUB_WEB)` changelogs with tappable links.
-- **Export BottomSheet** — Material 3 `BottomSheet` (drag handle, `ListTile` per format) replaces `AlertDialog`.
+- **Export BottomSheet** — Material 3 `BottomSheet` (drag handle, scrollable `ListTile` per format) replaces `AlertDialog`.
 - **Debounced Storage Writes** — Prevents disk I/O bottlenecks and race conditions when modifying search parameters.
 - **Ruff Compliance** — Clean, formatted, and strictly linted Python codebase.
 
@@ -123,10 +124,13 @@
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Flet 0.86.5 (Flutter 3.44) | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
-| **Scan Core** | `sherlock-project 0.16.0` + `holehe 1.61` | Username (multi-threaded `sherlock`) + Email (async `holehe` semaphore `state.email_concurrency`) |
+| **Frontend** | Flet 0.86.5 (Flutter 3.44) on Python 3.14 | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
+| **Scan Core** | `maigret 0.6.5` (3,300+ sites) + `holehe 1.61` (121 modules) | Username + Email OSINT on isolated worker threads with private event loops |
+| **Stealth Email** | `curl-cffi 0.16.3` (Chrome 124 impersonation) | JA3/TLS fingerprint bypass for WAF-blocked email checks |
 | **Enrichment** | `socid-extractor 0.1.1` (164 schemes, 449 fields) | Post-scan avatar/bio/metrics via `batch_enrich` (Basic/Full `use_mutations`) |
-| **Ads** | `flet-ads 0.86.5` | `BannerAd 320×50` + `InterstitialAd` (3-search capping) + UMP `ConsentManager` |
+| **Reports** | `reportlab` + `xmind` + `networkx` | Gold PDF dossiers, XMind mind maps, identity network analytics |
+| **Ads** | `flet-ads 0.86.5` | `BannerAd 320×50` + `InterstitialAd` (every search, preload rotation) + UMP `ConsentManager` |
+| **Cache** | 6-layer pickle/JSON/png tiers under `.flet/storage` | Compiled DB (2.88× cold start), avatars, report fingerprints, geo, tag indices, DNS |
 | **Local Database** | `.flet/storage/data` (`storage.json`) | Debounced atomic `JSON` store — settings, theme, selection scope, site-name cache, history |
 
 ### Visual Flow
@@ -135,16 +139,18 @@
 graph TB
     subgraph SHERLOCK_CLIENT ["📱 SHERLOCK CLIENT (Local-First Dual OSINT App)"]
         UI["🎨 Flet 0.86.5 Reactive UI (Home | History | Settings | Social Networks)"]
-        Engine["⚙️ Sherlock + holehe Engines"]
+        Engine["⚙️ Maigret + holehe Engines (isolated worker threads)"]
         Enrich["✨ socid-extractor Enrichment (Basic/Full)"]
+        Cache["⚡ 6-Layer On-Device Cache"]
         Storage["💾 .flet Storage (atomic JSON)"]
         UI --> Engine
         Engine --> Enrich
+        Engine --> Cache
         UI --> Storage
     end
 
     subgraph GLOBAL_RESOURCES ["🌐 EDGE DATABASE & PROVIDERS"]
-        Targets["🎯 400+ Social + 120+ Email Servers (HTTPS)"]
+        Targets["🎯 3,300+ Social + 120+ Email Servers (HTTPS)"]
     end
 
     Engine ==>|HTTPS GET/POST| Targets
@@ -159,10 +165,10 @@ To optimize execution speed, tune the sliders in Settings:
 
 | Scan Profile | Targets | Estimated Time | Best Suited For |
 | :--- | :---: | :---: | :--- |
-| **Popular Only** | ~15 Major Platforms | **Under 5 Seconds** | Quick check on mainstream platforms |
-| **Custom Selection** | Selected Subset | **Depends on size** | Focused investigation (professional / gaming networks) |
-| **Email (holehe)** | 120 reasons | **10–30 s** | Use concurrency Slider 5–30 (default 5); higher = faster but more rate-limits |
-| **Full Sweep** | 400+ Sites | **25–45 Seconds** | Deep exhaustive OSINT reports and full footprint audits |
+| **Top 500** | 500 ranked networks | **~30 Seconds** | Quick broad sweep of the biggest platforms |
+| **Top 1,000** | 1,000 ranked networks | **~1–2 Minutes** | Balanced coverage and speed |
+| **Email (holehe)** | 121 modules | **10–30 s** | Use concurrency Slider 4–30; higher = faster but more rate-limits |
+| **Full Sweep** | 3,300+ Sites | **2–4 Minutes** | Deep exhaustive OSINT reports and full footprint audits |
 
 ---
 
@@ -173,7 +179,7 @@ Sherlock is designed with a strict **Privacy-First** philosophy:
 1. **Local Connections**: All network scans are sent directly from your own device IP address. No middleman, proxy, or server tracking — or via your configured `socks5://` / `http://` proxy if set.
 2. **Zero Logging**: We do not log, track, or share your search history, checked usernames, or discovered profiles.
 3. **Sandbox Directories**: `.flet/storage/data|cache|temp` via `FLET_APP_STORAGE_*` — the process CWD is `storage/data` during `flet run`, matching packaged app behavior (see `.flet/README.md`).
-4. **Data Sovereignty**: Generated reports (.csv, .xlsx, .txt) reside 100% locally in your default system Downloads folder.
+4. **Data Sovereignty**: Generated reports (PDF, .xmind, CSV, JSON, TXT) are saved wherever you choose via the system file picker — nothing leaves your device.
 
 ---
 

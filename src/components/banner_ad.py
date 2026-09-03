@@ -1,13 +1,16 @@
 """BannerAd — single canonical banner ad builder (mobile only).
 
 Plain helper so every screen (Home, Results, History, Settings, Sites)
-shows the exact same ad. Consolidates the previous two implementations
-(components/banner_ad.py and core/styles.py) into one.
+shows the exact same ad. Production unit ID lives in core/constants.py
+(AD_BANNER_UNIT_ID) — AdService reads the same constant's home, keeping
+one source of truth for the banner ID.
 
-Revenue-critical: ad construction mirrors the original v1.x pattern —
-production unit ID, standard 320x50 banner, mobile-only gate, plain
-on_error handler. flet_ads 0.85.0 has no dispose() API, so no lifecycle
-hooks here; Flet's renderer unmounts the native ad view with the tree.
+Revenue-critical sizing: the ad is pinned in an explicit 320x50 box and
+the glass wrapper carries NO alignment — Flet Containers with alignment
+non-None may expand to fill the parent's offered space instead of
+shrink-wrapping their content, which is exactly the full-page banner
+regression. flet_ads 0.86.5 has no dispose() API, so no lifecycle hooks
+here; Flet's renderer unmounts the native ad view with the tree.
 """
 
 import logging
@@ -16,11 +19,10 @@ import flet as ft
 from flet import Control
 
 from core import tokens
+from core.constants import AD_BANNER_UNIT_ID
 from core.theme import adaptive_glass_bg, adaptive_glass_border
 
 logger = logging.getLogger(__name__)
-
-_UNIT_ID = "ca-app-pub-5679949845754640/5131365762"
 
 
 def build_banner_ad(page: ft.Page | None = None) -> Control:
@@ -63,7 +65,7 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
             ]
         )
         ad = fta.BannerAd(
-            unit_id=_UNIT_ID,
+            unit_id=AD_BANNER_UNIT_ID,
             width=320,
             height=50,
             request=req,
@@ -77,21 +79,11 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
         return ft.Container(width=0, height=0)
 
     return ft.Container(
-        content=ft.Column(
-            [
-                ft.Text(
-                    "SPONSORED",
-                    size=tokens.FONT_XS,
-                    weight=ft.FontWeight.W_700,
-                    color=ft.Colors.ON_SURFACE_VARIANT,
-                    style=ft.TextStyle(letter_spacing=1),
-                ),
-                ad,
-            ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=tokens.SPACE_XS,
-        ),
-        alignment=ft.Alignment.CENTER,
+        content=ft.Container(content=ad, width=320, height=50),
+        # No alignment on the wrapper and an explicit 320x50 inner box mean
+        # the wrapper can only shrink-wrap the ad — Flet Containers with
+        # alignment non-None may expand to fill the parent's offer instead
+        # (the full-page banner regression).
         padding=tokens.SPACE_SM,
         border_radius=tokens.RADIUS_LG,
         bgcolor=adaptive_glass_bg(page),

@@ -1,9 +1,9 @@
 {
-  "build_number": 9,
-  "version": "2.0.0",
+  "build_number": 11,
+  "version": "2.1.0",
   "type": "update",
-  "title": "Sherlock 2.0.0",
-  "release_notes": "• Dual-Mode OSINT: Username & Email search\n• 120+ platforms email check via holehe\n• Profile enrichment (bio, location, followers)\n• Privacy-first: 100% on-device OSINT",
+  "title": "Sherlock 2.1 is here!",
+  "release_notes": "### \ud83c\udf10 3,300+ Platforms OSINT (Maigret Engine)\n\u2022 Upgraded engine covering 3,300+ international & specialized networks\n\u2022 Full scan depth controls (All 3,300+ / Top 1,000 / Top 500 Alexa-ranked)\n\u2022 Recursive search: discovers secondary IDs and expands queries automatically\n\u2022 Android native DNS resolution: 100% domain connectivity via system resolver\n\n### \ud83d\udcd1 Multi-Format Intelligence Dossiers\n\u2022 Gold PDF Dossier: printable reports with metadata & verified registry\n\u2022 XMind Mind Map (.xmind): interactive visual graph case files\n\u2022 Identity Network Analysis: interactive clustering & hub diagnostics\n\u2022 Full data exports: JSON, standard CSV, and clean Plain Text lists\n\n### \u26a1 6-Layer Performance Cache\n\u2022 2.88x faster cold start: pre-compiled binary database cache\n\u2022 On-device avatar cache: 0ms offline image loading for verified profiles\n\u2022 Pre-rendered dossier cache: instant 0ms report re-exports\n\u2022 Inverted tag index: O(1) instant category & country filtering\n\n### \ud83d\ude80 Responsive UI & Mobile Hardening\n\u2022 Zero UI lag: scanning engines isolated to background worker threads\n\u2022 Instant cancel: process terminates and updates status in 0ms\n\u2022 Alphabetical sorting (A-Z) across all results tabs\n\u2022 Context-aware profile modals & compact MarkItDown appearance controls",
   "mandatory": false,
   "github_url": "https://github.com/Nwokike/Sherlock/releases/latest",
   "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.sherlock"

@@ -471,6 +471,7 @@ def _run_maigret_worker_thread(
 
     async def _runner():
         nonlocal last_prog
+        n_primary = len(targets)
 
         # Layer-6 DNS pre-warm on the worker loop (never the main Flet loop):
         # resolve the scan's domains ahead of the request flood so aiohttp's
@@ -663,6 +664,14 @@ def _run_maigret_worker_thread(
                 on_progress_cb(progress2)
                 last_prog = progress2
 
+        # Terminal-grade completion trail (owner diagnoses from device logs):
+        # one line when the WHOLE pipeline (primary + recursive tail) ends.
+        logger.info(
+            "Scan worker finished: %d primary target(s), recursive=%s, %d total target(s)",
+            n_primary,
+            "on" if recursive else "off",
+            len(targets),
+        )
         return last_prog
 
     try:

@@ -871,9 +871,25 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             controller.open_sheet(sheet)
 
         def _restart(e):
+            from core.constants import MODE_EMAIL as _MODE_EMAIL
             from core.state import state as app_state
 
-            if app_state.last_results_username:
+            # Owner fix: the retry button must respect the MODE of the
+            # results being viewed — email results re-run the email engine
+            # (previously it only ever started a username scan, so the
+            # email retry silently did nothing or restarted an old query).
+            prog = app_state.search_progress
+            is_email = app_state.search_mode == _MODE_EMAIL or getattr(
+                prog, "email", None
+                ) is not None
+            if is_email:
+                target = app_state.email_results_address or getattr(
+                    prog, "email", None
+                )
+                if target:
+                    asyncio.create_task(controller.start_email_search(target))
+                    controller.show_results()
+            elif app_state.last_results_username:
                 asyncio.create_task(
                     controller.start_search(app_state.last_results_username)
                 )

@@ -211,14 +211,6 @@ class TestStateDefaults:
         # mutated by earlier tests in the same session.
         assert AppState.recursive_search is True
 
-    def test_compact_telemetry_single_line(self):
-        from core.logger_handler import compact_telemetry
-
-        text = compact_telemetry()
-        # psutil ships with maigret — expect real numbers on one line.
-        assert "App" in text and "CPU" in text and "RAM" in text
-        assert " | " not in text  # single-line surface format, not snapshot
-
     def test_unenforceable_codes_bypass(self):
         from services.biometric_service import _is_unenforceable
 

@@ -9,7 +9,6 @@ from flet import Control
 
 from core import tokens
 from core.constants import MODE_EMAIL
-from core.logger_handler import compact_telemetry
 from core.theme import AppColors
 
 
@@ -78,15 +77,6 @@ def ActiveScanBanner(
                             color=AppColors.PRIMARY,
                             bgcolor=ft.Colors.with_opacity(0.12, AppColors.PRIMARY),
                             height=3,
-                        ),
-                        ft.Text(
-                            compact_telemetry(),
-                            size=tokens.FONT_XS,
-                            color=ft.Colors.with_opacity(
-                                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
-                            ),
-                            max_lines=1,
-                            overflow=ft.TextOverflow.ELLIPSIS,
                         ),
                     ],
                     spacing=2,

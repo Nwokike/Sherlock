@@ -455,7 +455,6 @@ def _run_maigret_worker_thread(
     deep_enrich: bool = False,
     keywords: list[str] | None = None,
     cookies_path: str | None = None,
-    tor_proxy: str | None = None,
     i2p_proxy: str | None = None,
     check_domains: bool = False,
 ) -> SearchProgress | None:
@@ -531,7 +530,6 @@ def _run_maigret_worker_thread(
                     output_container=output_container,
                     keywords=keywords,
                     cookies=cookies_path,
-                    tor_proxy=tor_proxy,
                     i2p_proxy=i2p_proxy,
                     check_domains=check_domains,
                 )
@@ -635,7 +633,6 @@ def _run_maigret_worker_thread(
                         id_type=id_type,
                         keywords=keywords,
                         cookies=cookies_path,
-                        tor_proxy=tor_proxy,
                         i2p_proxy=i2p_proxy,
                         check_domains=check_domains,
                     )
@@ -854,7 +851,6 @@ class SherlockService:
         raw_kw = (getattr(state, "search_keywords", "") or "").strip()
         keywords = [k.strip() for k in raw_kw.split(",") if k.strip()] or None
         cookies_path = (getattr(state, "cookies_path", "") or "").strip() or None
-        tor_proxy = (getattr(state, "tor_proxy", "") or "").strip() or None
         i2p_proxy = (getattr(state, "i2p_proxy", "") or "").strip() or None
         # Domain checks use aiodns — dead on Android (/etc/resolv.conf).
         check_domains = bool(getattr(state, "check_domains", False)) and not is_mobile
@@ -877,7 +873,6 @@ class SherlockService:
             deep_enrich=deep_enrich,
             keywords=keywords,
             cookies_path=cookies_path,
-            tor_proxy=tor_proxy,
             i2p_proxy=i2p_proxy,
             check_domains=check_domains,
         )

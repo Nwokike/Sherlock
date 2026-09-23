@@ -149,7 +149,7 @@ Rotation cost: new connection per fingerprint → keep ONE per scan.
 | P3-4 | **Protection badges**: bridge `result.error` (CheckError `.type/.desc`) + `site.protection` into `SiteResult`; BOT set → "bot-walled", `Connecting failure` → "dead"; show `errors.py:solution_of()` advice on tap | UX | M | high (honest error triage) |
 | P3-5 | **One-tap report exports** via `maigret.report` (CSV/TXT/JSON simple+ndjson/Markdown/HTML/XMind/Neo4j all work with installed deps; PDF needs absent `xhtml2pdf`) + `generate_report_context()` | features | M | high |
 | P3-6 | **Sampled DB-health panel**: `self_check()` on N=50 random enabled sites off-scan-path; `get_db_stats()` counters (`sites.py:678-730`) → Coverage cards; auto-disable failing sites next-scan | features | M | med |
-| P3-7 | Cookies jar TextField → `cookies=` (0.6.6 fixed multi-domain import); tor/i2p proxy fields; `check_domains` toggle desktop-only (aiodns dies on Android) | stealth | M | med |
+| P3-7 | Cookies jar TextField → `cookies=` (0.6.6 fixed multi-domain import); i2p proxy field; `check_domains` toggle desktop-only (aiodns dies on Android). **Tor field REMOVED by owner — it breaks on Android** | stealth | M | med |
 | P3-8 | Shared-connector monkeypatch (`ttl_dns_cache=300`, `limit_per_host=6`) + keep prewarm; retune defaults: mobile scan depth → 500 (upstream default; full scans now 2× longer), max_connections 25 on metered | perf | M | med |
 | P3-9 | `keywords=` field → KeywordMatch badge (`KeywordMatchStatus`) | features | S | low-med |
 
@@ -324,7 +324,7 @@ flask stack ~2.3M · alive-progress chain ~0.46M.
 | 20 | P2-3 | Fingerprint rotation (chrome131_android on mobile) | S | S |
 | 21 | P1-2 | use_dialog for scan-surviving dialogs | P | S |
 | 22 | P3-6 | Sampled DB-health panel | F | M |
-| 23 | P3-7 | Cookies jar + tor/i2p fields | S | M |
+| 23 | P3-7 | Cookies jar + i2p fields (Tor removed by owner) | S | M |
 | 24 | P1-5 | NativeAd experiment | S/C | M |
 | 25 | P1-4 | flet-local-auth biometric lock | F | M |
 | 26 | P5-4/5 | anyio limiter + lazy networkx | P | S |
@@ -386,7 +386,8 @@ with its visible errors; copy operations stay Python-side for live-state payload
 TEST unit, mobile-gated, honest failure messages) · **P2-2** email avatar-cache warming ·
 **P3-3** Deep Enrichment toggle (`is_enrich_enabled`, mutation-traffic logged per pass) ·
 **P3-6** sampled DB-health check (Settings button → 25-site probe → persist flags → excluded on
-load, healthy run clears) · **P3-7** cookies/tor/i2p fields + desktop-only domain-check toggle ·
+load, healthy run clears) · **P3-7** cookies/i2p fields + desktop-only domain-check toggle
+(Tor removed by owner — breaks on Android) ·
 **P3-8** aiohttp connector patch (ttl_dns_cache=300s — prewarm now actually reused) + mobile
 scan-depth default 500 · **P3-9** keywords field (KEYWORD badge already bridged) ·
 **P4-6** interactive graph viewer (pyvis inline HTML → browser; 700 KB self-contained file) ·

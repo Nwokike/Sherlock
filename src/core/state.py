@@ -78,9 +78,8 @@ class AppState:
     # P3-3/P3-9 scan enrichment knobs
     search_keywords: str = ""
     deep_enrich: bool = False
-    # P3-7 stealth fields
+    # P3-7 stealth fields (Tor removed by owner — it breaks on Android)
     cookies_path: str = ""
-    tor_proxy: str = ""
     i2p_proxy: str = ""
     check_domains: bool = False
     # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
@@ -92,7 +91,10 @@ class AppState:
     use_local_db: bool = True
     custom_manifest: str = ""
     scan_depth: str = "all"
-    recursive_search: bool = False
+    # Owner rule: features users want default ON; trade-offs default OFF.
+    # Recursive search is the headline feature — on unless the user opts out
+    # (stored values are still honored on load).
+    recursive_search: bool = True
     extract_info: bool = True
     max_connections: int = 50
     retries: int = 0

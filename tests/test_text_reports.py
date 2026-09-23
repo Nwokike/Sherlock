@@ -196,9 +196,14 @@ class TestStateDefaults:
         assert state.search_keywords == ""
         assert state.deep_enrich is False
         assert state.cookies_path == ""
-        assert state.tor_proxy == ""
         assert state.i2p_proxy == ""
         assert state.check_domains is False
         assert state.unhealthy_sites is None
         assert state.biometric_lock is False
         assert state.history_unlocked is False
+        # Owner rule: headline features default ON (stored values still win).
+        # Assert the CLASS default — the shared singleton may have been
+        # mutated by earlier tests in the same session.
+        from core.state import AppState
+
+        assert AppState.recursive_search is True

@@ -66,7 +66,6 @@ from core.constants import (
     STORAGE_SELECTED_SITES,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
-    STORAGE_TOR_PROXY,
     STORAGE_USE_CURL_CFFI,
 )
 from core.logger_handler import in_memory_log_handler
@@ -432,9 +431,6 @@ class AppController:
             cookies_raw = await self.storage.get(STORAGE_COOKIES_PATH)
             if cookies_raw:
                 state.cookies_path = cookies_raw
-            tor_raw = await self.storage.get(STORAGE_TOR_PROXY)
-            if tor_raw:
-                state.tor_proxy = tor_raw
             i2p_raw = await self.storage.get(STORAGE_I2P_PROXY)
             if i2p_raw:
                 state.i2p_proxy = i2p_raw

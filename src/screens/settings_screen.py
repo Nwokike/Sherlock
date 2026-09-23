@@ -46,7 +46,6 @@ from core.constants import (
     STORAGE_SEARCH_KEYWORDS,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
-    STORAGE_TOR_PROXY,
     STORAGE_USE_CURL_CFFI,
 )
 from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
@@ -327,11 +326,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         cleaned = (val or "").strip()
         state.cookies_path = cleaned
         asyncio.create_task(_persist(STORAGE_COOKIES_PATH, cleaned))
-
-    def _on_tor_change(val: str):
-        cleaned = (val or "").strip()
-        state.tor_proxy = cleaned
-        asyncio.create_task(_persist(STORAGE_TOR_PROXY, cleaned))
 
     def _on_i2p_change(val: str):
         cleaned = (val or "").strip()
@@ -983,32 +977,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD
-                ),
-            ),
-            ft.Container(
-                content=ft.TextField(
-                    value=state.tor_proxy,
-                    hint_text="socks5://127.0.0.1:9050 (empty = unused)",
-                    label="Tor Proxy (optional)",
-                    prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
-                    border={
-                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
-                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                    },
-                    text_size=tokens.FONT_SM,
-                    content_padding=tokens.SPACE_SM,
-                    bgcolor=ft.Colors.SURFACE,
-                    filled=True,
-                    on_submit=lambda e: _on_tor_change(e.control.value),
-                    on_blur=lambda e: _on_tor_change(e.control.value),
-                ),
-                padding=ft.Padding(
-                    tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
                 ),
             ),
             ft.Container(

@@ -11,7 +11,7 @@ CHANGELOG: dict[str, str] = {
         "• Category presets + Scope-to-Filter one-tap scanning; Dating & new country chips\n"
         "• PDF: tappable links, page numbers, avatar cards; XMind evidence links & category sheets\n"
         "• Interactive graph viewer, Cypher export, evidence communities\n"
-        "• Stealth: socks5 fixed everywhere, chrome131/Android fingerprints, Tor/I2P/cookies fields\n"
+        "• Stealth: socks5 fixed everywhere, chrome131/Android fingerprints, I2P/cookies fields\n"
         "• Biometric History lock, DB health check, deep-enrichment & keywords toggles\n"
         "• Bundled Outfit font (offline startup), ~21MB leaner installs, 223 tests + CI gates"
     ),

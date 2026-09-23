@@ -53,12 +53,17 @@ CATEGORY_TAGS = [
     ("gaming", "Gaming"),
     ("forum", "Forums"),
     ("crypto", "Crypto"),
+    ("dating", "Dating"),
     ("video", "Media"),
     ("us", "US 🇺🇸"),
     ("ng", "NG 🇳🇬"),
     ("ru", "RU 🇷🇺"),
     ("de", "DE 🇩🇪"),
     ("cn", "CN 🇨🇳"),
+    ("fr", "FR 🇫🇷"),
+    ("gb", "GB 🇬🇧"),
+    ("jp", "JP 🇯🇵"),
+    ("in", "IN 🇮🇳"),
 ]
 
 
@@ -130,13 +135,53 @@ def SitesScreen() -> Control:
         _apply(new_states)
 
     def _select_all():
-        _apply({k: True for k in checked_states})
+        _apply(dict.fromkeys(checked_states, True))
 
     def _select_none():
-        _apply({k: False for k in checked_states})
+        _apply(dict.fromkeys(checked_states, False))
 
     def _select_popular():
         _apply({k: k.lower() in POPULAR_SITES for k in checked_states})
+
+    def _scope_to_filter():
+        """Set the scan scope to exactly the current category filter.
+
+        Uses the O(1) inverted tag index (falls back to the per-site tags
+        map) and the existing selected-sites persistence — the preset
+        becomes the scan scope without any engine re-query. "All Networks"
+        re-checks everything (= no custom scope).
+        """
+        if selected_tag == "all":
+            new_states = dict.fromkeys(checked_states, True)
+            msg = "Scope: all networks"
+        else:
+            tag_index = getattr(state, "sites_tag_index", None) or {}
+            bucket = set(tag_index.get(selected_tag.lower(), []))
+            if not bucket:
+                bucket = {
+                    name
+                    for name, site_tags in (
+                        getattr(state, "sites_tags_map", {}) or {}
+                    ).items()
+                    if selected_tag.lower() in [t.lower() for t in site_tags]
+                }
+            if not bucket:
+                _notify_scope(f'No "{selected_tag}" sites in this database')
+                return
+            new_states = {k: k in bucket for k in checked_states}
+            msg = f"Scope: {selected_tag} — {sum(new_states.values())} networks"
+        _apply(new_states)
+        _notify_scope(msg)
+
+    def _notify_scope(message: str):
+        try:
+            from flet import context
+
+            from core.notify import show_snack
+
+            show_snack(context.page, message)
+        except Exception:
+            pass
 
     # Build filtered list
     query = debounced_query.strip().lower()
@@ -227,12 +272,21 @@ def SitesScreen() -> Control:
             value=search_query,
             hint_text="Search networks...",
             prefix_icon=ft.Icons.SEARCH_ROUNDED,
-            border_radius=tokens.RADIUS_MD,
-            border_width=1,
-            border_color=ft.Colors.with_opacity(
-                tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
-            ),
-            focused_border_color=ft.Colors.PRIMARY,
+            border={
+                ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                    side=ft.BorderSide(
+                        width=1,
+                        color=ft.Colors.with_opacity(
+                            tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
+                        ),
+                    ),
+                    border_radius=tokens.RADIUS_MD,
+                ),
+                ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                    side=ft.BorderSide(width=1, color=ft.Colors.PRIMARY),
+                    border_radius=tokens.RADIUS_MD,
+                ),
+            },
             bgcolor=ft.Colors.SURFACE,
             filled=True,
             on_change=lambda e: set_search_query(e.control.value),
@@ -266,6 +320,14 @@ def SitesScreen() -> Control:
                     "Popular Only",
                     on_click=lambda e: _select_popular(),
                     style=ft.ButtonStyle(color=ft.Colors.PRIMARY),
+                ),
+                ft.TextButton(
+                    "Scope to Filter"
+                    if selected_tag != "all"
+                    else "Scope: All Networks",
+                    on_click=lambda e: _scope_to_filter(),
+                    style=ft.ButtonStyle(color=ft.Colors.PRIMARY),
+                    tooltip="Scan only the networks shown by the current category filter",
                 ),
             ],
             alignment=ft.MainAxisAlignment.START,

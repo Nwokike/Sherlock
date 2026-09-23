@@ -12,7 +12,6 @@ from services.graph_service import (
 )
 from services.report_service import generate_pdf_dossier, generate_xmind_case
 
-
 # ── Geographic Intelligence (pycountry) ───────────────────────────────
 
 
@@ -111,7 +110,7 @@ def test_generate_pdf_dossier():
         not_found=not_found,
         errors=[],
         enrichments=enrichments,
-        total_sites=3302,
+        total_sites=5203,
         checked_sites=3,
     )
     assert pdf is not None

@@ -22,6 +22,7 @@ from typing import Any
 
 import flet as ft
 
+from components.update_dialog import show_update_dialog
 from core.constants import (
     APP_NAME,
     APP_VERSION,
@@ -33,17 +34,22 @@ from core.constants import (
     MSG_OFFLINE,
     MSG_ONLINE,
     MSG_SEARCH_OFFLINE,
+    STORAGE_BIOMETRIC_LOCK,
     STORAGE_CACHED_RESULTS,
     STORAGE_CACHED_SITES,
+    STORAGE_CHECK_DOMAINS,
+    STORAGE_COOKIES_PATH,
+    STORAGE_DB_UNHEALTHY,
+    STORAGE_DEEP_ENRICH,
     STORAGE_DNS_RESOLVER,
     STORAGE_EMAIL_CONCURRENCY,
-    STORAGE_EMAIL_METHOD_FILTER,
     STORAGE_EMAIL_ONLY_FOUND,
     STORAGE_EMAIL_TIMEOUT,
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_EXTRACT_INFO,
     STORAGE_HISTORY,
+    STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
     STORAGE_MAX_CONNECTIONS,
@@ -55,16 +61,17 @@ from core.constants import (
     STORAGE_RETRIES,
     STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
+    STORAGE_SEARCH_KEYWORDS,
     STORAGE_SEARCH_MODE,
     STORAGE_SELECTED_SITES,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
+    STORAGE_TOR_PROXY,
     STORAGE_USE_CURL_CFFI,
 )
 from core.logger_handler import in_memory_log_handler
 from core.state import state
 from core.theme import AppTheme
-from components.update_dialog import show_update_dialog
 from services.ad_service import AdService
 from services.email_service import EmailResult, EmailSearchProgress, EmailService
 from services.enrich_service import EnrichService
@@ -226,12 +233,9 @@ class AppController:
         self.page.title = APP_NAME
         self.page.padding = 0
         self.page.spacing = 0
-        self.page.fonts = {
-            "Outfit": (
-                "https://fonts.googleapis.com/css2?"
-                "family=Outfit:wght@300;400;500;600;700&display=swap"
-            )
-        }
+        # Bundled variable font (src/assets/fonts/Outfit-Variable.ttf) —
+        # offline first paint, no Google-Fonts fetch on launch.
+        self.page.fonts = {"Outfit": "fonts/Outfit-Variable.ttf"}
         self.page.theme = AppTheme.get_light_theme()
         self.page.dark_theme = AppTheme.get_dark_theme()
         self.page.theme.font_family = "Outfit"
@@ -303,6 +307,7 @@ class AppController:
             open_update_dialog=self.open_update_dialog,
             set_onboarding_done=self.set_onboarding_done,
             open_cached_result=self.open_cached_result,
+            run_db_health=self.run_db_health,
         )
         self._controller_methods = methods
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
@@ -390,9 +395,6 @@ class AppController:
             only_found_raw = await self.storage.get(STORAGE_EMAIL_ONLY_FOUND)
             if only_found_raw is not None:
                 state.email_only_found = only_found_raw == "true"
-            method_filter_raw = await self.storage.get(STORAGE_EMAIL_METHOD_FILTER)
-            if method_filter_raw in ("all", "register", "login", "recovery"):
-                state.email_method_filter = method_filter_raw
             proxy_raw = await self.storage.get(STORAGE_PROXY_URL)
             if proxy_raw:
                 state.proxy_url = proxy_raw
@@ -412,6 +414,36 @@ class AppController:
             scan_depth_raw = await self.storage.get(STORAGE_SCAN_DEPTH)
             if scan_depth_raw in ("all", "1000", "500"):
                 state.scan_depth = scan_depth_raw
+
+            kw_raw = await self.storage.get(STORAGE_SEARCH_KEYWORDS)
+            if kw_raw is not None:
+                state.search_keywords = kw_raw
+            deep_raw = await self.storage.get(STORAGE_DEEP_ENRICH)
+            if deep_raw is not None:
+                state.deep_enrich = deep_raw == "true"
+            unhealthy_raw = await self.storage.get(STORAGE_DB_UNHEALTHY)
+            if unhealthy_raw:
+                try:
+                    loaded_flags = json.loads(unhealthy_raw)
+                    if isinstance(loaded_flags, list):
+                        state.unhealthy_sites = [str(n) for n in loaded_flags]
+                except Exception:
+                    logger.warning("DB health flags unreadable; ignoring")
+            cookies_raw = await self.storage.get(STORAGE_COOKIES_PATH)
+            if cookies_raw:
+                state.cookies_path = cookies_raw
+            tor_raw = await self.storage.get(STORAGE_TOR_PROXY)
+            if tor_raw:
+                state.tor_proxy = tor_raw
+            i2p_raw = await self.storage.get(STORAGE_I2P_PROXY)
+            if i2p_raw:
+                state.i2p_proxy = i2p_raw
+            cd_raw = await self.storage.get(STORAGE_CHECK_DOMAINS)
+            if cd_raw is not None:
+                state.check_domains = cd_raw == "true"
+            bio_raw = await self.storage.get(STORAGE_BIOMETRIC_LOCK)
+            if bio_raw is not None:
+                state.biometric_lock = bio_raw == "true"
 
             rec_raw = await self.storage.get(STORAGE_RECURSIVE_SEARCH)
             if rec_raw is not None:
@@ -856,8 +888,8 @@ class AppController:
                 timeout=state.email_timeout,
                 skip_password_recovery=state.no_password_recovery,
                 concurrency=getattr(state, "email_concurrency", 15),
-                method_filter=getattr(state, "email_method_filter", "all"),
                 use_curl_cffi=getattr(state, "use_curl_cffi", True),
+                proxy=getattr(state, "proxy_url", "") or "",
             )
             # If this scan was cancelled or superseded by another search, do not clobber state
             if (
@@ -884,27 +916,26 @@ class AppController:
             )
 
             # Convert to result list for state
-            all_results = []
-            for r in (
-                result.found
-                + result.not_found
-                + result.rate_limited
-                + result.unavailable
-            ):
-                all_results.append(
-                    {
-                        "name": r.name,
-                        "domain": r.domain,
-                        "method": r.method,
-                        "exists": r.exists,
-                        "rateLimit": r.rate_limit,
-                        "unavailable": r.unavailable,
-                        "frequent_rate_limit": r.frequent_rate_limit,
-                        "emailrecovery": r.email_recovery,
-                        "phoneNumber": r.phone_number,
-                        "others": r.others,
-                    }
+            all_results = [
+                {
+                    "name": r.name,
+                    "domain": r.domain,
+                    "method": r.method,
+                    "exists": r.exists,
+                    "rateLimit": r.rate_limit,
+                    "unavailable": r.unavailable,
+                    "frequent_rate_limit": r.frequent_rate_limit,
+                    "emailrecovery": r.email_recovery,
+                    "phoneNumber": r.phone_number,
+                    "others": r.others,
+                }
+                for r in (
+                    result.found
+                    + result.not_found
+                    + result.rate_limited
+                    + result.unavailable
                 )
+            ]
             state.email_results[:] = all_results
             state.email_results_address = email.strip()
             state.email_found_count = len(result.found)
@@ -913,11 +944,32 @@ class AppController:
             state.email_unavailable_count = len(result.unavailable)
             state.email_total_modules = result.total_modules
 
-            # Email enrichment via socid-extractor is intentionally skipped:
-            # holehe `r.domain` is a bare domain (e.g. "twitter.com"), not a
-            # profile URL. Fetching https://{domain}/ would hit the homepage and
-            # never match a socid scheme — wasted batch at 0% hit rate. Keep
-            # enrichment only for username mode where we have real profile URLs.
+            # URL-based socid enrichment is intentionally skipped for email
+            # results: v2's Result.url is the platform homepage, not a
+            # profile URL — fetching it would never match a socid scheme
+            # (0% hit rate). Rich profile data instead arrives IN-BAND via
+            # Result.extra/media, mapped into EmailResult.others and
+            # rendered from there. Keep URL-based enrichment for username
+            # mode where we have real profile URLs.
+
+            # P2-2: warm the avatar cache for v2 media producers (gravatar,
+            # github, etsy, duolingo) so email cards get persistent
+            # on-device images. Bounded + fire-and-forget by design.
+            from services.cache_service import schedule_avatar_download
+
+            warmed = 0
+            for rrow in all_results:
+                if not rrow.get("exists"):
+                    continue
+                media = (rrow.get("others") or {}).get("media") or {}
+                avatar = media.get("avatar")
+                if isinstance(avatar, str) and avatar.startswith("http"):
+                    asyncio.create_task(schedule_avatar_download(avatar))
+                    warmed += 1
+                if warmed >= 50:
+                    break
+            if warmed:
+                logger.info("Warmed %d email avatar cache slot(s)", warmed)
 
             await self._save_to_history(
                 email.strip(),
@@ -1031,6 +1083,11 @@ class AppController:
                     context=r.get("context"),
                     tags=r.get("tags", []),
                     ids_data=r.get("ids_data"),
+                    error_type=r.get("error_type"),
+                    error_hint=r.get("error_hint", ""),
+                    protection=r.get("protection", []),
+                    badge=r.get("badge", ""),
+                    keyword_hit=r.get("keyword_hit", False),
                 )
                 for r in snapshot.get("found", [])
             ]
@@ -1041,6 +1098,11 @@ class AppController:
                     url_user=r.get("url_user", ""),
                     status=r.get("status", "Available"),
                     http_status="",
+                    error_type=r.get("error_type"),
+                    error_hint=r.get("error_hint", ""),
+                    protection=r.get("protection", []),
+                    badge=r.get("badge", ""),
+                    keyword_hit=r.get("keyword_hit", False),
                 )
                 for r in snapshot.get("not_found", [])
             ]
@@ -1052,6 +1114,11 @@ class AppController:
                     status=r.get("status", "Error"),
                     http_status="",
                     context=r.get("context"),
+                    error_type=r.get("error_type"),
+                    error_hint=r.get("error_hint", ""),
+                    protection=r.get("protection", []),
+                    badge=r.get("badge", ""),
+                    keyword_hit=r.get("keyword_hit", False),
                 )
                 for r in snapshot.get("errors", [])
             ]
@@ -1086,7 +1153,7 @@ class AppController:
             state.current_username = query.strip()
             state.search_mode = MODE_EMAIL
             state.email_found_count = found_count
-            state.email_total_modules = snapshot.get("total", len(all_email) or 121)
+            state.email_total_modules = snapshot.get("total", len(all_email) or 181)
             state.search_progress = EmailSearchProgress(
                 email=query.strip(),
                 total_modules=state.email_total_modules,
@@ -1138,6 +1205,11 @@ class AppController:
                             "query_time": getattr(r, "query_time", None),
                             "tags": getattr(r, "tags", []),
                             "ids_data": getattr(r, "ids_data", None),
+                            "error_type": getattr(r, "error_type", None),
+                            "error_hint": getattr(r, "error_hint", ""),
+                            "protection": getattr(r, "protection", []),
+                            "badge": getattr(r, "badge", ""),
+                            "keyword_hit": getattr(r, "keyword_hit", False),
                         }
                         for r in getattr(prog, "found", [])
                     ],
@@ -1148,6 +1220,11 @@ class AppController:
                             "url_user": getattr(r, "url_user", None)
                             or getattr(r, "url_main", ""),
                             "status": getattr(r, "status", "Available"),
+                            "error_type": getattr(r, "error_type", None),
+                            "error_hint": getattr(r, "error_hint", ""),
+                            "protection": getattr(r, "protection", []),
+                            "badge": getattr(r, "badge", ""),
+                            "keyword_hit": getattr(r, "keyword_hit", False),
                         }
                         for r in getattr(prog, "not_found", [])
                     ],
@@ -1159,6 +1236,11 @@ class AppController:
                             or getattr(r, "url_main", ""),
                             "status": getattr(r, "status", "Error"),
                             "context": getattr(r, "context", None),
+                            "error_type": getattr(r, "error_type", None),
+                            "error_hint": getattr(r, "error_hint", ""),
+                            "protection": getattr(r, "protection", []),
+                            "badge": getattr(r, "badge", ""),
+                            "keyword_hit": getattr(r, "keyword_hit", False),
                         }
                         for r in getattr(prog, "errors", [])
                     ],
@@ -1208,6 +1290,34 @@ class AppController:
             logger.warning("Failed to save history: %s", e)
 
     # --- Updates & Announcements --------------------------------------
+
+    async def run_db_health(self) -> dict:
+        """Sampled DB-health check (P3-6): probe, persist flags, refresh.
+
+        Flags replace (not accumulate): a fully healthy run clears the
+        exclusion list. Results are shown, never silent.
+        """
+        if not self.sherlock_service:
+            return {"error": "engine unavailable"}
+        summary = await self.sherlock_service.run_db_health(sample_size=25)
+        if summary.get("error"):
+            self._show_snack(f"DB health failed: {summary['error']}", duration=10000)
+            return summary
+        state.unhealthy_sites = list(summary.get("unhealthy") or [])
+        if self.storage:
+            try:
+                await self.storage.set(
+                    STORAGE_DB_UNHEALTHY, json.dumps(state.unhealthy_sites)
+                )
+            except Exception as exc:
+                logger.warning("Failed to persist DB health flags: %s", exc)
+        if self._controller_methods and self._controller_methods.refresh_sites:
+            await self._controller_methods.refresh_sites()
+        label = f"DB health: {summary['ok']}/{summary['sample']} OK"
+        if summary.get("flagged"):
+            label += f" · {summary['flagged']} flagged (excluded from scans)"
+        self._show_snack(label, duration=8000)
+        return summary
 
     def open_update_dialog(self) -> None:
         """Open update or announcement dialog using data loaded from version.json."""
@@ -1316,6 +1426,11 @@ async def main(page: ft.Page) -> None:
         with contextlib.suppress(Exception):
             if controller.ad_service:
                 await controller.ad_service.close()
+        # Pooled httpx client — logs its own failures at WARNING
+        # (no suppression inside close_client).
+        from services.http_client import close_client
+
+        await close_client()
 
     page.on_close = _on_close
 

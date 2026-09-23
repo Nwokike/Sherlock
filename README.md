@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  Dual-mode OSINT — hunt usernames across 3,300+ networks and emails across 120+ platforms simultaneously
+  Dual-mode OSINT — hunt usernames across 5,200+ networks and emails across 180+ platforms simultaneously
 </p>
 
 <p align="center">
@@ -40,14 +40,14 @@
 
 | Capability | Description |
 | :--- | :--- |
-| **3,300+ Username Networks** | Username OSINT via the Maigret engine — GitHub, Instagram, Discord, Telegram, SoundCloud, and thousands more across international, regional, and specialized networks. Recursive search expands from discovered IDs. |
-| **120+ Email Platforms** | Email OSINT via `holehe` — register/login/recovery checks with masked recovery email + phone hints, method badges, and honest Unavailable/Rate-Limited separation. |
+| **5,200+ Username Networks** | Username OSINT via the Maigret engine — GitHub, Instagram, Discord, Telegram, SoundCloud, and thousands more across international, regional, and specialized networks. Recursive search expands from discovered IDs. |
+| **180+ Email Platforms** | Email OSINT via `holehe` — register/login/recovery checks with masked recovery email + phone hints, method badges, and honest Unavailable/Rate-Limited separation. |
 | **Stealth TLS Email Checks** | curl-cffi Chrome 124 JA3/TLS fingerprinting bypasses WAF 403 blocks during email scans. |
 | **Profile Enrichment** | `socid-extractor` (164 schemes) — avatar, bio, followers, location, company, verified, personal links. Basic (fast) / Full (API mutations) modes. |
 | **Intelligence Dossiers** | Gold PDF Dossier, XMind Mind Map (.xmind), Identity Network Analysis, JSON, CSV, and TXT exports — all generated on-device. |
 | **6-Layer On-Device Cache** | Compiled database pickle (2.88× faster cold start), avatar images, report fingerprints, geo lookups, inverted tag indices, and TTL DNS cache. |
 | **Fast Offline Scans** | Local-first database — scan instantly without an initial download. |
-| **Selective Target Scope** | Scan depth (All 3,300+ / Top 1,000 / Top 500), custom manifest support, and per-category network browsing. |
+| **Selective Target Scope** | Scan depth (All 5,200+ / Top 1,000 / Top 500), custom manifest support, and per-category network browsing. |
 | **History + Typeahead** | Local search history with `Dismissible` swipe-to-delete and `SearchBar` typeahead suggestions. |
 
 ---
@@ -60,8 +60,8 @@
     <td width="50%"><img src="screenshots/home_email_search.png" width="100%" alt="Home - Email Search" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Username search across 3,300+ social networks with quick scan options.</em></td>
-    <td align="center"><em>Email lookup across 120+ platforms with password recovery checks.</em></td>
+    <td align="center"><em>Username search across 5,200+ social networks with quick scan options.</em></td>
+    <td align="center"><em>Email lookup across 180+ platforms with password recovery checks.</em></td>
   </tr>
 </table>
 
@@ -103,7 +103,7 @@
 ## Features
 
 - **Gold-Branded Design System** — Solarized Light (Pure White) and Monokai themes aligned to the bronze-gold detective logo. `ScrollbarTheme` / `ChipTheme` / `TabBarTheme` / `CardTheme` / `PageTransitionsTheme` unified in `AppTheme`.
-- **Dual-Mode OSINT** — Username (Maigret, 3,300+ networks) + Email (holehe) with material `SegmentedButton` pill and type-ahead `SearchBar`.
+- **Dual-Mode OSINT** — Username (Maigret, 5,200+ networks) + Email (holehe-v2) with material `SegmentedButton` pill and type-ahead `SearchBar`.
 - **Profile Enrichment** — `socid-extractor` post-scan enrichment: avatar guard (`https` only), bio, followers, location, company, verified badge, personal link — Basic/Full modes via `mutate_url` API schemes.
 - **Live Text-Search Filters** — Instantly filter thousands of results as the scanner runs. `ListView(build_controls_on_demand=True)` virtualization + `SelectionArea` long-press. Results sort A–Z by platform.
 - **Tap-to-Open + Share + Haptic** — Tap result → browser; copy/share via `Clipboard` + `Share`; `HapticFeedback` on search/copy/share.
@@ -124,7 +124,7 @@
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
 | **Frontend** | Flet 0.86.5 (Flutter 3.44) on Python 3.14 | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
-| **Scan Core** | `maigret 0.6.5` (3,300+ sites) + `holehe 1.61` (121 modules) | Username + Email OSINT on isolated worker threads with private event loops |
+| **Scan Core** | `maigret 0.6.6` (5,200+ sites) + `holehe-v2 1.0.3` (181 validators) | Username + Email OSINT on isolated worker threads with private event loops |
 | **Stealth Email** | `curl-cffi 0.16.3` (Chrome 124 impersonation) | JA3/TLS fingerprint bypass for WAF-blocked email checks |
 | **Enrichment** | `socid-extractor 0.1.1` (164 schemes, 449 fields) | Post-scan avatar/bio/metrics via `batch_enrich` (Basic/Full `use_mutations`) |
 | **Reports** | `reportlab` + `xmind` + `networkx` | Gold PDF dossiers, XMind mind maps, identity network analytics |
@@ -149,7 +149,7 @@ graph TB
     end
 
     subgraph GLOBAL_RESOURCES ["🌐 EDGE DATABASE & PROVIDERS"]
-        Targets["🎯 3,300+ Social + 120+ Email Servers (HTTPS)"]
+        Targets["🎯 5,200+ Social + 180+ Email Servers (HTTPS)"]
     end
 
     Engine ==>|HTTPS GET/POST| Targets
@@ -166,8 +166,8 @@ To optimize execution speed, tune the sliders in Settings:
 | :--- | :---: | :---: | :--- |
 | **Top 500** | 500 ranked networks | **~30 Seconds** | Quick broad sweep of the biggest platforms |
 | **Top 1,000** | 1,000 ranked networks | **~1–2 Minutes** | Balanced coverage and speed |
-| **Email (holehe)** | 121 modules | **10–30 s** | Use concurrency Slider 4–30; higher = faster but more rate-limits |
-| **Full Sweep** | 3,300+ Sites | **2–4 Minutes** | Deep exhaustive OSINT reports and full footprint audits |
+| **Email (holehe-v2)** | 181 validators | **10–30 s** | Use concurrency Slider 4–30; higher = faster but more rate-limits |
+| **Full Sweep** | 5,200+ Sites | **2–4 Minutes** | Deep exhaustive OSINT reports and full footprint audits |
 
 ---
 
@@ -178,7 +178,33 @@ Sherlock is designed with a strict **Privacy-First** philosophy:
 1. **Local Connections**: All network scans are sent directly from your own device IP address. No middleman, proxy, or server tracking — or via your configured `socks5://` / `http://` proxy if set.
 2. **Zero Logging**: We do not log, track, or share your search history, checked usernames, or discovered profiles.
 3. **Sandbox Directories**: `.flet/storage/data|cache|temp` via `FLET_APP_STORAGE_*` — the process CWD is `storage/data` during `flet run`, matching packaged app behavior (see `.flet/README.md`).
-4. **Data Sovereignty**: Generated reports (PDF, .xmind, CSV, JSON, TXT) are saved wherever you choose via the system file picker — nothing leaves your device.
+4. **Data Sovereignty**: Generated reports (PDF, .xmind, CSV, JSON, TXT, Markdown, HTML) are saved wherever you choose via the system file picker — nothing leaves your device.
+
+---
+
+## Development
+
+```
+uv sync                                  # install venv (dev group included)
+uv run pytest -m "not live"              # test suite (live-network tests opt-in via -m live)
+uv run ruff check . --statistics         # lint (12 rule families)
+uv run flet run -v                       # run desktop app (-vv = debug logs)
+FLET_LOG_LEVEL=debug uv run flet run     # same without flags
+uv run flet clean                        # delete build/ (Flutter shell + staged python)
+uv run flet doctor                       # flet/python/env versions
+uv run flet build apk --python-version 3.14 --split-per-abi -v   # Android (matches CI)
+```
+
+Notes for contributors:
+- Warnings policy: warnings raised by *our* modules are hard errors in pytest;
+  third-party warnings print every run. **Nothing is ever ignored**
+  (`filterwarnings` in pyproject.toml).
+- CI gates every build: version-consistency, ruff, offline tests, artifact size
+  report, and APK prune verification (`.github/workflows/build-all.yml`).
+- `version.json` (in-app update notes) may be held back from the repo until the
+  Play Store upload ships — CI prints a NOTICE for that state and only fails on
+  drift that would break users.
+- Dependency deep-study + utilization backlog: `docs/dependency-study.md`.
 
 ---
 

@@ -23,7 +23,6 @@ from core.constants import (
     MODE_USERNAME,
     MSG_OFFLINE,
     MSG_SEARCH_OFFLINE,
-    STORAGE_EMAIL_METHOD_FILTER,
     STORAGE_EMAIL_TIMEOUT,
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
@@ -54,7 +53,7 @@ logger = logging.getLogger("HomeScreen")
 _FEATURES_USERNAME = [
     {
         "icon": ft.Icons.PERSON_SEARCH_ROUNDED,
-        "title": "Hunt Across 3,300+ Networks",
+        "title": "Hunt Across 5,200+ Networks",
         "desc": "Scan GitHub, X, Instagram, TikTok, Reddit, Spotify, and more — simultaneously.",
         "color": AppColors.PRIMARY,
     },
@@ -95,7 +94,7 @@ _FEATURES_EMAIL = [
 
 _STEPS_USERNAME = [
     ("1", "Enter", "Type a username to hunt across social networks"),
-    ("2", "Scan", "Sherlock checks 3,300+ platforms simultaneously"),
+    ("2", "Scan", "Sherlock checks 5,200+ platforms simultaneously"),
     ("3", "Done", "View results, export reports, or open profiles in browser"),
 ]
 
@@ -453,28 +452,6 @@ def HomeScreen(banner: Control | None = None) -> Control:
 
         asyncio.create_task(_save())
 
-    def _cycle_email_method_filter(e):
-        methods = ["all", "register", "login", "recovery"]
-        curr = state.email_method_filter or "all"
-        next_val = (
-            methods[(methods.index(curr) + 1) % len(methods)]
-            if curr in methods
-            else "all"
-        )
-        state.email_method_filter = next_val
-        state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(STORAGE_EMAIL_METHOD_FILTER, next_val)
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
-
     def _cycle_email_timeout(e):
         timeouts = [5, 10, 15, 30]
         curr = state.email_timeout
@@ -651,21 +628,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
 
     # Mode-aware category / quick settings chips
     if is_email_mode:
-        method_labels = {
-            "all": "Method: All",
-            "register": "Method: Register",
-            "login": "Method: Login",
-            "recovery": "Method: Recovery",
-        }
-        curr_method = getattr(state, "email_method_filter", "all")
         chips = [
-            _category_chip(
-                icon=ft.Icons.CATEGORY_ROUNDED,
-                label=method_labels.get(curr_method, "Method: All"),
-                color=AppColors.PRIMARY,
-                is_active=curr_method != "all",
-                on_click=_cycle_email_method_filter,
-            ),
             _category_chip(
                 icon=ft.Icons.TIMER_OUTLINED,
                 label=f"{state.email_timeout}s Timeout",
@@ -688,7 +651,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
             ),
             _category_chip(
                 icon=ft.Icons.SECURITY_ROUNDED,
-                label="Stealth: Chrome 124"
+                label="Stealth: Chrome 131"
                 if getattr(state, "use_curl_cffi", True)
                 else "Stealth: Standard",
                 color=AppColors.PRIMARY_LIGHT
@@ -700,7 +663,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
         ]
     else:
         depth_labels = {
-            "all": "Scope: All 3.3k",
+            "all": "Scope: All 5.2k",
             "1000": "Scope: Top 1k",
             "500": "Scope: Top 500",
         }
@@ -708,7 +671,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
         chips = [
             _category_chip(
                 icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED,
-                label=depth_labels.get(curr_depth, "Scope: All 3.3k"),
+                label=depth_labels.get(curr_depth, "Scope: All 5.2k"),
                 color=AppColors.PRIMARY,
                 is_active=curr_depth != "all",
                 on_click=_cycle_scan_depth,

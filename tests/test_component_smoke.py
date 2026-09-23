@@ -4,8 +4,8 @@ Full rendering requires a renderer context (tested via manual smoke).
 These ensure the decorator was applied correctly.
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(
@@ -15,13 +15,13 @@ sys.path.insert(
     ),
 )
 
-from screens.home_screen import HomeScreen
-from screens.results_screen import ResultsScreen
+from app_shell import AppShell
 from screens.history_screen import HistoryScreen
+from screens.home_screen import HomeScreen
+from screens.onboarding_screen import OnboardingScreen
+from screens.results_screen import ResultsScreen
 from screens.settings_screen import SettingsScreen
 from screens.sites_screen import SitesScreen
-from screens.onboarding_screen import OnboardingScreen
-from app_shell import AppShell
 
 
 class TestComponentDeco:

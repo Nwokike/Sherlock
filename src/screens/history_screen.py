@@ -34,7 +34,24 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         page = context.page
     except Exception:
         page = None
-    history = state.history if state.history else []
+    locked = bool(getattr(state, "biometric_lock", False)) and not state.history_unlocked
+    history = [] if locked else (state.history if state.history else [])
+
+    async def _unlock_history():
+        from services.biometric_service import authenticate
+
+        ok = await authenticate("Unlock your search history")
+        if ok:
+            state.history_unlocked = True
+            state.progress_version += 1
+            if page:
+                show_snack(page, "History unlocked", bgcolor=AppColors.SUCCESS)
+        elif page:
+            show_snack(
+                page,
+                "Biometric unlock failed or was cancelled",
+                bgcolor=AppColors.ERROR,
+            )
 
     # Hydrate history on mount if empty
     def _hydrate():
@@ -59,12 +76,22 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
     ft.use_effect(_hydrate, [])
 
+    # Portal-managed clear-confirm dialog (flet 1.0 use_dialog, P1-2).
+    pending_dialog, set_pending_dialog = ft.use_state(None)
+    try:
+        # use_dialog touches ft.context.page, which raises outside a live
+        # flet app (unit-test harness). The hook is still invoked every
+        # render so hook ordering stays stable; in-app there is no throw.
+        ft.use_dialog(pending_dialog)
+    except RuntimeError:
+        pass
+
     def _on_clear_all():
         if not page:
             return
 
         def _confirm_clear(e):
-            page.pop_dialog()
+            set_pending_dialog(None)
 
             async def _clear():
                 try:
@@ -103,7 +130,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                 size=tokens.FONT_SM,
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                ft.TextButton("Cancel", on_click=lambda e: set_pending_dialog(None)),
                 ft.FilledButton(
                     "Clear All",
                     style=ft.ButtonStyle(
@@ -114,7 +141,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        page.show_dialog(dlg)
+        set_pending_dialog(dlg)
 
     def _on_open_history(entry: dict):
         query = entry.get("query") or entry.get("username", "")
@@ -141,7 +168,13 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
         asyncio.create_task(_search())
 
-    if not history:
+    if locked:
+        body = EmptyState(
+            title="History locked",
+            message="Biometric unlock is required to view past searches.",
+            icon=ft.Icons.LOCK_ROUNDED,
+        )
+    elif not history:
         body = EmptyState(
             title="No search history",
             message="Your search history will appear here.",
@@ -286,8 +319,10 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                     try:
                         state.history.remove(ent)
                         import asyncio as _asyncio
-                        from services.storage_service import StorageService
+
                         from flet import context
+
+                        from services.storage_service import StorageService
 
                         s = StorageService(context.page)
                         all_entries = list(reversed(state.history))
@@ -319,7 +354,15 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         )
 
     header_actions = []
-    if history:
+    if locked:
+        header_actions.append(
+            ft.FilledButton(
+                "Unlock",
+                icon=ft.Icons.LOCK_OPEN_ROUNDED,
+                on_click=lambda e: asyncio.create_task(_unlock_history()),
+            )
+        )
+    elif history:
         header_actions.append(
             ft.IconButton(
                 icon=ft.Icons.DELETE_SWEEP_OUTLINED,

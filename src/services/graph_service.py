@@ -228,11 +228,55 @@ def export_node_link_json(G: Any) -> dict | None:
 def get_graph_analytics(G: Any) -> dict:
     """Compute centralities, clusters, and graph metrics."""
     if not _NETWORKX_AVAILABLE or G is None or len(G.nodes) == 0:
-        return {"nodes": 0, "edges": 0, "components": 0, "density": 0.0}
+        return {
+            "nodes": 0,
+            "edges": 0,
+            "components": 0,
+            "density": 0.0,
+            "communities": [],
+            "bridge_nodes": [],
+        }
 
     components = list(nx.connected_components(G))
     degree_cent = nx.degree_centrality(G)
     top_canonical = sorted(degree_cent.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # P4-7: evidence communities (greedy modularity — pure Python, uses our
+    # edge weights) + bridge nodes (betweenness, capped for O(nm) cost).
+    communities = []
+    try:
+        from networkx.algorithms.community import greedy_modularity_communities
+
+        comms = list(greedy_modularity_communities(G))
+        communities = sorted(
+            (
+                {
+                    "size": len(c),
+                    "members": [G.nodes[m].get("label", m) for m in list(c)[:5]],
+                }
+                for c in comms
+            ),
+            key=lambda x: x["size"],
+            reverse=True,
+        )[:8]
+    except Exception as exc:
+        logger.debug("Community detection skipped: %s", exc)
+
+    bridges = []
+    if len(G.nodes) <= 150:
+        try:
+            bc = nx.betweenness_centrality(G)
+            bridges = sorted(
+                (
+                    {"label": G.nodes[n].get("label", n), "score": round(s, 3)}
+                    for n, s in bc.items()
+                    if s > 0
+                ),
+                key=lambda x: x["score"],
+                reverse=True,
+            )[:3]
+        except Exception as exc:
+            logger.debug("Betweenness skipped: %s", exc)
 
     return {
         "nodes": len(G.nodes),
@@ -240,6 +284,8 @@ def get_graph_analytics(G: Any) -> dict:
         "components": len(components),
         "component_sizes": [len(c) for c in components],
         "density": round(nx.density(G), 3),
+        "communities": communities,
+        "bridge_nodes": bridges,
         "top_canonical_nodes": [
             {
                 "id": node_id,
@@ -249,3 +295,73 @@ def get_graph_analytics(G: Any) -> dict:
             for node_id, score in top_canonical
         ],
     }
+
+
+def export_cypher(G: Any) -> str:
+    """Neo4j-style Cypher statements for the identity graph (P3-5)."""
+    if not _NETWORKX_AVAILABLE or G is None:
+        return ""
+
+    def esc(value) -> str:
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+    lines = ["// Sherlock identity graph — Cypher export"]
+    for n, d in G.nodes(data=True):
+        kind = str(d.get("kind", "node"))
+        label = esc(d.get("label", n))
+        lines.append(f"MERGE (`{kind}`:Entity {{id: '{esc(n)}', label: '{label}'}});")
+    for u, v, d in G.edges(data=True):
+        reason = esc(d.get("reason", "linked"))
+        lines.append(
+            f"MATCH (a {{id: '{esc(u)}'}}), (b {{id: '{esc(v)}'}}) "
+            f"MERGE (a)-[:LINK {{reason: '{reason}'}}]->(b);"
+        )
+    logger.info(
+        "Cypher export: %d nodes, %d edges", len(G.nodes), len(G.edges)
+    )
+    return "\n".join(lines) + "\n"
+
+
+def export_pyvis_html(G: Any, out_path: Any) -> Any:
+    """Write a self-contained interactive graph (P4-6, pyvis inline CDN).
+
+    Returns the written Path, or None (logged) on any failure — the caller
+    surfaces a visible error per the owner's no-swallowing rule.
+    """
+    if not _NETWORKX_AVAILABLE or G is None or len(G.nodes) == 0:
+        return None
+    try:
+        from pyvis.network import Network
+    except Exception as exc:
+        logger.warning("pyvis unavailable for interactive viewer: %s", exc)
+        return None
+    try:
+        net = Network(
+            height="640px",
+            width="100%",
+            bgcolor="#1E1E2E",
+            font_color="#EEEEEE",
+            notebook=False,
+            directed=False,
+            cdn_resources="in_line",
+        )
+        for n, d in G.nodes(data=True):
+            net.add_node(
+                n,
+                label=str(d.get("label", n)),
+                title=str(d.get("title", "")),
+                color=str(d.get("color", "#D4AF37")),
+                size=int(d.get("size", 12)),
+            )
+        for u, v, d in G.edges(data=True):
+            net.add_edge(u, v, title=str(d.get("reason", "linked")))
+        from pathlib import Path
+
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(net.generate_html(notebook=False), encoding="utf-8")
+        logger.info("Interactive graph written: %s", out)
+        return out
+    except Exception as exc:
+        logger.warning("pyvis graph export failed: %s", exc)
+        return None

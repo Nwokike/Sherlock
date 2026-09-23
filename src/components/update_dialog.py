@@ -45,11 +45,13 @@ def _launch(page: ft.Page, url: str):
 
 
 def _pop_and_launch(page: ft.Page, url: str):
-    """Dismiss the dialog, then hand the URL to the browser/app store."""
+    """Legacy path: dismiss the dialog, then hand the URL to the browser
+    via Python. Used only when the client-side action couldn't bind
+    (no live page context — see core.actions.open_url_action)."""
     try:
         page.pop_dialog()
     except Exception:
-        logger.exception("Suppressed exception")
+        logger.exception("Failed to close update dialog")
     _launch(page, url)
 
 
@@ -80,28 +82,47 @@ def _build_update_buttons(page: ft.Page, data: dict) -> list[ft.Control]:
     buttons: list[ft.Control] = []
     is_android = page.platform == ft.PagePlatform.ANDROID
     github_url = data.get("github_url", GITHUB_RELEASES_URL)
+    from core.actions import open_url_action
 
     if is_android:
+        play_action = open_url_action(PLAY_STORE_URL)
         buttons.append(
             ft.FilledButton(
                 content=ft.Text("Google Play", font_family="Outfit"),
                 icon=ft.Icons.SHOP_ROUNDED,
-                on_click=lambda e, u=PLAY_STORE_URL: _pop_and_launch(page, u),
+                action=play_action,
+                on_click=(
+                    (lambda e: page.pop_dialog())
+                    if play_action
+                    else lambda e, u=PLAY_STORE_URL: _pop_and_launch(page, u)
+                ),
             )
         )
+        apk_action = open_url_action(github_url)
         buttons.append(
             ft.OutlinedButton(
                 content=ft.Text("Direct APK (GitHub)", font_family="Outfit"),
                 icon=ft.Icons.DOWNLOAD_ROUNDED,
-                on_click=lambda e, u=github_url: _pop_and_launch(page, u),
+                action=apk_action,
+                on_click=(
+                    (lambda e: page.pop_dialog())
+                    if apk_action
+                    else lambda e, u=github_url: _pop_and_launch(page, u)
+                ),
             )
         )
     else:
+        gh_action = open_url_action(github_url)
         buttons.append(
             ft.FilledButton(
                 content=ft.Text("Download from GitHub", font_family="Outfit"),
                 icon=ft.Icons.DOWNLOAD_ROUNDED,
-                on_click=lambda e, u=github_url: _pop_and_launch(page, u),
+                action=gh_action,
+                on_click=(
+                    (lambda e: page.pop_dialog())
+                    if gh_action
+                    else lambda e, u=github_url: _pop_and_launch(page, u)
+                ),
             )
         )
     if not data.get("mandatory"):

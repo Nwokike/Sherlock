@@ -33,6 +33,15 @@ def _noop_sync() -> None:
     """No-op sync default."""
 
 
+def _noop_dialog(_dialog) -> None:
+    """No-op open_sheet(dialog) default (use_dialog portal)."""
+
+
+async def _noop_health() -> dict:
+    """No-op run_db_health() default."""
+    return {}
+
+
 @dataclass
 class ControllerMethods:
     """Subset of AppController methods exposed to the component tree.
@@ -61,6 +70,11 @@ class ControllerMethods:
     show_history: Callable[[], None] = _noop_sync
     go_home: Callable[[], None] = _noop_sync
     back: Callable[[], None] = _noop_sync
+    # use_dialog portal — AppShell owns the single overlay dialog state
+    # (identity-preserving across scan re-renders, flet 1.0 P1-2).
+    open_sheet: Callable[[object], None] = _noop_dialog
+    close_dialog: Callable[[], None] = _noop_sync
+    run_db_health: Callable[[], Awaitable[dict]] = _noop_health
 
 
 ControllerMethodsCtx = ft.create_context(ControllerMethods())

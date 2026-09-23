@@ -73,6 +73,12 @@ def ResultCard(
     # Enrichment extras (socid-extractor fields)
     enrichment: dict | None = None,
     tags: list[str] | tuple[str, ...] | None = None,
+    # Typed maigret error + protection metadata (badge bridge)
+    error_type: str | None = None,
+    error_hint: str = "",
+    protection: list[str] | tuple[str, ...] | None = None,
+    badge: str = "",
+    keyword_hit: bool = False,
 ) -> Control:
     """Build a single result tile for the results tabs."""
     icon, icon_color = _status_icon_and_color(status)
@@ -106,6 +112,9 @@ def ResultCard(
 
     # ── Extras / Enriched lines ────────────────────────────────────────
     extra_lines: list[ft.Control] = []
+    # Avatar sources: socid enrichment (username mode) or holehe-v2
+    # Result.media (email mode) — resolved before either block runs.
+    avatar_url: str | None = None
 
     # Recovery email hint
     if email_recovery:
@@ -148,8 +157,14 @@ def ResultCard(
             )
         )
 
-    # Full name & creation date from others dict
+    # Full name, creation date & holehe-v2 extras from others dict
     if others and isinstance(others, dict):
+        # v2 streams profile media in-band (avatar producers: gravatar,
+        # github, etsy, duolingo).
+        v2_media = others.get("media") or {}
+        v2_avatar = v2_media.get("avatar") or v2_media.get("thumbnail_url")
+        if isinstance(v2_avatar, str) and v2_avatar.startswith("http"):
+            avatar_url = avatar_url or v2_avatar
         if others.get("FullName"):
             extra_lines.append(
                 ft.Row(
@@ -192,13 +207,51 @@ def ResultCard(
                 )
             )
 
+        # holehe-v2 Result.extra — rich per-platform facts (gravatar bio,
+        # github login, etsy stats, atlassian SSO type, …) rendered as
+        # scannable lines; capped so one card can't flood the list.
+        v2_extra = others.get("extra") or {}
+        _V2_SKIP = {
+            "profile_url",
+            "url",
+            "contact_info",
+            "crypto_addresses",
+            "timezone",
+            "languages",
+            "pronouns",
+        }
+        v2_shown = 0
+        for k, v in v2_extra.items():
+            if k in _V2_SKIP or v in (None, "", [], {}):
+                continue
+            if isinstance(v, (list, tuple)):
+                v2_text = f"{len(v)} linked"
+            elif isinstance(v, dict):
+                continue
+            else:
+                v2_text = str(v)
+            if len(v2_text) > 90:
+                v2_text = v2_text[:87] + "…"
+            extra_lines.append(
+                ft.Text(
+                    f"{k.replace('_', ' ').title()}: {v2_text}",
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                )
+            )
+            v2_shown += 1
+            if v2_shown >= 6:
+                break
+
     # Enrichment data from socid-extractor
-    avatar_url = None
     if enrichment and isinstance(enrichment, dict):
         avatar_url = (
             enrichment.get("image")
             or enrichment.get("avatar")
             or enrichment.get("photo")
+            or avatar_url
         )
         bio = enrichment.get("bio") or enrichment.get("description")
         if bio:
@@ -316,6 +369,53 @@ def ResultCard(
             )
         )
 
+    # Typed error advice (maigret solution_of) + bot-wall protection notice
+    if status in ("WAF", "Error") and (error_hint or protection):
+        if error_hint:
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.INFO_OUTLINE_ROUNDED,
+                            size=12,
+                            color=AppColors.PRIMARY,
+                        ),
+                        ft.Text(
+                            error_hint,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            italic=True,
+                            max_lines=2,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                )
+            )
+        if protection:
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.SHIELD_ROUNDED,
+                            size=12,
+                            color=AppColors.WARNING,
+                        ),
+                        ft.Text(
+                            "Protected: " + ", ".join(str(p) for p in protection),
+                            size=tokens.FONT_XS,
+                            color=AppColors.WARNING,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+
     # Method badge for email mode
     method_badge = None
     if method:
@@ -414,6 +514,37 @@ def ResultCard(
         )
     if method_badge:
         name_row_controls.append(method_badge)
+    if keyword_hit:
+        # maigret KeywordMatchStatus.KEYWORD_FOUND — the scanned page
+        # contained one of the keywords= terms.
+        name_row_controls.append(
+            _chip(
+                "KEYWORD",
+                AppColors.PRIMARY,
+                ft.Colors.with_opacity(0.1, AppColors.PRIMARY),
+            )
+        )
+
+    # Typed-error chip shown beside the status chip on failed checks
+    # (e.g. "BOT PROTECTION", "CONNECTING FAILURE").
+    error_chip: ft.Container | None = None
+    if status in ("WAF", "Error") and error_type:
+        err_label = str(error_type).upper()
+        if len(err_label) > 18:
+            err_label = err_label[:17] + "…"
+        if badge in ("bot", "rate"):
+            err_chip_color: str = AppColors.WARNING
+        elif badge == "dead":
+            err_chip_color = ft.Colors.with_opacity(
+                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+            )
+        else:
+            err_chip_color = ft.Colors.ON_SURFACE_VARIANT
+        error_chip = _chip(
+            err_label,
+            err_chip_color,
+            ft.Colors.with_opacity(tokens.OPACITY_LIGHT, err_chip_color),
+        )
 
     detail_column = ft.Column(
         controls=[
@@ -448,6 +579,7 @@ def ResultCard(
             controls=[
                 leading_control,
                 detail_column,
+                *([error_chip] if error_chip is not None else []),
                 _chip(chip_label, chip_color, chip_bg),
             ],
             spacing=tokens.SPACE_MD,

@@ -88,21 +88,19 @@ def test_home_screen_features_copy_and_quick_chips():
 
     assert any("PDF dossiers" in t for t in texts)
     assert any("XMind mind maps" in t for t in texts)
-    assert any("Scope: All 3.3k" in t for t in texts)
+    assert any("Scope: All 5.2k" in t for t in texts)
     assert any("Adult Sites: ON" in t for t in texts)
     assert any("Recursive: OFF" in t for t in texts)
     assert any("Disabled Sites: OFF" in t for t in texts)
 
     # Email mode chips
     state.search_mode = MODE_EMAIL
-    state.email_method_filter = "all"
     state.use_curl_cffi = True
     state.no_password_recovery = False
 
     nodes_email = _mount_screen(lambda: HomeScreen())
     texts_email = _extract_texts(nodes_email)
-    assert any("Method: All" in t for t in texts_email)
-    assert any("Stealth: Chrome 124" in t for t in texts_email)
+    assert any("Stealth: Chrome 131" in t for t in texts_email)
     assert any("PW Recovery: ON" in t for t in texts_email)
 
 
@@ -135,7 +133,7 @@ def test_results_screen_stable_stat_cards():
 
     prog = SearchProgress(
         username="alice",
-        total_sites=3302,
+        total_sites=5203,
         checked_sites=2,
         found=[found_site],
         not_found=[not_found_site],
@@ -146,9 +144,9 @@ def test_results_screen_stable_stat_cards():
 
     nodes = _mount_screen(lambda: ResultsScreen())
     texts = _extract_texts(nodes)
-    # Stat cards should reflect 1 found, 1 not found, 3302 total
+    # Stat cards should reflect 1 found, 1 not found, 5203 total
     assert "1" in texts
-    assert "3302" in texts
+    assert "5203" in texts
 
 
 # ── 4. SettingsScreen Tests ────────────────────────────────────────────
@@ -164,7 +162,9 @@ def test_settings_screen_all_engine_parameters_and_segmented_enrichment():
     assert any(expected_version_str in t for t in texts)
 
     # Check Email parameters
-    assert any("Detection Method Filter" in t for t in texts)
+    # Detection-method filter was removed with old holehe — holehe-v2
+    # validators carry no method metadata.
+    assert not any("Detection Method Filter" in t for t in texts)
     assert any("Stealth TLS (curl-cffi)" in t for t in texts)
     assert any("Email Concurrency" in t for t in texts)
 
@@ -212,7 +212,7 @@ def test_history_screen_render():
             "query": "torvalds",
             "mode": MODE_USERNAME,
             "found": 42,
-            "total": 3302,
+            "total": 5203,
             "timestamp": "2026-09-01 12:00",
         },
         {
@@ -229,4 +229,4 @@ def test_history_screen_render():
 
     assert any("torvalds" in t for t in texts)
     assert any("user@example.com" in t for t in texts)
-    assert any("42/3302 matches" in t for t in texts)
+    assert any("42/5203 matches" in t for t in texts)

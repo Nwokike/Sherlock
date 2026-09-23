@@ -9,11 +9,11 @@ on:
       build_version:
         description: "Build version"
         required: true
-        default: "2.1.0"
+        default: "2.2.0"
       build_number:
         description: "Build number"
         required: true
-        default: "10"
+        default: "12"
 
 permissions:
   contents: write
@@ -22,12 +22,87 @@ env:
   PYTHONUTF8: "1"
   FLET_CLI_NO_RICH_OUTPUT: "1"
   UV_PYTHON: "3.14"
-  BUILD_VERSION: ${{ inputs.build_version || '2.1.0' }}
-  BUILD_NUMBER: ${{ inputs.build_number || '11' }}
+  BUILD_VERSION: ${{ inputs.build_version || '2.2.0' }}
+  BUILD_NUMBER: ${{ inputs.build_number || '12' }}
 
 jobs:
-  # ─── 0. Create Release Tag & Placeholder ───────────────
+  # ─── 0. Quality Gate: lint + tests + version consistency ───
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install dependencies (frozen lockfile, includes dev group)
+        run: uv sync --frozen
+      - name: Version consistency (pyproject vs workflow; version.json may be held back)
+        run: |
+          uv run python - <<'PY'
+          import json, os, sys, tomllib
+
+          py = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          felb = str(tomllib.load(open("pyproject.toml", "rb"))["tool"]["flet"]["build_number"])
+          sys.path.insert(0, "src")
+          from core.constants import APP_BUILD_NUMBER, APP_VERSION
+
+          vj = json.load(open("version.json"))
+          env_v, env_b = os.environ["BUILD_VERSION"], os.environ["BUILD_NUMBER"]
+          errs = []
+
+          # Hard: the artifact is built with the project's own version, and
+          # the APP's own constants (shown in About + update dialogs) match.
+          if env_v != py:
+              errs.append(f"BUILD_VERSION {env_v!r} != pyproject {py!r}")
+          if APP_VERSION != py:
+              errs.append(f"core.constants.APP_VERSION {APP_VERSION!r} != pyproject {py!r}")
+          if str(APP_BUILD_NUMBER) != env_b:
+              errs.append(f"APP_BUILD_NUMBER {APP_BUILD_NUMBER} != BUILD_NUMBER {env_b}")
+          if felb != env_b:
+              errs.append(f"tool.flet.build_number {felb} != BUILD_NUMBER {env_b}")
+
+          def vt(s):
+              return tuple(int(x) for x in s.split("."))
+
+          vj_v, py_v = vj["version"], py
+          if vj_v == py_v:
+              # Fully-synced state must agree on the build number too.
+              if str(vj["build_number"]) != env_b:
+                  errs.append(
+                      f"version.json synced to {vj_v} but build_number "
+                      f"{vj['build_number']} != BUILD_NUMBER {env_b}"
+                  )
+              else:
+                  print(f"versions synced: {py} (build {env_b})")
+          elif vt(vj_v) < vt(py_v):
+              # Owner release policy: version.json (in-app update notes) is
+              # held back from the repo until the Play Store upload ships —
+              # allowed state, reported loudly.
+              print(
+                  f"NOTICE: version.json held back at {vj_v} "
+                  f"(build {vj['build_number']}) while app is {py} — "
+                  "expected until Play Store upload, then commit version.json."
+              )
+          else:
+              errs.append(
+                  f"version.json {vj_v} is AHEAD of pyproject {py} — update notes "
+                  "point at an app version that doesn't exist"
+              )
+
+          if errs:
+              print("Version drift:", file=sys.stderr)
+              print("\n".join(f"  - {e}" for e in errs), file=sys.stderr)
+              sys.exit(1)
+          PY
+      - name: Lint (ruff)
+        run: uv run ruff check . --statistics
+      - name: Tests (offline only — live-network tests are marked 'live')
+        run: uv run pytest -m "not live"
+
+  # ─── 1. Create Release Tag & Placeholder ───────────────
   prepare-release:
+    needs: [quality]
     runs-on: ubuntu-latest
     outputs:
       TAG_NAME: ${{ steps.tag_info.outputs.TAG_NAME }}
@@ -72,7 +147,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -81,19 +156,26 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
-      - name: Pre-compile missing wheels (stem and holehe have no binary wheels on PyPI)
-        run: |
-          mkdir -p ${{ github.workspace }}/wheels
-          pip install wheel
-          pip wheel stem==1.8.1 holehe==1.61 --no-deps -w ${{ github.workspace }}/wheels
       - name: Build APK (split per ABI)
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
           FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          PIP_FIND_LINKS: ${{ github.workspace }}/wheels
-        run: uv run flet build apk --python-version 3.12 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+        run: uv run flet build apk --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+      - name: Size report + prune verification
+        if: always()
+        run: |
+          ls -l build/apk/*.apk
+          for a in build/apk/*.apk; do
+            echo "== $a prune check:"
+            if unzip -l "$a" | grep -qE "LC_MESSAGES|/oauthlib/|/flask/|/werkzeug/|/pytest/|/jedi/"; then
+              echo "   FLAGGED DIRS PRESENT — prune did not land"
+              unzip -l "$a" | grep -E "LC_MESSAGES|/oauthlib/|/flask/|/werkzeug/|/pytest/|/jedi/" | head -20
+            else
+              echo "   prunes verified absent"
+            fi
+          done
       - name: Upload directly to GitHub Release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v3
@@ -112,7 +194,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -121,19 +203,16 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
-      - name: Pre-compile missing wheels (stem and holehe have no binary wheels on PyPI)
-        run: |
-          mkdir -p ${{ github.workspace }}/wheels
-          pip install wheel
-          pip wheel stem==1.8.1 holehe==1.61 --no-deps -w ${{ github.workspace }}/wheels
       - name: Build AAB
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
           FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          PIP_FIND_LINKS: ${{ github.workspace }}/wheels
-        run: uv run flet build aab --python-version 3.12 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+        run: uv run flet build aab --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+      - name: Size report
+        if: always()
+        run: ls -l build/aab/*.aab
       - name: Upload directly to GitHub Release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v3
@@ -153,6 +232,11 @@ jobs:
 
       - name: Build Windows Portable
         run: uv run flet build windows --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+
+      - name: Size report
+        if: always()
+        shell: bash
+        run: du -sh build/windows 2>/dev/null || true; ls -l build/windows/sherlock.exe 2>/dev/null || true
 
       - name: Generate Icon for Installer
         run: |
@@ -222,6 +306,9 @@ jobs:
           sudo gem install --no-document fpm
       - name: Build Linux Bundle
         run: uv run flet build linux --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+      - name: Size report
+        if: always()
+        run: du -sh build/linux 2>/dev/null || true; ls -l build/linux/sherlock 2>/dev/null || true
       - name: Create Linux Packages (.deb, .rpm, .tar.gz)
         run: |
           mkdir -p build/dist
@@ -245,7 +332,7 @@ jobs:
           Version=1.0
           Name=Sherlock
           GenericName=OSINT Username Search
-          Comment=Hunt down social media profiles by username across 400+ networks
+          Comment=Hunt down social media profiles by username across 5,200+ networks
           Exec=/usr/bin/sherlock
           Icon=sherlock
           Terminal=false
@@ -264,14 +351,14 @@ jobs:
             <metadata_license>MIT</metadata_license>
             <project_license>MIT</project_license>
             <name>Sherlock</name>
-            <summary>Hunt down social media accounts by username across 400+ networks</summary>
+            <summary>Hunt down social media accounts by username across 5,200+ networks</summary>
             <description>
               <p>Sherlock hunts down social media profiles across the internet, providing:</p>
               <ul>
-                <li>Simultaneous username scans across 400+ international, regional and specialized networks</li>
+                <li>Simultaneous username scans across 5,200+ international, regional and specialized networks</li>
                 <li>Fast offline-first local database with Popular Only and custom target scopes</li>
                 <li>Live real-time result ticking, filtering and tap-to-open profile links</li>
-                <li>Plain Text, CSV and Excel (.xlsx) report exports saved locally</li>
+                <li>Gold PDF, XMind mind-map, CSV, JSON and plain-text report exports saved locally</li>
               </ul>
             </description>
             <launchable type="desktop-id">sherlock.desktop</launchable>
@@ -283,7 +370,7 @@ jobs:
           # Build rich .deb using fpm
           fpm -s dir -t deb -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \
               --architecture amd64 \
-              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \
+              --description "Hunt down social media accounts by username across 5,200+ networks on your desktop and phone." \
               --maintainer "Kiri <support@kiri.ng>" \
               --url "https://kiri.ng" \
               --category "utils" \
@@ -293,7 +380,7 @@ jobs:
           # Build rich .rpm using fpm
           fpm -s dir -t rpm -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \
               --architecture x86_64 \
-              --description "Hunt down social media accounts by username across 400+ networks on your desktop and phone." \
+              --description "Hunt down social media accounts by username across 5,200+ networks on your desktop and phone." \
               --maintainer "Kiri <support@kiri.ng>" \
               --url "https://kiri.ng" \
               --category "Utility" \

@@ -4,8 +4,8 @@ These components don't use hooks, so they can be instantiated directly
 without a renderer context.
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(
@@ -16,13 +16,13 @@ sys.path.insert(
 )
 
 import flet as ft
-from tests.flet_tree import walk_texts, walk_buttons, find_icon
 
 from components.empty_state import EmptyState
 from components.result_card import ResultCard
-from components.stat_card import StatCard
 from components.section_header import SectionHeader
+from components.stat_card import StatCard
 from components.targets_card import TargetsCard
+from tests.flet_tree import find_icon, walk_buttons, walk_texts
 
 
 class TestEmptyState:
@@ -129,7 +129,7 @@ class TestTargetsCard:
     def test_fallback_label_when_total_unknown(self):
         tree = TargetsCard(selected_count=0, total_count=0, on_open=lambda: None)
         texts = list(walk_texts(tree))
-        assert any("3,300+" in (t.value or "") for t in texts)
+        assert any("5,200+" in (t.value or "") for t in texts)
 
     def test_tap_triggers_on_open(self):
         fired = []

@@ -25,12 +25,12 @@ from services.cache_service import (
     is_domain_dead,
     load_cached_report,
     load_geo_cache,
+    load_sites_indices,
     results_fingerprint,
     save_cached_report,
     save_compiled_db,
     save_geo_cache,
     save_sites_indices,
-    load_sites_indices,
     schedule_avatar_download,
     set_dns_record,
     try_load_compiled_db,
@@ -200,7 +200,7 @@ def test_avatar_download_populates_cache(cache_dir, monkeypatch):
         async def __aexit__(self, *a):
             return False
 
-        async def get(self, u):
+        async def get(self, u, **kwargs):
             assert u == url
             return FakeResp()
 

@@ -141,6 +141,12 @@ def _email_dossier(
 
             show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
 
+    # P1-3: prefer the instant client-side open; fall back to the Python
+    # path only when no page context exists (test harness / early init).
+    from core.actions import open_url_action
+
+    platform_open = open_url_action(platform_url)
+
     status_text = (
         "Account Confirmed"
         if status == "Claimed"
@@ -365,7 +371,12 @@ def _email_dossier(
                     "Visit Website", weight=ft.FontWeight.W_600, color=ft.Colors.WHITE
                 ),
                 icon=ft.Icons.OPEN_IN_BROWSER_ROUNDED,
-                on_click=lambda e: asyncio.create_task(_launch_platform_url()),
+                action=platform_open,
+                on_click=(
+                    (lambda e: page.pop_dialog())
+                    if platform_open
+                    else lambda e: asyncio.create_task(_launch_platform_url())
+                ),
             ),
             ft.TextButton("Close", on_click=_dismiss),
         ],
@@ -394,6 +405,8 @@ def _username_dossier(
             else f"https://{site_name}"
         )
     )
+    if not str(profile_url).startswith("http"):
+        profile_url = f"https://{profile_url}"
 
     async def _launch_profile_url():
         page.pop_dialog()
@@ -404,6 +417,11 @@ def _username_dossier(
             from core.notify import show_snack
 
             show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
+
+    # P1-3: instant client-side open with Python fallback (see _email_dossier).
+    from core.actions import open_url_action
+
+    profile_open = open_url_action(profile_url)
 
     enrich = enrichment or {}
     avatar_url = enrich.get("image") or enrich.get("avatar") or enrich.get("photo")
@@ -860,7 +878,12 @@ def _username_dossier(
                     color=ft.Colors.WHITE,
                 ),
                 icon=action_button_icon,
-                on_click=lambda e: asyncio.create_task(_launch_profile_url()),
+                action=profile_open,
+                on_click=(
+                    (lambda e: page.pop_dialog())
+                    if profile_open
+                    else lambda e: asyncio.create_task(_launch_profile_url())
+                ),
             ),
             ft.TextButton("Close", on_click=_dismiss),
         ],

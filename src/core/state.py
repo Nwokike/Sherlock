@@ -22,7 +22,7 @@ class AppState:
     is_online: bool = True
 
     # --- Search mode ---
-    # "username" (sherlock-project) or "email" (holehe)
+    # Username mode (sherlock-project engine) or email mode (holehe-v2 engine)
     search_mode: str = MODE_USERNAME
 
     # --- Current search ---
@@ -72,10 +72,22 @@ class AppState:
     email_timeout: int = 10
     email_concurrency: int = 12
     email_only_found: bool = False
-    email_method_filter: str = "all"
     proxy_url: str = ""
     enrichment_mode: str = "full"
     no_password_recovery: bool = False
+    # P3-3/P3-9 scan enrichment knobs
+    search_keywords: str = ""
+    deep_enrich: bool = False
+    # P3-7 stealth fields
+    cookies_path: str = ""
+    tor_proxy: str = ""
+    i2p_proxy: str = ""
+    check_domains: bool = False
+    # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
+    unhealthy_sites: list[str] | None = None
+    # P1-4 biometric lock for the History tab (session unlock not persisted)
+    biometric_lock: bool = False
+    history_unlocked: bool = False
     selected_sites: list[str] | None = None
     use_local_db: bool = True
     custom_manifest: str = ""

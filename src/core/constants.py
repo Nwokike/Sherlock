@@ -1,8 +1,8 @@
 """Application-wide constants."""
 
 APP_NAME = "Sherlock"
-APP_VERSION = "2.1.0"
-APP_BUILD_NUMBER = 11
+APP_VERSION = "2.2.0"
+APP_BUILD_NUMBER = 12
 
 # ── Update & Distribution URLs ─────────────────────────────────────────
 UPDATE_CONFIG_URL = (
@@ -26,10 +26,17 @@ STORAGE_SEARCH_MODE = "sherlock_search_mode"
 STORAGE_EMAIL_TIMEOUT = "sherlock_email_timeout"
 STORAGE_EMAIL_CONCURRENCY = "sherlock_email_concurrency"
 STORAGE_EMAIL_ONLY_FOUND = "sherlock_email_only_found"
-STORAGE_EMAIL_METHOD_FILTER = "sherlock_email_method_filter"
 STORAGE_PROXY_URL = "sherlock_proxy_url"
 STORAGE_ENRICHMENT_MODE = "sherlock_enrichment_mode"
 STORAGE_NO_PASSWORD_RECOVERY = "sherlock_no_pw_recovery"
+STORAGE_SEARCH_KEYWORDS = "sherlock_search_keywords"
+STORAGE_DEEP_ENRICH = "sherlock_deep_enrich"
+STORAGE_COOKIES_PATH = "sherlock_cookies_path"
+STORAGE_TOR_PROXY = "sherlock_tor_proxy"
+STORAGE_I2P_PROXY = "sherlock_i2p_proxy"
+STORAGE_CHECK_DOMAINS = "sherlock_check_domains"
+STORAGE_DB_UNHEALTHY = "sherlock_db_unhealthy"
+STORAGE_BIOMETRIC_LOCK = "sherlock_biometric_lock"
 STORAGE_SCAN_DEPTH = "sherlock_scan_depth"
 STORAGE_CACHED_RESULTS = "sherlock_cached_results"
 STORAGE_RECURSIVE_SEARCH = "sherlock_recursive_search"
@@ -63,12 +70,9 @@ MSG_SEARCH_OFFLINE = (
 )
 
 # ── Email OSINT constants ─────────────────────────────────────────────
-# holehe detection methods
-EMAIL_METHOD_REGISTER = "register"
-EMAIL_METHOD_LOGIN = "login"
-EMAIL_METHOD_RECOVERY = "password recovery"
-EMAIL_METHOD_OTHER = "other"
-
-# Password-recovery modules that can be skipped via the
-# "No Password Recovery" setting (holehe's -NP flag).
+# Validator names skipped by the "No Password Recovery" setting.
+# holehe-v2 dropped the per-module method metadata this list was derived
+# from; adobe is the only platform from the original set that still
+# ships a validator (mail_ru / odnoklassniki / samsung are absent from
+# v2's 181 modules — kept as no-ops in case they return).
 EMAIL_PW_RECOVERY_MODULES = frozenset({"adobe", "mail_ru", "odnoklassniki", "samsung"})

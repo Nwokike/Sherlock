@@ -17,20 +17,22 @@ from components.app_header import AppHeader
 from components.banner_ad import build_banner_ad
 from components.section_header import SectionHeader
 from core import tokens
-from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
-from core.notify import show_snack
 from core.constants import (
     APP_BUILD_NUMBER,
     APP_NAME,
     APP_VERSION,
+    STORAGE_BIOMETRIC_LOCK,
+    STORAGE_CHECK_DOMAINS,
+    STORAGE_COOKIES_PATH,
+    STORAGE_DEEP_ENRICH,
     STORAGE_DNS_RESOLVER,
     STORAGE_EMAIL_CONCURRENCY,
-    STORAGE_EMAIL_METHOD_FILTER,
     STORAGE_EMAIL_ONLY_FOUND,
     STORAGE_EMAIL_TIMEOUT,
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_EXTRACT_INFO,
+    STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
     STORAGE_MANIFEST,
     STORAGE_MAX_CONNECTIONS,
@@ -41,10 +43,14 @@ from core.constants import (
     STORAGE_RETRIES,
     STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
+    STORAGE_SEARCH_KEYWORDS,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
+    STORAGE_TOR_PROXY,
     STORAGE_USE_CURL_CFFI,
 )
+from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
+from core.notify import show_snack
 from core.theme import AppColors, is_dark_mode
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -287,10 +293,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _persist(STORAGE_EMAIL_ONLY_FOUND, "true" if val else "false")
         )
 
-    def _on_email_method_filter_change(val: str):
-        state.email_method_filter = val
-        asyncio.create_task(_persist(STORAGE_EMAIL_METHOD_FILTER, val))
-
     def _on_proxy_change(val: str):
         cleaned = val.strip()
         if cleaned and not any(
@@ -309,6 +311,51 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     def _on_enrichment_mode_change(val: str):
         state.enrichment_mode = val
         asyncio.create_task(_persist(STORAGE_ENRICHMENT_MODE, val))
+
+    def _on_keywords_change(val: str):
+        cleaned = (val or "").strip()
+        state.search_keywords = cleaned
+        asyncio.create_task(_persist(STORAGE_SEARCH_KEYWORDS, cleaned))
+
+    def _on_deep_enrich_change(val: bool):
+        state.deep_enrich = bool(val)
+        asyncio.create_task(
+            _persist(STORAGE_DEEP_ENRICH, "true" if val else "false")
+        )
+
+    def _on_cookies_change(val: str):
+        cleaned = (val or "").strip()
+        state.cookies_path = cleaned
+        asyncio.create_task(_persist(STORAGE_COOKIES_PATH, cleaned))
+
+    def _on_tor_change(val: str):
+        cleaned = (val or "").strip()
+        state.tor_proxy = cleaned
+        asyncio.create_task(_persist(STORAGE_TOR_PROXY, cleaned))
+
+    def _on_i2p_change(val: str):
+        cleaned = (val or "").strip()
+        state.i2p_proxy = cleaned
+        asyncio.create_task(_persist(STORAGE_I2P_PROXY, cleaned))
+
+    def _on_check_domains_change(val: bool):
+        state.check_domains = bool(val)
+        asyncio.create_task(
+            _persist(STORAGE_CHECK_DOMAINS, "true" if val else "false")
+        )
+
+    def _toggle_biometric_lock(val: bool):
+        state.biometric_lock = bool(val)
+        if not val:
+            state.history_unlocked = False
+        asyncio.create_task(
+            _persist(STORAGE_BIOMETRIC_LOCK, "true" if val else "false")
+        )
+
+    async def _run_db_health_check(e=None):
+        show_snack(page, "DB health: probing 25 sites… (takes up to a minute)")
+        if controller.run_db_health:
+            await controller.run_db_health()
 
     def _toggle_no_password_recovery(val: bool):
         state.no_password_recovery = val
@@ -357,6 +404,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
     async def _persist(key: str, value: str):
         from flet import context
+
         from services.storage_service import StorageService
 
         storage = StorageService(context.page)
@@ -554,7 +602,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.SECURITY_ROUNDED,
                 "Stealth TLS (curl-cffi)",
-                "Chrome 124 JA3/H2 fingerprint to bypass WAF 403 blocks",
+                "Chrome 131 JA3/H2 fingerprint to bypass WAF 403 blocks",
                 ft.Switch(
                     value=getattr(state, "use_curl_cffi", True),
                     on_change=lambda e: _toggle_use_curl_cffi(e.control.value),
@@ -639,26 +687,41 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
             ),
             _setting_row(
-                ft.Icons.CATEGORY_ROUNDED,
-                "Detection Method Filter",
-                "Filter email intelligence by platform detection vector",
-                ft.SegmentedButton(
-                    segments=[
-                        ft.Segment(value="all", label=ft.Text("All", size=10)),
-                        ft.Segment(
-                            value="register", label=ft.Text("Register", size=10)
+                ft.Icons.TUNE_ROUNDED,
+                "Search Keywords",
+                "Comma-separated — matches get a KEYWORD badge on results",
+                ft.TextField(
+                    value=state.search_keywords or "",
+                    hint_text="osint, investigator, security",
+                    width=200,
+                    border={
+                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                            border_radius=tokens.RADIUS_SM,
                         ),
-                        ft.Segment(value="login", label=ft.Text("Login", size=10)),
-                        ft.Segment(
-                            value="password recovery",
-                            label=ft.Text("Recovery", size=10),
+                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
+                            border_radius=tokens.RADIUS_SM,
                         ),
-                    ],
-                    selected=[state.email_method_filter or "all"],
-                    on_change=lambda e: _on_email_method_filter_change(
-                        e.control.selected[0] if e.control.selected else "all"
-                    ),
-                    show_selected_icon=False,
+                    },
+                    text_size=tokens.FONT_SM,
+                    content_padding=tokens.SPACE_SM,
+                    on_submit=lambda e: _on_keywords_change(e.control.value),
+                    on_blur=lambda e: _on_keywords_change(e.control.value),
+                ),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.BOLT_ROUNDED,
+                "Deep Enrichment",
+                "Up to 3 extra API calls per found site — richer IDs, slower scan, more traffic",
+                ft.Switch(
+                    value=state.deep_enrich,
+                    on_change=lambda e: _on_deep_enrich_change(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
                 ),
                 stacked=narrow,
             ),
@@ -674,7 +737,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 "Choose between full sweep or top Alexa-ranked networks",
                 ft.SegmentedButton(
                     segments=[
-                        ft.Segment(value="all", label=ft.Text("All 3.3k", size=10)),
+                        ft.Segment(value="all", label=ft.Text("All 5.2k", size=10)),
                         ft.Segment(value="1000", label=ft.Text("Top 1k", size=10)),
                         ft.Segment(value="500", label=ft.Text("Top 500", size=10)),
                     ],
@@ -714,7 +777,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.FLASH_ON_ROUNDED,
                 "Bundled Database",
-                "Use local bundled 3.3k database (faster startup)",
+                "Use local bundled 5.2k database (faster startup)",
                 ft.Switch(
                     value=state.use_local_db,
                     on_change=lambda e: _toggle_local_db(e.control.value),
@@ -796,16 +859,25 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 content=ft.TextField(
                     value=state.custom_manifest,
                     hint_text="https://raw.githubusercontent.com/.../data.json",
-                    border_radius=tokens.RADIUS_SM,
+                    border={
+                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                            side=ft.BorderSide(
+                                width=1,
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
+                                ),
+                            ),
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                            side=ft.BorderSide(width=1, color=ft.Colors.PRIMARY),
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                    },
                     text_size=tokens.FONT_SM,
                     content_padding=tokens.SPACE_SM,
-                    focused_border_color=ft.Colors.PRIMARY,
                     bgcolor=ft.Colors.SURFACE,
                     filled=True,
-                    border_width=1,
-                    border_color=ft.Colors.with_opacity(
-                        tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
-                    ),
                     on_change=lambda e: _on_manifest_change(e.control.value),
                     on_submit=_on_manifest_submit,
                 ),
@@ -893,10 +965,17 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     hint_text="socks5://127.0.0.1:1080 or http://proxy:8080 (empty = direct)",
                     label="Proxy URL",
                     prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
-                    border_radius=tokens.RADIUS_SM,
+                    border={
+                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                    },
                     text_size=tokens.FONT_SM,
                     content_padding=tokens.SPACE_SM,
-                    focused_border_color=ft.Colors.PRIMARY,
                     bgcolor=ft.Colors.SURFACE,
                     filled=True,
                     on_submit=lambda e: _on_proxy_change(e.control.value),
@@ -905,6 +984,111 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD
                 ),
+            ),
+            ft.Container(
+                content=ft.TextField(
+                    value=state.tor_proxy,
+                    hint_text="socks5://127.0.0.1:9050 (empty = unused)",
+                    label="Tor Proxy (optional)",
+                    prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
+                    border={
+                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                    },
+                    text_size=tokens.FONT_SM,
+                    content_padding=tokens.SPACE_SM,
+                    bgcolor=ft.Colors.SURFACE,
+                    filled=True,
+                    on_submit=lambda e: _on_tor_change(e.control.value),
+                    on_blur=lambda e: _on_tor_change(e.control.value),
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
+                ),
+            ),
+            ft.Container(
+                content=ft.TextField(
+                    value=state.i2p_proxy,
+                    hint_text="http://127.0.0.1:4444 (empty = unused)",
+                    label="I2P Gateway (optional)",
+                    prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
+                    border={
+                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                    },
+                    text_size=tokens.FONT_SM,
+                    content_padding=tokens.SPACE_SM,
+                    bgcolor=ft.Colors.SURFACE,
+                    filled=True,
+                    on_submit=lambda e: _on_i2p_change(e.control.value),
+                    on_blur=lambda e: _on_i2p_change(e.control.value),
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
+                ),
+            ),
+            ft.Container(
+                content=ft.TextField(
+                    value=state.cookies_path,
+                    hint_text="path/to/cookies.txt — auth-gated sites",
+                    label="Cookies File (optional)",
+                    prefix_icon=ft.Icons.PASSWORD_ROUNDED,
+                    border={
+                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
+                            border_radius=tokens.RADIUS_SM,
+                        ),
+                    },
+                    text_size=tokens.FONT_SM,
+                    content_padding=tokens.SPACE_SM,
+                    bgcolor=ft.Colors.SURFACE,
+                    filled=True,
+                    on_submit=lambda e: _on_cookies_change(e.control.value),
+                    on_blur=lambda e: _on_cookies_change(e.control.value),
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_MD
+                ),
+            ),
+            # Domain-check mode uses aiodns — unavailable on Android
+            # (/etc/resolv.conf), so the row only exists on desktop.
+            *(
+                [
+                    ft.Divider(
+                        height=1,
+                        color=ft.Colors.with_opacity(
+                            tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE
+                        ),
+                    ),
+                    _setting_row(
+                        ft.Icons.DNS_ROUNDED,
+                        "Domain Checks (experimental)",
+                        "DNS-only probes for protocol=dns sites (desktop)",
+                        ft.Switch(
+                            value=state.check_domains,
+                            on_change=lambda e: _on_check_domains_change(
+                                e.control.value
+                            ),
+                            active_color=ft.Colors.PRIMARY,
+                        ),
+                        stacked=narrow,
+                    ),
+                ]
+                if not is_mobile
+                else []
             ),
         ]
     )
@@ -1083,6 +1267,36 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     "Open Terminal",
                     icon=ft.Icons.TERMINAL_ROUNDED,
                     on_click=lambda e: _open_terminal(),
+                ),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.HEALTH_AND_SAFETY_ROUNDED,
+                "Database Health Check",
+                "Probe 25 random sites · flags broken ones and excludes them from scans",
+                ft.FilledButton(
+                    "Run Check",
+                    icon=ft.Icons.SEARCH_ROUNDED,
+                    on_click=lambda e: asyncio.create_task(_run_db_health_check(e)),
+                ),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.FINGERPRINT_ROUNDED,
+                "Biometric App Lock",
+                "Require fingerprint/face unlock to open History",
+                ft.Switch(
+                    value=state.biometric_lock,
+                    on_change=lambda e: _toggle_biometric_lock(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
                 ),
                 stacked=narrow,
             ),

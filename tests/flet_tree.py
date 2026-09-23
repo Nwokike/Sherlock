@@ -33,7 +33,7 @@ def walk_buttons(root: Any) -> Iterable[Any]:
     for c in walk(root):
         if isinstance(
             c,
-            (ft.FilledButton, ft.OutlinedButton, ft.ElevatedButton, ft.TextButton),
+            (ft.FilledButton, ft.OutlinedButton, ft.TextButton),
         ):
             yield c
 

@@ -77,3 +77,16 @@ class FakePage:
 @pytest.fixture
 def fake_page():
     return FakePage()
+
+
+@pytest.fixture(autouse=True)
+def _reset_shared_http_client():
+    """Fresh shared httpx client per test — its proxy-keyed cache would
+    otherwise leak a (possibly monkeypatched-away) client across tests."""
+    import services.http_client as http_client
+
+    http_client._client = None
+    http_client._client_proxy = None
+    yield
+    http_client._client = None
+    http_client._client_proxy = None

@@ -1,6 +1,7 @@
 """Tests for the observable application state."""
 
 import pytest
+
 from core.state import AppState
 
 

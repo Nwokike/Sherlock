@@ -16,7 +16,7 @@ def test_active_scan_banner_component():
         target_query="torvalds",
         search_mode=MODE_USERNAME,
         checked=450,
-        total=3302,
+        total=5203,
         on_tap=lambda: clicked.append(1),
     )
     assert banner is not None
@@ -52,8 +52,8 @@ def test_open_cached_username_result(fake_page):
         {
             "query": "alice",
             "mode": MODE_USERNAME,
-            "total": 3302,
-            "checked": 3302,
+            "total": 5203,
+            "checked": 5203,
             "found": [
                 {
                     "site_name": "GitHub",
@@ -141,7 +141,7 @@ def test_smart_reattach_to_ongoing_search(fake_page):
     state.is_searching = True
     state.current_username = "alice"
     state.search_mode = MODE_USERNAME
-    orig_progress = SearchProgress(username="alice", total_sites=3302, is_running=True)
+    orig_progress = SearchProgress(username="alice", total_sites=5203, is_running=True)
     state.search_progress = orig_progress
 
     # Mock service so if search was actually executed, it would fail

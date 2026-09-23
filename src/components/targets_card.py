@@ -13,7 +13,7 @@ from core import tokens
 from core.theme import AppColors, adaptive_glass_bg, adaptive_glass_border
 
 # Matches the marketing copy used by the search bar hint.
-FALLBACK_TOTAL_LABEL = "3,300+"
+FALLBACK_TOTAL_LABEL = "5,200+"
 
 
 def TargetsCard(

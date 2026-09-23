@@ -130,7 +130,7 @@ def _build_result_list(
             icon=ft.Icons.SEARCH_OFF_ROUNDED,
         )
     # ListView with build_controls_on_demand: cards materialize lazily as the
-    # user scrolls, so even 3,300 entries stay smooth.
+    # user scrolls, so even 5,200 entries stay smooth.
     return ft.ListView(
         controls=[build_card(r) for r in items],
         spacing=0,
@@ -171,8 +171,9 @@ def ResultsScreen() -> Control:
 
     def _open_url(url: str):
         async def _launch():
-            from core.notify import show_snack
             from flet import context
+
+            from core.notify import show_snack
 
             try:
                 await ft.UrlLauncher().launch_url(url)
@@ -316,20 +317,13 @@ def ResultsScreen() -> Control:
                 frequent_rate_limit=r.get("frequent_rate_limit", False),
             )
 
-        # Apply method + only-found filters
-        method_filter = getattr(state, "email_method_filter", "all")
+        # Apply only-found filter (method filtering was removed together
+        # with old holehe — holehe-v2 validators carry no method metadata)
         only_found = getattr(state, "email_only_found", False)
 
-        def _apply_email_extras(items):
-            out = items
-            if method_filter != "all":
-                out = [r for r in out if r.get("method", "") == method_filter]
-            return out
-
-        raw_found = _apply_email_extras(raw_found)
-        raw_not_found = [] if only_found else _apply_email_extras(raw_not_found)
-        raw_rate_limited = [] if only_found else _apply_email_extras(raw_rate_limited)
-        raw_unavailable = [] if only_found else _apply_email_extras(raw_unavailable)
+        raw_not_found = [] if only_found else raw_not_found
+        raw_rate_limited = [] if only_found else raw_rate_limited
+        raw_unavailable = [] if only_found else raw_unavailable
 
         email_found_filtered = _filter_by_name(
             raw_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
@@ -350,6 +344,49 @@ def ResultsScreen() -> Control:
         email_rate_limited_filtered.sort(key=lambda r: (r.get("name") or "").lower())
         email_unavailable_filtered.sort(key=lambda r: (r.get("name") or "").lower())
 
+        # P1-1: active-tab card list memoized on membership — progress
+        # ticks between membership changes skip the O(N) card-tree rebuild.
+        # Exactly one use_memo per branch keeps the hook slot stable across
+        # email↔username mode switches (identical prefix, same hook type).
+        email_specs = [
+            (
+                email_found_filtered,
+                "No registrations found",
+                "No platforms matched this email address.",
+            ),
+            (
+                email_not_found_filtered,
+                "All found",
+                "Every platform confirmed this email is registered.",
+            ),
+            (
+                email_rate_limited_filtered,
+                "No rate limits",
+                "All checks completed without rate limiting.",
+            ),
+            (
+                email_unavailable_filtered,
+                "No unavailable platforms",
+                "Every platform check is currently supported.",
+            ),
+        ]
+        email_slot = ft.use_memo(
+            lambda: _build_result_list(
+                email_specs[min(tab_index, len(email_specs) - 1)][0],
+                email_specs[min(tab_index, len(email_specs) - 1)][1],
+                email_specs[min(tab_index, len(email_specs) - 1)][2],
+                _make_email_card,
+                debounced_filter,
+            ),
+            [
+                tab_index,
+                debounced_filter,
+                len(raw_found),
+                len(raw_not_found),
+                len(raw_rate_limited),
+                len(raw_unavailable),
+            ],
+        )
         tabs = ft.Tabs(
             selected_index=tab_index,
             length=4,
@@ -384,42 +421,10 @@ def ResultsScreen() -> Control:
                     ),
                     ft.TabBarView(
                         controls=[
-                            _build_result_list(
-                                email_found_filtered,
-                                "No registrations found",
-                                "No platforms matched this email address.",
-                                _make_email_card,
-                                debounced_filter,
-                            )
-                            if tab_index == 0
-                            else ft.Container(),
-                            _build_result_list(
-                                email_not_found_filtered,
-                                "All found",
-                                "Every platform confirmed this email is registered.",
-                                _make_email_card,
-                                debounced_filter,
-                            )
-                            if tab_index == 1
-                            else ft.Container(),
-                            _build_result_list(
-                                email_rate_limited_filtered,
-                                "No rate limits",
-                                "All checks completed without rate limiting.",
-                                _make_email_card,
-                                debounced_filter,
-                            )
-                            if tab_index == 2
-                            else ft.Container(),
-                            _build_result_list(
-                                email_unavailable_filtered,
-                                "No unavailable platforms",
-                                "Every platform check is currently supported.",
-                                _make_email_card,
-                                debounced_filter,
-                            )
-                            if tab_index == 3
-                            else ft.Container(),
+                            email_slot if tab_index == 0 else ft.Container(),
+                            email_slot if tab_index == 1 else ft.Container(),
+                            email_slot if tab_index == 2 else ft.Container(),
+                            email_slot if tab_index == 3 else ft.Container(),
                         ],
                         expand=True,
                     ),
@@ -473,6 +478,11 @@ def ResultsScreen() -> Control:
                 if state.enrichments
                 else None,
                 tags=tuple(getattr(r, "tags", None) or ()),
+                error_type=getattr(r, "error_type", None),
+                error_hint=getattr(r, "error_hint", "") or "",
+                protection=tuple(getattr(r, "protection", None) or ()),
+                badge=getattr(r, "badge", "") or "",
+                keyword_hit=bool(getattr(r, "keyword_hit", False)),
             )
 
         def _username_filter_key(r):
@@ -504,6 +514,33 @@ def ResultsScreen() -> Control:
         total = username_view.total
         checked = username_view.checked
 
+        # P1-1: memoized active-tab card list (one use_memo per branch —
+        # hook slot stays stable across email↔username mode switches).
+        _empty_title = "No matches" if debounced_filter else "No results yet"
+        _empty_msg = (
+            f'No results match "{debounced_filter}"'
+            if debounced_filter
+            else "Results will appear as the scan progresses."
+        )
+        username_lists = [found_items, notfound_items, error_items]
+        username_slot = ft.use_memo(
+            lambda: _build_result_list(
+                username_lists[min(tab_index, len(username_lists) - 1)],
+                _empty_title,
+                _empty_msg,
+                _make_username_card,
+                debounced_filter,
+            ),
+            [
+                tab_index,
+                debounced_filter,
+                len(username_view.found),
+                len(username_view.not_found),
+                len(username_view.errors),
+                len(state.enrichments or {}),
+            ],
+        )
+
         tabs = ft.Tabs(
             selected_index=tab_index,
             length=3,
@@ -531,39 +568,9 @@ def ResultsScreen() -> Control:
                     ),
                     ft.TabBarView(
                         controls=[
-                            _build_result_list(
-                                found_items,
-                                "No matches" if debounced_filter else "No results yet",
-                                f'No results match "{debounced_filter}"'
-                                if debounced_filter
-                                else "Results will appear as the scan progresses.",
-                                _make_username_card,
-                                debounced_filter,
-                            )
-                            if tab_index == 0
-                            else ft.Container(),
-                            _build_result_list(
-                                notfound_items,
-                                "No matches" if debounced_filter else "No results yet",
-                                f'No results match "{debounced_filter}"'
-                                if debounced_filter
-                                else "Results will appear as the scan progresses.",
-                                _make_username_card,
-                                debounced_filter,
-                            )
-                            if tab_index == 1
-                            else ft.Container(),
-                            _build_result_list(
-                                error_items,
-                                "No matches" if debounced_filter else "No results yet",
-                                f'No results match "{debounced_filter}"'
-                                if debounced_filter
-                                else "Results will appear as the scan progresses.",
-                                _make_username_card,
-                                debounced_filter,
-                            )
-                            if tab_index == 2
-                            else ft.Container(),
+                            username_slot if tab_index == 0 else ft.Container(),
+                            username_slot if tab_index == 1 else ft.Container(),
+                            username_slot if tab_index == 2 else ft.Container(),
                         ],
                         expand=True,
                     ),
@@ -615,46 +622,6 @@ def ResultsScreen() -> Control:
             tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_SM
         ),
     )
-    # Email method filter chips (only in email mode)
-    method_filter_row = ft.Container(width=0, height=0)
-    if is_email_mode:
-        method_filter = getattr(state, "email_method_filter", "all")
-
-        def _method_chip(value, label):
-            return ft.Chip(
-                label=ft.Text(label, size=11, font_family="Outfit"),
-                selected=method_filter == value,
-                show_checkmark=False,
-                on_select=lambda e, v=value: _set_method_filter(v),
-            )
-
-        def _set_method_filter(v):
-            state.email_method_filter = v
-            state.progress_version += 1
-            try:
-                from services.storage_service import StorageService
-                from flet import context
-                import asyncio as _asyncio
-
-                s = StorageService(context.page)
-                _asyncio.create_task(s.set("sherlock_email_method_filter", v))
-            except Exception:
-                pass
-
-        method_filter_row = ft.Container(
-            content=ft.Row(
-                controls=[
-                    _method_chip("all", "All"),
-                    _method_chip("register", "Register"),
-                    _method_chip("login", "Login"),
-                    _method_chip("password recovery", "Recovery"),
-                ],
-                spacing=tokens.SPACE_XS,
-                wrap=True,
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
-            padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, 0),
-        )
     filter_hint = (
         "Filter by platform, domain, or recovery hint..."
         if is_email_mode
@@ -665,12 +632,21 @@ def ResultsScreen() -> Control:
             value=filter_query,
             hint_text=filter_hint,
             prefix_icon=ft.Icons.FILTER_LIST_ROUNDED,
-            border_radius=tokens.RADIUS_MD,
-            border_width=1,
-            border_color=ft.Colors.with_opacity(
-                tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
-            ),
-            focused_border_color=ft.Colors.PRIMARY,
+            border={
+                ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                    side=ft.BorderSide(
+                        width=1,
+                        color=ft.Colors.with_opacity(
+                            tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
+                        ),
+                    ),
+                    border_radius=tokens.RADIUS_MD,
+                ),
+                ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                    side=ft.BorderSide(width=1, color=ft.Colors.PRIMARY),
+                    border_radius=tokens.RADIUS_MD,
+                ),
+            },
             bgcolor=ft.Colors.SURFACE,
             filled=True,
             on_change=lambda e: set_filter_query(e.control.value),
@@ -748,7 +724,6 @@ def ResultsScreen() -> Control:
         controls=[
             progress_section,
             stats_card,
-            method_filter_row,
             filter_box,
             tabs,
             build_banner_ad(),

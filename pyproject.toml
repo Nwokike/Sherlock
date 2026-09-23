@@ -1,26 +1,31 @@
 [project]
 name = "sherlock"
-version = "2.1.0"
-description = "Sherlock: Hunt down social media accounts by username across 3,300+ networks."
+version = "2.2.0"
+description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "flet>=0.86.5",
-    "flet-ads>=0.86.5",
-    "holehe>=1.61",
-    "maigret>=0.6.5",
+    "flet>=1.0.1",
+    "flet-ads>=1.0.1",
+    "flet-local-auth>=1.0.1",
+    "holehe-v2>=1.0.3",
+    "httpx[http2,socks]>=0.28.1",
+    "maigret>=0.6.6",
     "socid-extractor>=0.1.1",
 ]
 
 [tool.flet]
 org = "ng.kiri"
 product = "Sherlock"
-build_number = 11
+build_number = 12
 
 [tool.flet.app]
 path = "src"
 
-[tool.flet.app.boot_screen]
+[tool.flet.boot_screen]
+name = "flet"
+
+[tool.flet.boot_screen.flet]
 startup_message = "Initializing Sherlock..."
 
 [tool.flet.android]
@@ -38,6 +43,7 @@ requestLegacyExternalStorage = "true"
 "android.permission.INTERNET" = true
 "android.permission.ACCESS_NETWORK_STATE" = true
 "android.permission.WAKE_LOCK" = true
+"android.permission.USE_BIOMETRIC" = true
 
 [tool.flet.android.feature]
 "android.software.leanback" = false
@@ -49,18 +55,46 @@ key_alias = "upload"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-
-[tool.uv.workspace]
-members = [
-    "sherlock-app",
+addopts = ["-ra", "-q"]
+strict_markers = true
+strict_config = true
+markers = [
+    "live: hits the real network (run explicitly with -m live; CI uses -m 'not live')",
+]
+filterwarnings = [
+    # Owner rule: NEVER suppress/ignore warnings. Any warning raised by OUR
+    # code (module-scoped below) escalates to a hard error so it must be
+    # fixed. Third-party warnings are left at default — they stay visible in
+    # pytest's warnings summary on every run, never ignored, but cannot
+    # brick the suite for code we don't own.
+    "error:::^(services|screens|components|core|state|hooks|tests)(\\.|$)|^(app_shell|main)$",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-timeout>=2.4",
     "ruff>=0.15.14",
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "UP", "B", "Q", "C4", "PERF", "ERA", "I", "T20", "DTZ"]
 ignore = ["E501"]
+
+# Build-time pruning: serious_python cleanup globs — the ONLY channel that
+# shrinks artifacts (post-build rm cannot; deps are re-packaged from
+# project.dependencies into build/site-packages). Verified safe in
+# docs/dependency-study.md §4/§5: locales are gettext our paths never read;
+# oauthlib = flet OAuth (no login flow here); flask stack = maigret/web only.
+[tool.flet.cleanup]
+package_files = [
+    "pycountry/locales/**/LC_MESSAGES/*.mo",
+    "pycountry/locales/**/*.po",
+    "oauthlib/**",
+    "flask/**",
+    "werkzeug/**",
+    "click/**",
+    "blinker/**",
+    "itsdangerous/**",
+    "asgiref/**",
+]

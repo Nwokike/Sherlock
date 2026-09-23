@@ -125,6 +125,12 @@ def try_load_compiled_db(source_path: str) -> Any | None:
         if not isinstance(meta, dict) or meta.get("src") != source_path:
             return None
 
+        # Pickles bind to maigret's class layout (MaigretSite gained
+        # mirrors/stated_fields/unknown_fields in 0.6.6) — a cache written
+        # by an older maigret must not be unpickled by a newer one.
+        if meta.get("maigret_version") != __import__("maigret").__version__:
+            return None
+
         src_stat = src.stat()
         if (
             meta.get("mtime") == src_stat.st_mtime
@@ -171,7 +177,9 @@ def save_compiled_db(source_path: str, db: Any) -> None:
         if ok:
             meta = {
                 "src": source_path,
-                "hash": hashlib.sha256(payload).hexdigest(),
+                # Hash of the SOURCE manifest (what try_load compares) —
+                # hashing the pickle payload here could never match.
+                "hash": _sha256_file(src),
                 "mtime": stat.st_mtime,
                 "size": stat.st_size,
                 "maigret_version": __import__("maigret").__version__,
@@ -223,16 +231,21 @@ async def schedule_avatar_download(url: str) -> None:
     if dest.is_file() and dest.stat().st_size > 0:
         return
     try:
-        import httpx
+        from services.http_client import get_client
 
-        async with httpx.AsyncClient(
-            timeout=5.0, follow_redirects=True, headers={"User-Agent": "Sherlock/2.x"}
-        ) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200 and resp.content:
-                _write_atomic(dest, lambda fh: fh.write(resp.content))
+        resp = await get_client().get(
+            url, timeout=5.0, headers={"User-Agent": "Sherlock/2.x"}
+        )
+        if resp.status_code == 200 and resp.content:
+            _write_atomic(dest, lambda fh: fh.write(resp.content))
+        else:
+            # Visible, not swallowed (owner rule): routine CDN misses
+            # land at INFO; real failures raise into the warning below.
+            logger.info(
+                "Avatar not cached (HTTP %s): %s", resp.status_code, url[:80]
+            )
     except Exception as exc:
-        logger.debug("Avatar download skipped (%s): %s", url[:80], exc)
+        logger.warning("Avatar download failed for %s: %s", url[:80], exc)
 
 
 # ── Layer 3: Pre-Rendered Report Cache ─────────────────────────────────────
@@ -458,7 +471,7 @@ async def prewarm_dns(sites: list[tuple[str, str]], max_hosts: int = 300) -> int
     by every connector. Resolving the scan's domains up-front (bounded,
     small timeout, confirmed-dead hosts skipped via the persistent DNS
     cache) means the request flood mostly finds warm entries instead of
-    firing 3,300 DNS queries through the same pipe.
+    firing 5,200 DNS queries through the same pipe.
 
     `sites` is a list of (site_name, url) pairs; only unique hostnames are
     resolved. Returns the number of hosts successfully warmed.

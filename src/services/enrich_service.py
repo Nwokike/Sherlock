@@ -11,17 +11,31 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+import anyio
+
 logger = logging.getLogger(__name__)
 
 _SOCID_AVAILABLE = False
 try:
     from socid_extractor import extract as _extract
-    from socid_extractor import parse as _parse
     from socid_extractor import mutate_url as _mutate_url
+    from socid_extractor import parse as _parse
 
     _SOCID_AVAILABLE = True
 except ImportError:
     pass
+
+# Shared bound on parse-thread offload (P5-4): caps total worker threads
+# across overlapping enrichment jobs no matter how many caller semaphores
+# are in flight.
+_PARSE_LIMITER = anyio.CapacityLimiter(12)
+
+
+async def _parse_in_thread(url: str, timeout: int, headers: dict | None = None):
+    async with _PARSE_LIMITER:
+        if headers is None:
+            return await asyncio.to_thread(_parse, url, timeout=timeout)
+        return await asyncio.to_thread(_parse, url, timeout=timeout, headers=headers)
 
 
 class EnrichService:
@@ -58,9 +72,7 @@ class EnrichService:
             return {}
 
         try:
-            page_text, status_code = await asyncio.to_thread(
-                _parse, url, timeout=timeout
-            )
+            page_text, status_code = await _parse_in_thread(url, timeout)
             if status_code and 200 <= status_code < 400 and page_text:
                 result = _extract(page_text)
                 return result if result else {}
@@ -79,8 +91,8 @@ class EnrichService:
         mutations = self.get_mutations(url)
         for api_url, headers in mutations:
             try:
-                page_text, status_code = await asyncio.to_thread(
-                    _parse, api_url, timeout=timeout, headers=headers
+                page_text, status_code = await _parse_in_thread(
+                    api_url, timeout, headers
                 )
                 if status_code and 200 <= status_code < 400 and page_text:
                     mutation_result = _extract(page_text)

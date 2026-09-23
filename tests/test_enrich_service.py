@@ -87,6 +87,7 @@ class TestEnrichService:
     def test_enrich_url_returns_dict(self):
         """enrich_url() returns dict (may be empty for an offline/invalid URL)."""
         import asyncio
+
         from services.enrich_service import EnrichService
 
         service = EnrichService()
@@ -98,6 +99,7 @@ class TestEnrichService:
     def test_batch_enrich_empty_list(self):
         """batch_enrich() on empty list returns empty dict."""
         import asyncio
+
         from services.enrich_service import EnrichService
 
         service = EnrichService()

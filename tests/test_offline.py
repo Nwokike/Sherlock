@@ -26,7 +26,7 @@ class _StubSherlockService:
     async def load_sites(self):
         return 100
 
-    async def search(self, username, on_progress=None, timeout=30):
+    async def search(self, username, on_progress=None, timeout=30, **_kwargs):
         self.search_calls += 1
         if self.fail:
             raise RuntimeError("connection failed: DNS lookup timed out")

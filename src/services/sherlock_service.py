@@ -457,6 +457,7 @@ def _run_maigret_worker_thread(
     cookies_path: str | None = None,
     i2p_proxy: str | None = None,
     check_domains: bool = False,
+    after_primary: Callable[[str, Any], None] | None = None,
 ) -> SearchProgress | None:
     """Run Maigret scan inside an isolated background OS thread with its own event loop.
 
@@ -544,6 +545,14 @@ def _run_maigret_worker_thread(
 
             on_progress_cb(progress)
             last_prog = progress
+            if after_primary and not cancel_event.is_set():
+                # Owner: history must register the moment the PRIMARY pass
+                # finishes — the recursive tail may run much longer and the
+                # final save (which upserts this entry) comes after it.
+                try:
+                    after_primary(tgt, progress)
+                except Exception:
+                    logger.exception("Primary-completion hook failed for %s", tgt)
 
         # ── Recursive second pass (state.recursive_search, opt-in) ────
         # Depth is capped at 2 BY CONSTRUCTION: ids discovered during these
@@ -562,6 +571,10 @@ def _run_maigret_worker_thread(
                     ", ".join(
                         f"{k}({v})" for k, v in list(discovered.items())[:10]
                     ),
+                )
+            else:
+                logger.info(
+                    "Recursive search: primary pass done, no secondary targets found"
                 )
             for new_id, id_type in discovered.items():
                 if cancel_event.is_set():
@@ -796,6 +809,7 @@ class SherlockService:
         username: str,
         on_progress: Callable[[SearchProgress], None],
         timeout: int = 10,
+        after_primary: Callable[[str, int, int], None] | None = None,
     ) -> SearchProgress:
         """Run Maigret search on an isolated worker thread with active settings filters."""
         if not _MAIGRET_AVAILABLE:
@@ -855,6 +869,12 @@ class SherlockService:
         # Domain checks use aiodns — dead on Android (/etc/resolv.conf).
         check_domains = bool(getattr(state, "check_domains", False)) and not is_mobile
 
+        # Bridge the worker-thread primary-completion hook to the caller's
+        # (query, found, total) signature — main saves history through it.
+        def _after_primary(tgt: str, prog: SearchProgress) -> None:
+            if after_primary is not None:
+                after_primary(username, len(prog.found), prog.total_sites)
+
         # Execute on isolated background thread
         res = await asyncio.to_thread(
             _run_maigret_worker_thread,
@@ -875,6 +895,7 @@ class SherlockService:
             cookies_path=cookies_path,
             i2p_proxy=i2p_proxy,
             check_domains=check_domains,
+            after_primary=_after_primary if after_primary else None,
         )
 
         for tgt in targets:
@@ -909,47 +930,56 @@ class SherlockService:
             await self.load_sites()
         if self._db is None:
             return {"error": "site database unavailable"}
-
-        candidates = [
-            s for s in self._db.sites.values() if not getattr(s, "disabled", False)
-        ]
-        if not candidates:
-            return {"error": "no enabled sites to check"}
-        sample = _random.sample(candidates, min(sample_size, len(candidates)))
-        site_data = {s.name: s for s in sample}
-        logger.info(
-            "DB health: probing %d/%d sites...", len(site_data), len(candidates)
-        )
-        res = await self_check(
-            self._db,
-            site_data,
-            logger,
-            silent=True,
-            max_connections=10,
-            no_progressbar=True,
-            dns_resolver="threaded",
-            proxy=(getattr(state, "proxy_url", "") or "") or None,
-        )
-        results = res.get("results", []) if isinstance(res, dict) else []
-        flagged = [r for r in results if r.get("issues")]
-        summary = {
-            "sample": len(site_data),
-            "ok": len(site_data) - len(flagged),
-            "flagged": len(flagged),
-            "unhealthy": [r.get("site_name", "?") for r in flagged],
-            "details": [
-                f"{r.get('site_name', '?')}: {'; '.join(r.get('issues') or [])}"
-                for r in flagged
-            ],
-        }
-        logger.info(
-            "DB health: %d/%d OK · %d flagged%s",
-            summary["ok"],
-            summary["sample"],
-            summary["flagged"],
-            (" — " + ", ".join(summary["unhealthy"][:8])) if flagged else "",
-        )
-        return summary
+        try:
+            # MaigretDatabase.sites is a LIST (on-device crash this fixes:
+            # "'list' object has no attribute 'values'").
+            raw_sites = self._db.sites
+            iterable = raw_sites.values() if hasattr(raw_sites, "values") else raw_sites
+            candidates = [
+                s for s in iterable if not getattr(s, "disabled", False)
+            ]
+            if not candidates:
+                return {"error": "no enabled sites to check"}
+            sample = _random.sample(candidates, min(sample_size, len(candidates)))
+            site_data = {s.name: s for s in sample}
+            logger.info(
+                "DB health: probing %d/%d sites...", len(site_data), len(candidates)
+            )
+            res = await self_check(
+                self._db,
+                site_data,
+                logger,
+                silent=True,
+                max_connections=10,
+                no_progressbar=True,
+                dns_resolver="threaded",
+                proxy=(getattr(state, "proxy_url", "") or "") or None,
+            )
+            results = res.get("results", []) if isinstance(res, dict) else []
+            flagged = [r for r in results if r.get("issues")]
+            summary = {
+                "sample": len(site_data),
+                "ok": len(site_data) - len(flagged),
+                "flagged": len(flagged),
+                "unhealthy": [r.get("site_name", "?") for r in flagged],
+                "details": [
+                    f"{r.get('site_name', '?')}: {'; '.join(r.get('issues') or [])}"
+                    for r in flagged
+                ],
+            }
+            logger.info(
+                "DB health: %d/%d OK · %d flagged%s",
+                summary["ok"],
+                summary["sample"],
+                summary["flagged"],
+                (" — " + ", ".join(summary["unhealthy"][:8])) if flagged else "",
+            )
+            return summary
+        except Exception as exc:
+            # Visible failure path (owner rule) — the settings layer also
+            # snackbars this, so it can never be a silently eaten task.
+            logger.exception("DB health check failed")
+            return {"error": f"DB health check failed: {exc}"}
 
     def cancel(self) -> None:
         """Cancel a running search."""

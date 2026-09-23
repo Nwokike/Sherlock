@@ -42,7 +42,7 @@ class _ParkedSherlockService:
     async def load_sites(self):
         return 400
 
-    async def search(self, username, on_progress=None, timeout=30):
+    async def search(self, username, on_progress=None, timeout=30, **_kwargs):
         await asyncio.sleep(30)
         raise AssertionError("parked scan should have been killed")
 

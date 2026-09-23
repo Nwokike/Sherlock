@@ -9,6 +9,7 @@ from flet import Control
 
 from core import tokens
 from core.constants import MODE_EMAIL
+from core.logger_handler import compact_telemetry
 from core.theme import AppColors
 
 
@@ -18,6 +19,7 @@ def ActiveScanBanner(
     checked: int = 0,
     total: int = 0,
     on_tap: Callable[[], None] | None = None,
+    finishing: bool = False,
 ) -> Control:
     """Build a sticky floating notification banner indicating an active background scan."""
     is_email = search_mode == MODE_EMAIL
@@ -26,7 +28,12 @@ def ActiveScanBanner(
     )
 
     pct = int(checked / max(total, 1) * 100) if total > 0 else 0
-    progress_str = f"{checked}/{total} ({pct}%)" if total > 0 else "Initializing..."
+    if finishing:
+        # Counts are full but the engine hasn't returned (drains / the
+        # recursive follow-up tail) — say that instead of a stuck 100%.
+        progress_str = f"Finishing… {checked}/{total}"
+    else:
+        progress_str = f"{checked}/{total} ({pct}%)" if total > 0 else "Initializing..."
 
     return ft.Container(
         content=ft.Row(
@@ -71,6 +78,15 @@ def ActiveScanBanner(
                             color=AppColors.PRIMARY,
                             bgcolor=ft.Colors.with_opacity(0.12, AppColors.PRIMARY),
                             height=3,
+                        ),
+                        ft.Text(
+                            compact_telemetry(),
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.with_opacity(
+                                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                            ),
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
                         ),
                     ],
                     spacing=2,

@@ -975,6 +975,19 @@ def AppShell() -> Control:
     controller.back = lambda: set_active_view("dashboard")
     controller.open_sheet = lambda d: set_active_dialog(d)
     controller.close_dialog = lambda: set_active_dialog(None)
+
+    def _system_back():
+        # Owner: system/back button must never kill the single-view app.
+        # Map it onto in-app navigation: results/sites → dashboard,
+        # settings/history tabs → home tab, home root → swallowed.
+        if _should_show_onboarding(state):
+            return
+        if active_view != "dashboard":
+            controller.back()
+        elif active_tab != 0:
+            set_active_tab(0)
+
+    controller.handle_system_back = _system_back
     controller.show_settings = lambda: (
         set_active_view("dashboard"),
         set_active_tab(2),
@@ -1090,11 +1103,22 @@ def AppShell() -> Control:
                 state.search_mode = mode
                 controller.show_results()
 
+            # Phase-aware banner (owner report): during the recursive tail
+            # the ACTIVE target differs from the query that started the
+            # scan; when counts are full but the engine hasn't returned
+            # (final drains/follow-ups), say so honestly.
+            banner_target = state.current_username
+            prog_user = getattr(prog, "username", None)
+            if prog_user and prog_user != state.current_username:
+                banner_target = f"{prog_user} · follow-up"
+            finishing = bool(total and checked >= total)
+
             active_banner = ActiveScanBanner(
-                target_query=state.current_username,
+                target_query=banner_target,
                 search_mode=active_scan_mode,
                 checked=checked,
                 total=total,
+                finishing=finishing,
                 on_tap=_view_active_scan,
             )
 

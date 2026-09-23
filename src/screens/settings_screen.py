@@ -48,7 +48,7 @@ from core.constants import (
     STORAGE_TIMEOUT,
     STORAGE_USE_CURL_CFFI,
 )
-from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
+from core.logger_handler import in_memory_log_handler
 from core.notify import show_snack
 from core.theme import AppColors, is_dark_mode
 from state.app_state import AppStateCtx
@@ -348,8 +348,16 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
     async def _run_db_health_check(e=None):
         show_snack(page, "DB health: probing 25 sites… (takes up to a minute)")
-        if controller.run_db_health:
-            await controller.run_db_health()
+        try:
+            if controller.run_db_health:
+                await controller.run_db_health()
+        except Exception as exc:
+            # Fire-and-forget tasks eat exceptions — never let this die
+            # silently (owner saw exactly that on device).
+            logger.exception("DB health check crashed")
+            show_snack(
+                page, f"DB health failed: {exc}", bgcolor=AppColors.ERROR, duration=8000
+            )
 
     def _toggle_no_password_recovery(val: bool):
         state.no_password_recovery = val
@@ -668,7 +676,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.PASSWORD_ROUNDED,
                 "Skip Password Recovery",
-                "Exclude password-recovery checks (faster, fewer hints)",
+                "Skip platforms that only expose password-recovery endpoints — faster scans, fewer recovery hints",
                 ft.Switch(
                     value=state.no_password_recovery,
                     on_change=lambda e: _toggle_no_password_recovery(e.control.value),
@@ -711,7 +719,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.BOLT_ROUNDED,
                 "Deep Enrichment",
-                "Up to 3 extra API calls per found site — richer IDs, slower scan, more traffic",
+                "Dig deeper on every found account (up to 3 extra API lookups each) — richer profile data; slower scans, more data usage",
                 ft.Switch(
                     value=state.deep_enrich,
                     on_change=lambda e: _on_deep_enrich_change(e.control.value),
@@ -1112,21 +1120,11 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             except Exception as exc:
                 logger.warning("Failed to copy logs: %s", exc)
 
-        telemetry_text = ft.Text(
-            get_telemetry_snapshot(),
-            size=11,
-            font_family="Courier New",
-            color=AppColors.PRIMARY,
-            weight=ft.FontWeight.W_600,
-            expand=True,
-        )
-
-        def _refresh_telemetry(e):
-            telemetry_text.value = get_telemetry_snapshot()
+        def _refresh_logs(e):
             cur_logs = in_memory_log_handler.get_logs()
             if cur_logs:
                 log_text.value = "\n".join(cur_logs)
-            page.update()
+                page.update()
 
         def _clear_logs(e):
             in_memory_log_handler.clear_logs()
@@ -1155,10 +1153,10 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     ),
                     ft.IconButton(
                         icon=ft.Icons.REFRESH_ROUNDED,
-                        tooltip="Refresh telemetry",
+                        tooltip="Refresh logs",
                         icon_size=18,
                         icon_color=AppColors.PRIMARY,
-                        on_click=_refresh_telemetry,
+                        on_click=_refresh_logs,
                     ),
                 ],
                 spacing=tokens.SPACE_SM,
@@ -1167,20 +1165,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             content=ft.Container(
                 content=ft.Column(
                     controls=[
-                        ft.Container(
-                            content=ft.Row(
-                                [
-                                    telemetry_text,
-                                ],
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            padding=ft.Padding(8, 4, 8, 4),
-                            border_radius=tokens.RADIUS_SM,
-                            bgcolor=ft.Colors.with_opacity(0.08, AppColors.PRIMARY),
-                            margin=ft.Margin(0, 0, 0, tokens.SPACE_XS),
-                        ),
                         ft.Text(
-                            "Real-time engine execution, network status, and diagnostic logs.",
+                            "Real-time engine execution and diagnostic logs.",
                             size=tokens.FONT_XS,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),

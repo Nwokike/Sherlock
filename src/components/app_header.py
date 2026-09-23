@@ -218,22 +218,25 @@ def AppHeader(
             controls=[
                 ft.Row(
                     left_controls,
-                    spacing=tokens.SPACE_SM,
+                    spacing=tokens.SPACE_XS,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 ft.Row(
                     right_controls,
-                    spacing=tokens.SPACE_XS,
+                    spacing=tokens.SPACE_XXS,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            # Owner: header must scroll horizontally when extra action
+            # buttons make it overflow narrow screens (instead of clipping).
+            scroll=ft.ScrollMode.AUTO,
         ),
         padding=ft.Padding(
-            left=tokens.SPACE_XL,
+            left=tokens.SPACE_LG,
             top=tokens.SPACE_SM,
-            right=tokens.SPACE_XL,
+            right=tokens.SPACE_LG,
             bottom=tokens.SPACE_SM,
         ),
     )

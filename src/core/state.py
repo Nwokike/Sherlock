@@ -84,8 +84,10 @@ class AppState:
     check_domains: bool = False
     # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
     unhealthy_sites: list[str] | None = None
-    # P1-4 biometric lock for the History tab (session unlock not persisted)
-    biometric_lock: bool = False
+    # Owner tested the biometric History lock and chose it as the default:
+    # ON (stored user choices still honored; devices without biometrics
+    # bypass via biometric_service, so nobody gets stranded).
+    biometric_lock: bool = True
     history_unlocked: bool = False
     selected_sites: list[str] | None = None
     use_local_db: bool = True

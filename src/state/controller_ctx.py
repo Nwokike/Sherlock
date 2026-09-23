@@ -75,6 +75,8 @@ class ControllerMethods:
     open_sheet: Callable[[object], None] = _noop_dialog
     close_dialog: Callable[[], None] = _noop_sync
     run_db_health: Callable[[], Awaitable[dict]] = _noop_health
+    # System/back-button handler injected by AppShell (owns view+tab state).
+    handle_system_back: Callable[[], None] = _noop_sync
 
 
 ControllerMethodsCtx = ft.create_context(ControllerMethods())

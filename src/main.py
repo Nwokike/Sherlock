@@ -309,6 +309,32 @@ class AppController:
             run_db_health=self.run_db_health,
         )
         self._controller_methods = methods
+
+        def _on_system_back(_e=None):
+            # Owner: Android/system back must never tear down the
+            # single-view shell — it maps to in-app navigation instead.
+            try:
+                views_left = len(self.page.views)
+            except Exception:
+                views_left = -1
+            logger.info(
+                "System back pressed (root views=%d) → in-app navigation",
+                views_left,
+            )
+            methods.handle_system_back()
+            try:
+                if not self.page.views:
+                    # flet removed the only view anyway — unexpected for
+                    # this shell; log loudly so device behavior is
+                    # diagnosable from the terminal.
+                    logger.error(
+                        "System back removed the ROOT view — single-view "
+                        "shell violated (flet behavior change?)"
+                    )
+            except Exception:
+                pass
+
+        self.page.on_view_pop = _on_system_back
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
         logger.info("AppShell mounted successfully")
 
@@ -580,6 +606,7 @@ class AppController:
                 username=username,
                 on_progress=self._progress_from_thread,
                 timeout=state.timeout,
+                after_primary=self._on_username_primary_done,
             )
             # If this scan was cancelled or superseded by another search, do not clobber state
             if (
@@ -1178,6 +1205,26 @@ class AppController:
             self._controller_methods.show_results()
         return True
 
+    def _on_username_primary_done(self, query: str, found: int, total: int) -> None:
+        """Bridge from the scan worker thread: save history the moment the
+        PRIMARY pass completes — the recursive tail can run much longer and
+        the final (upserting) save only happens after it. Owner report:
+        Recent must populate as soon as the user sees the scan 'finish'."""
+        loop = self._main_loop
+        if loop is None or not loop.is_running():
+            logger.warning("Primary-done history bridge skipped (no main loop)")
+            return
+
+        def _schedule():
+            asyncio.ensure_future(
+                self._save_to_history(query, found, total, mode=MODE_USERNAME)
+            )
+
+        try:
+            loop.call_soon_threadsafe(_schedule)
+        except RuntimeError:
+            logger.warning("Primary-done history bridge failed (loop closing)")
+
     async def _save_to_history(
         self, query: str, found: int, total: int, mode: str = MODE_USERNAME
     ) -> None:
@@ -1274,12 +1321,29 @@ class AppController:
             }
             raw = await self.storage.get(STORAGE_HISTORY)
             entries = json.loads(raw) if raw else []
-            entries.append(entry)
+            # Upsert: a username scan saves when its PRIMARY pass completes
+            # (so Recent appears immediately) and again after the recursive
+            # tail with final counts — same query+mode replaces, no dupes.
+            if (
+                entries
+                and entries[-1].get("query") == entry["query"]
+                and entries[-1].get("mode") == entry["mode"]
+            ):
+                entries[-1] = entry
+            else:
+                entries.append(entry)
             entries = entries[-50:]
             await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
             # Observable mirror is newest-first (display order); the
             # stored list stays oldest-first. Loaders must reverse.
-            state.history.insert(0, entry)
+            if (
+                state.history
+                and state.history[0].get("query") == entry["query"]
+                and state.history[0].get("mode") == entry["mode"]
+            ):
+                state.history[0] = entry
+            else:
+                state.history.insert(0, entry)
             if len(state.history) > 50:
                 state.history[:] = state.history[:50]
         except Exception as e:

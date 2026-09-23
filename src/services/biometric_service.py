@@ -22,7 +22,13 @@ except ImportError as exc:  # pragma: no cover — dep is pinned in pyproject
 
 
 async def authenticate(reason: str = "Unlock Sherlock") -> bool:
-    """Run the platform biometric prompt. True only on verified success."""
+    """Run the platform biometric prompt. True only on verified success.
+
+    Owner rule: the lock defaults ON — so devices that cannot enforce it
+    (no hardware / nothing enrolled / no lock-screen credentials) are
+    granted access with an explicit log instead of being stranded
+    outside History. Cancellations and failed attempts stay locked.
+    """
     if not _AUTH_AVAILABLE:
         logger.warning("Biometric auth unavailable (flet-local-auth missing)")
         return False
@@ -39,8 +45,11 @@ async def authenticate(reason: str = "Unlock Sherlock") -> bool:
             if hasattr(svc, "is_device_supported"):
                 supported = await svc.is_device_supported()
             if not supported:
-                logger.info("Biometric auth: device unsupported")
-                return False
+                logger.info(
+                    "Biometric auth: device unsupported — lock not enforceable, "
+                    "access granted"
+                )
+                return True
             ok = bool(await svc.authenticate(reason))
             if ok:
                 logger.info("Biometric auth succeeded")
@@ -48,6 +57,15 @@ async def authenticate(reason: str = "Unlock Sherlock") -> bool:
                 logger.info("Biometric auth declined or cancelled by user")
             return ok
         except _fla.LocalAuthException as exc:
+            code = getattr(exc, "code", None)
+            code_name = getattr(code, "name", str(code))
+            if _is_unenforceable(code_name):
+                logger.info(
+                    "Biometric lock not enforceable on this device (%s) — "
+                    "access granted",
+                    code_name,
+                )
+                return True
             logger.warning("Biometric auth error: %s", exc)
             return False
     except RuntimeError as exc:
@@ -58,3 +76,12 @@ async def authenticate(reason: str = "Unlock Sherlock") -> bool:
     except Exception as exc:
         logger.warning("Biometric auth unexpected failure: %s", exc)
         return False
+
+
+def _is_unenforceable(code_name: str) -> bool:
+    """Codes meaning the device simply cannot present a biometric prompt."""
+    return code_name in (
+        "NO_BIOMETRIC_HARDWARE",
+        "NO_BIOMETRICS_ENROLLED",
+        "NO_CREDENTIALS_SET",
+    )

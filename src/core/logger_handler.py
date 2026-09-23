@@ -87,3 +87,30 @@ def get_telemetry_snapshot() -> str:
         pass
 
     return " | ".join(parts) if parts else "Telemetry: unavailable"
+
+
+def compact_telemetry() -> str:
+    """Single-line scan-surface telemetry: App RSS · CPU · system RAM.
+
+    Rendered under the scan loader (Results) and inside the active-scan
+    banner — owner asked for visibility where scanning happens instead of
+    buried in the terminal. The full snapshot stays available via
+    get_telemetry_snapshot().
+    """
+    if not _PSUTIL_AVAILABLE or psutil is None:
+        return ""
+    parts = []
+    try:
+        proc = psutil.Process()
+        parts.append(f"App {proc.memory_info().rss / (1024 * 1024):.0f}MB")
+    except Exception:
+        pass
+    try:
+        parts.append(f"CPU {psutil.cpu_percent(interval=None):.0f}%")
+    except Exception:
+        pass
+    try:
+        parts.append(f"RAM {psutil.virtual_memory().percent:.0f}%")
+    except Exception:
+        pass
+    return " · ".join(parts)

@@ -35,11 +35,43 @@ _holehe_modules: dict[str, Callable] | None = None
 
 try:
     from holehe_v2.core.helpers import set_global_timeout
-    from holehe_v2.core.loader import load_validators
 
     _HOLEHE_AVAILABLE = True
 except ImportError:
     pass
+
+
+def _load_validators_pkg() -> dict:
+    """Zipimport-safe validator discovery — REPLACES upstream load_validators().
+
+    Upstream globs `Path(__file__).parent.parent / "modules"` — on Android the
+    package lives inside sitepackages.zip, where Path.glob finds NOTHING and
+    the scan runs "0/0" instantly (the exact trap that used to kill the
+    grapheme progress bar). Normal package imports go through zipimport,
+    which works both in a desktop directory and inside the Android zip.
+    """
+    import importlib
+    import inspect
+    import pkgutil
+
+    import holehe_v2.core.shim  # noqa: F401 — result alias must exist first
+    import holehe_v2.modules as pkg
+
+    validators: dict = {}
+    for info in pkgutil.iter_modules(pkg.__path__):
+        if info.name.startswith("_"):
+            continue
+        try:
+            module = importlib.import_module(f"holehe_v2.modules.{info.name}")
+        except Exception as exc:
+            # Per-module failures are tolerated (upstream does the same) but
+            # always visible — owner rule: no swallowed errors.
+            logger.warning("[loader] Failed to load %s: %s", info.name, exc)
+            continue
+        for name, fn in inspect.getmembers(module, inspect.iscoroutinefunction):
+            if name.startswith("validate_"):
+                validators[name[len("validate_") :]] = fn
+    return validators
 
 
 # ── TLS fingerprint selection ─────────────────────────────────────────
@@ -287,7 +319,20 @@ class EmailService:
         """Load all holehe-v2 validators. Cached after first call."""
         global _holehe_modules
         if _holehe_modules is None:
-            _holehe_modules = load_validators()
+            loaded = _load_validators_pkg()
+            if not loaded:
+                # Loud failure: an empty registry means an instant "0/0"
+                # fake scan (the Android zip-path bug we just fixed).
+                logger.error(
+                    "holehe-v2: 0 validators loaded — email scans would be "
+                    "empty. Package layout: %s",
+                    __import__("holehe_v2").__file__,
+                )
+                raise RuntimeError(
+                    "holehe-v2 validator discovery returned 0 modules"
+                )
+            logger.info("holehe-v2: %d validators loaded", len(loaded))
+            _holehe_modules = loaded
 
         if skip_password_recovery:
             from core.constants import EMAIL_PW_RECOVERY_MODULES

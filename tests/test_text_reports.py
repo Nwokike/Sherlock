@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 
@@ -199,11 +200,117 @@ class TestStateDefaults:
         assert state.i2p_proxy == ""
         assert state.check_domains is False
         assert state.unhealthy_sites is None
-        assert state.biometric_lock is False
+        # Owner tested the lock and chose it: default ON (stored choices
+        # still honored; unenforceable devices bypass in biometric_service).
+        from core.state import AppState
+
+        assert AppState.biometric_lock is True
         assert state.history_unlocked is False
         # Owner rule: headline features default ON (stored values still win).
         # Assert the CLASS default — the shared singleton may have been
         # mutated by earlier tests in the same session.
-        from core.state import AppState
-
         assert AppState.recursive_search is True
+
+    def test_compact_telemetry_single_line(self):
+        from core.logger_handler import compact_telemetry
+
+        text = compact_telemetry()
+        # psutil ships with maigret — expect real numbers on one line.
+        assert "App" in text and "CPU" in text and "RAM" in text
+        assert " | " not in text  # single-line surface format, not snapshot
+
+    def test_unenforceable_codes_bypass(self):
+        from services.biometric_service import _is_unenforceable
+
+        assert _is_unenforceable("NO_BIOMETRIC_HARDWARE") is True
+        assert _is_unenforceable("NO_BIOMETRICS_ENROLLED") is True
+        assert _is_unenforceable("NO_CREDENTIALS_SET") is True
+        # Cancellations and failed attempts must stay locked.
+        assert _is_unenforceable("USER_CANCELED") is False
+        assert _is_unenforceable("BIOMETRIC_LOCKOUT") is False
+        assert _is_unenforceable("UNKNOWN_ERROR") is False
+
+
+class TestOnDeviceFixes:
+    """Regressions from the owner's Android field report (v2.2.0)."""
+
+    def test_pkg_loader_matches_upstream_registry(self):
+        from holehe_v2.core.loader import load_validators as upstream
+
+        from services.email_service import _load_validators_pkg
+
+        ours = _load_validators_pkg()
+        theirs = upstream()
+        assert len(ours) == len(theirs) >= 180
+
+    def test_empty_validator_registry_raises_loudly(self, monkeypatch):
+        import services.email_service as es
+
+        monkeypatch.setattr(es, "_holehe_modules", None)
+        monkeypatch.setattr(es, "_load_validators_pkg", lambda: {})
+        svc = es.EmailService()
+        try:
+            svc._load_modules()
+        except RuntimeError as exc:
+            assert "0 modules" in str(exc) or "0 validators" in str(exc)
+        else:
+            raise AssertionError("empty registry must raise, not scan 0/0")
+
+    def test_db_health_handles_sites_list(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import maigret.checking as checking
+
+        from services.sherlock_service import SherlockService
+
+        async def fake_self_check(db, site_data, *args, **kwargs):
+            return {
+                "results": [
+                    {"site_name": "GoodSite", "issues": [], "recommendations": []},
+                    {
+                        "site_name": "BadSite",
+                        "issues": ["dead endpoint"],
+                        "recommendations": [],
+                    },
+                ]
+            }
+
+        monkeypatch.setattr(checking, "self_check", fake_self_check)
+        svc = SherlockService()
+        # On-device shape: sites is a LIST (the '.values()' crash).
+        svc._db = SimpleNamespace(
+            sites=[
+                SimpleNamespace(name="GoodSite", disabled=False),
+                SimpleNamespace(name="BadSite", disabled=False),
+                SimpleNamespace(name="OffSite", disabled=True),
+            ]
+        )
+        summary = asyncio.run(svc.run_db_health(sample_size=10))
+        assert "error" not in summary, summary
+        assert summary["sample"] == 2  # disabled excluded
+        assert summary["flagged"] == 1
+        assert summary["unhealthy"] == ["BadSite"]
+
+    def test_banner_finishing_and_followup(self):
+        from components.active_scan_banner import ActiveScanBanner
+        from tests.flet_tree import walk
+
+        def texts_of(control):
+            return [
+                c.value
+                for c in walk(control)
+                if hasattr(c, "value") and isinstance(c.value, str)
+            ]
+
+        finishing = ActiveScanBanner(
+            target_query="target",
+            search_mode="username",
+            checked=5174,
+            total=5174,
+            finishing=True,
+        )
+        assert any("Finishing" in t for t in texts_of(finishing))
+        running = ActiveScanBanner(
+            target_query="target", search_mode="username", checked=10, total=100
+        )
+        assert any("10/100" in t for t in texts_of(running))

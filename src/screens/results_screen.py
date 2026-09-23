@@ -663,6 +663,8 @@ def ResultsScreen() -> Control:
     )
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
+        from core.logger_handler import compact_telemetry
+
         # Indeterminate (value=None) while the engine has reported nothing —
         # the same continuously-filling "Initializing" animation the
         # ActiveScanBanner shows. Once the first site completes (or the
@@ -687,6 +689,17 @@ def ResultsScreen() -> Control:
                             tokens.OPACITY_LIGHT, ft.Colors.PRIMARY
                         ),
                         height=tokens.PROGRESS_BAR_HEIGHT,
+                    ),
+                    # Owner: app-RSS/CPU/RAM surfaced where scanning happens
+                    # (under the loader, above the Checking count) instead of
+                    # buried in the Live Activity Terminal.
+                    ft.Text(
+                        compact_telemetry(),
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.with_opacity(
+                            tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                        ),
+                        max_lines=1,
                     ),
                     ft.Row(
                         controls=[

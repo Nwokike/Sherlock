@@ -4,16 +4,11 @@ current APP_VERSION in sync when bumping (guarded by tests)."""
 
 CHANGELOG: dict[str, str] = {
     "2.2.0": (
-        "• Bigger engine: 5,200+ enabled networks (Maigret 0.6.6 DB doubled)\n"
-        "• Recursive search is real — secondary IDs scanned in a bounded pass\n"
-        "• Email reborn on holehe-v2: 181 modules, rich profile extras, CSV/JSON/TXT/MD/HTML export\n"
-        "• Bot-protection badges with exact cause + fix advice; keyword-match chips\n"
-        "• Category presets + Scope-to-Filter one-tap scanning; Dating & new country chips\n"
-        "• PDF: tappable links, page numbers, avatar cards; XMind evidence links & category sheets\n"
-        "• Interactive graph viewer, Cypher export, evidence communities\n"
-        "• Stealth: socks5 fixed everywhere, chrome131/Android fingerprints, I2P/cookies fields\n"
-        "• Biometric History lock, DB health check, deep-enrichment & keywords toggles\n"
-        "• Bundled Outfit font (offline startup), ~21MB leaner installs, 223 tests + CI gates"
+        "• 5,200+ platforms: Maigret 0.6.6 database doubled\n"
+        "• Recursive search on by default, category presets, scope-to-filter\n"
+        "• Email rebuilt on holehe-v2: 181 validators, honest results, new exports\n"
+        "• Bot-protection badges, tappable PDF links, interactive graph viewer\n"
+        "• Biometric History lock, offline font, 21MB smaller, 229 tests + CI gates"
     ),
     "2.1.0": (
         "• Full dependency squeeze and 3,300+ platform polish\n"

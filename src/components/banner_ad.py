@@ -8,8 +8,8 @@ Revenue-critical sizing: the glass container stretches FULL WIDTH on every
 screen — Home/History/Results wrap their banners in shrink-wrap Columns
 (320px, left-aligned) while Settings' ListView forces full width, so a
 stretcher Row with an expand=True banner equalizes all screens to the
-Settings look. The ad itself stays pinned at its native 320x50 (AdSize
-banner) and is centered inside the stretched glass. Never set ``alignment``
+Settings look. The ad itself stays pinned at its native 320x50 (fixed
+width/height via LayoutControl) and is centered inside the stretched glass. Never set ``alignment``
 on a wide Container — it can expand to fill the parent's offer and caused
 the full-page regression. No SPONSORED label by design (removed
 intentionally 2026-09-03).

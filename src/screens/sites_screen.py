@@ -18,6 +18,8 @@ from flet import Control
 from components.banner_ad import build_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
+from core.constants import test_id
+from core.tasks import spawn
 from hooks.use_debounce import use_debounce
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -26,14 +28,14 @@ logger = logging.getLogger("SitesScreen")
 
 # Label-set for the "Popular Only" preset — matched case-insensitively
 # against the loaded network labels. Names that are not present in the
-# active database simply match nothing.
+# active database simply match nothing. ("x" is the current name; the legacy
+# "twitter" entry was dropped to avoid double-counting one network.)
 POPULAR_SITES = {
     "github",
     "instagram",
     "reddit",
     "youtube",
     "tiktok",
-    "twitter",
     "x",
     "steam",
     "pinterest",
@@ -45,7 +47,7 @@ POPULAR_SITES = {
     "medium",
 }
 
-# Tag categories from Maigret's database (75 tags)
+# Static fallback while the live tag index is cold ( DB not loaded yet).
 CATEGORY_TAGS = [
     ("all", "All Networks"),
     ("social", "Social"),
@@ -55,16 +57,69 @@ CATEGORY_TAGS = [
     ("crypto", "Crypto"),
     ("dating", "Dating"),
     ("video", "Media"),
-    ("us", "US 🇺🇸"),
-    ("ng", "NG 🇳🇬"),
-    ("ru", "RU 🇷🇺"),
-    ("de", "DE 🇩🇪"),
-    ("cn", "CN 🇨🇳"),
-    ("fr", "FR 🇫🇷"),
-    ("gb", "GB 🇬🇧"),
-    ("jp", "JP 🇯🇵"),
-    ("in", "IN 🇮🇳"),
 ]
+
+# Pinned first in the live chip row, in this order.
+PINNED_TAGS = ["social", "coding", "gaming", "forum", "crypto", "dating", "video"]
+PINNED_LABELS = {
+    "social": "Social",
+    "coding": "Coding",
+    "gaming": "Gaming",
+    "forum": "Forums",
+    "crypto": "Crypto",
+    "dating": "Dating",
+    "video": "Media",
+}
+
+# Fixed row height so ListView virtualization can skip off-screen rows.
+_ROW_HEIGHT = 56.0
+
+
+@ft.component
+def SitesSearchBar(initial: str, on_debounced):
+    """Search field isolated so keystrokes don't rebuild the 5,200-row list.
+
+    Raw input lives here; only the 200ms-stable value flows up to the
+    parent, which is the sole dep of the filtered-names memo.
+    """
+    raw, set_raw = ft.use_state(initial)
+    debounced = use_debounce(raw, 200)
+    ft.use_effect(lambda: on_debounced(debounced), [debounced])
+    return ft.Container(
+        content=ft.TextField(
+            key=test_id("sites-search-field"),
+            value=raw,
+            hint_text="Search networks...",
+            prefix_icon=ft.Icons.SEARCH_ROUNDED,
+            border={
+                ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                    side=ft.BorderSide(
+                        width=1,
+                        color=ft.Colors.with_opacity(
+                            tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
+                        ),
+                    ),
+                    border_radius=tokens.RADIUS_MD,
+                ),
+                ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                    side=ft.BorderSide(width=1, color=ft.Colors.PRIMARY),
+                    border_radius=tokens.RADIUS_MD,
+                ),
+            },
+            bgcolor=ft.Colors.SURFACE,
+            filled=True,
+            on_change=lambda e: set_raw(e.control.value),
+            text_size=tokens.FONT_SM,
+            content_padding=tokens.SPACE_SM,
+            height=44,
+        ),
+        padding=ft.Padding(
+            left=tokens.SPACE_XL,
+            right=tokens.SPACE_XL,
+            top=tokens.SPACE_SM,
+            bottom=tokens.SPACE_SM,
+        ),
+    )
 
 
 @ft.component
@@ -75,10 +130,21 @@ def SitesScreen() -> Control:
     # Bumped after every site-database load — re-runs the init effect.
     _ = state.sites_version
 
-    search_query, set_search_query = ft.use_state("")
-    debounced_query = use_debounce(search_query, 200)
+    debounced_query, set_debounced_query = ft.use_state("")
     selected_tag, set_selected_tag = ft.use_state("all")
     checked_states, set_checked_states = ft.use_state({})
+    # Double-fire guard: Checkbox.on_change fires, then the tap bubbles to
+    # the row Container.on_click in the same frame — swallow the second.
+    _row_from_checkbox = ft.use_ref(False)
+    _persist_task = ft.use_ref(None)
+    _pending_states = ft.use_ref(None)
+
+    def _cleanup_persist():
+        old = _persist_task.current
+        if old is not None and not old.done():
+            old.cancel()
+
+    ft.use_effect(lambda: _cleanup_persist, [])
 
     def _init_states():
         """(Re)build checkbox states from the observed site name cache.
@@ -110,24 +176,50 @@ def SitesScreen() -> Control:
         total = len(checked_states)
         return f"{checked} of {total} selected"
 
+    def _persist_debounced(new_states: dict):
+        """Coalesce rapid toggles into one write per 300ms burst."""
+        _pending_states.current = new_states
+        old = _persist_task.current
+        if old is not None and not old.done():
+            old.cancel()
+
+        async def _after():
+            try:
+                await asyncio.sleep(0.3)
+                snap = _pending_states.current
+                checked_list = sorted([n for n, c in snap.items() if c], key=str.lower)
+                all_selected = bool(snap) and len(checked_list) == len(snap)
+                await controller.save_selected_sites(
+                    [] if all_selected else checked_list
+                )
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("Site scope persist failed: %s", exc)
+
+        _persist_task.current = spawn(_after(), name="sites-persist")
+
     def _persist(new_states: dict):
         """Persist the given checkbox state via the controller.
 
         An all-selected scope is stored as an empty list (= no custom
         filter, scan everything) — same semantics as pre-restructure.
         """
-        checked_list = sorted(
-            [name for name, checked in new_states.items() if checked],
-            key=str.lower,
-        )
-        all_selected = bool(new_states) and len(checked_list) == len(new_states)
-        asyncio.create_task(
-            controller.save_selected_sites([] if all_selected else checked_list)
-        )
+        _persist_debounced(new_states)
 
     def _apply(new_states: dict):
         set_checked_states(new_states)
         _persist(new_states)
+
+    def _on_checkbox_change(name: str):
+        _row_from_checkbox.current = True
+        _toggle_row(name)
+
+    def _on_row_click(name: str):
+        if _row_from_checkbox.current:
+            _row_from_checkbox.current = False
+            return
+        _toggle_row(name)
 
     def _toggle_row(name: str):
         new_states = dict(checked_states)
@@ -180,37 +272,102 @@ def SitesScreen() -> Control:
             from core.notify import show_snack
 
             show_snack(context.page, message)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("scope snack skipped: %s", exc)
+
+    # ── Memoized derived data (rebuilt only when deps change) ─────────────
+    # Canonical name order: sites_cache is already stored sorted, so iterate
+    # it directly instead of re-sorting 5,200 entries every render.
+    canonical_names = ft.use_memo(
+        lambda: sorted(state.sites_cache or [], key=str.lower),
+        [state.sites_version],
+    )
+    # Lowered tag sets, hoisted out of the per-row loop (O(N·T) per frame).
+    lowered_tags = ft.use_memo(
+        lambda: {
+            n: frozenset(str(t).lower() for t in (tags or []))
+            for n, tags in ((getattr(state, "sites_tags_map", {}) or {}).items())
+        },
+        [state.sites_version],
+    )
+    tag_buckets = ft.use_memo(
+        lambda: {
+            str(k).lower(): frozenset(v or [])
+            for k, v in ((getattr(state, "sites_tag_index", None) or {}).items())
+        },
+        [state.sites_version],
+    )
+
+    def _compute_filtered():
+        q = debounced_query.strip().lower()
+        bucket = (
+            tag_buckets.get(selected_tag.lower()) if selected_tag != "all" else None
+        )
+        if selected_tag != "all" and bucket is None:
+            bucket = frozenset(
+                n for n, ts in lowered_tags.items() if selected_tag.lower() in ts
+            )
+        out = []
+        for name in canonical_names:
+            if bucket is not None and name not in bucket:
+                continue
+            if (
+                q
+                and q not in name.lower()
+                and not any(q in t for t in lowered_tags.get(name, ()))
+            ):
+                continue
+            out.append(name)
+        return out
+
+    # Deliberately NOT keyed on checked_states — toggles must not re-filter;
+    # the checked lookup happens at row build via checked_states.get(name).
+    filtered_names = ft.use_memo(
+        _compute_filtered,
+        [debounced_query, selected_tag, state.sites_version],
+    )
+
+    def _compute_chips():
+        index = getattr(state, "sites_tag_index", None) or {}
+        if not index:
+            return CATEGORY_TAGS, []
+        sizes = {str(k).lower(): len(v or []) for k, v in index.items()}
+
+        def _is_country(k: str) -> bool:
+            return len(k) == 2 and k.isalpha()
+
+        cats = [("all", f"All Networks ({len(canonical_names)})")]
+        cats += [
+            (k, f"{PINNED_LABELS[k]} ({sizes.get(k, 0)})")
+            for k in PINNED_TAGS
+            if k in sizes
+        ]
+        rest = sorted(
+            (
+                k
+                for k in sizes
+                if k not in PINNED_TAGS and k != "all" and not _is_country(k)
+            ),
+            key=lambda k: sizes[k],
+            reverse=True,
+        )[:12]
+        cats += [(k, f"{k.title()} ({sizes[k]})") for k in rest]
+        countries = sorted(k for k in sizes if _is_country(k))
+        return cats, countries
+
+    live_cats, live_countries = ft.use_memo(_compute_chips, [state.sites_version])
 
     # Build filtered list
-    query = debounced_query.strip().lower()
-    # O(1) inverted tag index (built by SherlockService after each DB load)
-    # — falls back to the per-site tags map when the index isn't warm yet.
-    tag_index = getattr(state, "sites_tag_index", None) or {}
-    tags_map = getattr(state, "sites_tags_map", {}) or {}
-    tag_bucket: set[str] | None = None
-    if selected_tag != "all" and selected_tag.lower() in tag_index:
-        tag_bucket = set(tag_index[selected_tag.lower()])
     items = []
-    for name, is_checked in sorted(checked_states.items()):
-        if query and query not in name.lower():
-            continue
-        if selected_tag != "all":
-            if tag_bucket is not None:
-                if name not in tag_bucket:
-                    continue
-            else:
-                site_tags = [t.lower() for t in tags_map.get(name, [])]
-                if selected_tag.lower() not in site_tags:
-                    continue
+    for name in filtered_names:
+        is_checked = checked_states.get(name, False)
         items.append(
             ft.Container(
                 content=ft.Row(
                     controls=[
                         ft.Checkbox(
                             value=is_checked,
-                            on_change=None,
+                            on_change=lambda e, n=name: _on_checkbox_change(n),
                             fill_color={
                                 ft.ControlState.HOVERED: ft.Colors.PRIMARY,
                                 ft.ControlState.FOCUSED: ft.Colors.PRIMARY,
@@ -231,6 +388,7 @@ def SitesScreen() -> Control:
                     top=tokens.SPACE_SM,
                     bottom=tokens.SPACE_SM,
                 ),
+                height=_ROW_HEIGHT,
                 border=ft.Border.only(
                     bottom=ft.BorderSide(
                         width=0.5,
@@ -239,13 +397,14 @@ def SitesScreen() -> Control:
                         ),
                     )
                 ),
-                on_click=lambda e, n=name: _toggle_row(n),
+                on_click=lambda e, n=name: _on_row_click(n),
             )
         )
 
-    # Category filter chips
-    category_chips = ft.Container(
-        content=ft.Row(
+    # Category filter chips — live from the tag index (pinned first with
+    # counts), plus a scrollable country row from 2-letter tags.
+    def _chip_row(pairs):
+        return ft.Row(
             controls=[
                 ft.Chip(
                     label=ft.Text(label, size=11, font_family="Outfit"),
@@ -253,11 +412,17 @@ def SitesScreen() -> Control:
                     show_checkmark=False,
                     on_select=lambda e, k=tag_key: set_selected_tag(k),
                 )
-                for tag_key, label in CATEGORY_TAGS
+                for tag_key, label in pairs
             ],
             scroll=ft.ScrollMode.HIDDEN,
             spacing=tokens.SPACE_XS,
-        ),
+        )
+
+    chip_rows = [_chip_row(live_cats)]
+    if live_countries:
+        chip_rows.append(_chip_row([(c, c.upper()) for c in live_countries]))
+    category_chips = ft.Container(
+        content=ft.Column(chip_rows, spacing=0),
         padding=ft.Padding(
             left=tokens.SPACE_XL,
             right=tokens.SPACE_XL,
@@ -266,41 +431,8 @@ def SitesScreen() -> Control:
         ),
     )
 
-    # Search bar
-    search_bar = ft.Container(
-        content=ft.TextField(
-            value=search_query,
-            hint_text="Search networks...",
-            prefix_icon=ft.Icons.SEARCH_ROUNDED,
-            border={
-                ft.ControlState.DEFAULT: ft.OutlineInputBorder(
-                    side=ft.BorderSide(
-                        width=1,
-                        color=ft.Colors.with_opacity(
-                            tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
-                        ),
-                    ),
-                    border_radius=tokens.RADIUS_MD,
-                ),
-                ft.ControlState.FOCUSED: ft.OutlineInputBorder(
-                    side=ft.BorderSide(width=1, color=ft.Colors.PRIMARY),
-                    border_radius=tokens.RADIUS_MD,
-                ),
-            },
-            bgcolor=ft.Colors.SURFACE,
-            filled=True,
-            on_change=lambda e: set_search_query(e.control.value),
-            text_size=tokens.FONT_SM,
-            content_padding=tokens.SPACE_SM,
-            height=44,
-        ),
-        padding=ft.Padding(
-            left=tokens.SPACE_XL,
-            right=tokens.SPACE_XL,
-            top=tokens.SPACE_SM,
-            bottom=tokens.SPACE_SM,
-        ),
-    )
+    # Search bar — isolated component so keystrokes don't rebuild the list.
+    search_bar = SitesSearchBar(initial="", on_debounced=set_debounced_query)
 
     # Bulk actions
     bulk_actions = ft.Container(
@@ -342,11 +474,21 @@ def SitesScreen() -> Control:
     )
 
     stats_text = _get_stats()
+    # DB stats header: what the shipped database actually contains — helps
+    # users judge scan breadth at a glance.
+    db_total = getattr(state, "sites_total", 0) or 0
+    n_tags = len(getattr(state, "sites_tag_index", None) or {})
+    db_text = f" • DB: {db_total:,} sites, {n_tags} tags" if db_total else ""
+    shown_text = (
+        f" • {len(filtered_names)} shown"
+        if filtered_names and len(filtered_names) != len(checked_states)
+        else ""
+    )
     stats_header = ft.Container(
         content=ft.Row(
             controls=[
                 ft.Text(
-                    stats_text,
+                    stats_text + db_text + shown_text,
                     size=tokens.FONT_XS,
                     color=ft.Colors.with_opacity(
                         tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
@@ -359,11 +501,20 @@ def SitesScreen() -> Control:
         padding=ft.Padding(0, tokens.SPACE_XS, 0, tokens.SPACE_SM),
     )
 
-    if not checked_states:
+    if state.sites_version == 0 and not checked_states:
         body = ft.Container(
             content=EmptyState(
                 title="Loading networks...",
                 message="Fetching the social network database.",
+                icon=ft.Icons.HUB_ROUNDED,
+            ),
+            expand=True,
+        )
+    elif not canonical_names:
+        body = ft.Container(
+            content=EmptyState(
+                title="No networks in database",
+                message="The site database loaded empty — check exclusions or reload.",
                 icon=ft.Icons.HUB_ROUNDED,
             ),
             expand=True,
@@ -388,6 +539,8 @@ def SitesScreen() -> Control:
             spacing=0,
             expand=True,
             build_controls_on_demand=True,
+            item_extent=_ROW_HEIGHT,
+            cache_extent=500,
         )
 
     return ft.Column(

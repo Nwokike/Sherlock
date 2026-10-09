@@ -19,9 +19,11 @@ import flet as ft
 
 def open_url_action(url: str) -> ft.OpenUrl | None:
     """An ft.OpenUrl bound to the current page, or None outside a live app."""
+    if not url:
+        return None
     try:
         return ft.OpenUrl(url)
-    except RuntimeError:
+    except RuntimeError, AttributeError:
         # No page context (test harness / early init) — caller falls back
         # to the Python launch path.
         return None

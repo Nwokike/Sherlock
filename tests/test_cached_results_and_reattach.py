@@ -3,11 +3,62 @@
 import asyncio
 from unittest.mock import MagicMock
 
+import pytest
+
 from components.active_scan_banner import ActiveScanBanner
 from core.constants import MODE_EMAIL, MODE_USERNAME
 from core.state import state
 from main import AppController
 from services.sherlock_service import SearchProgress
+
+
+@pytest.fixture(autouse=True)
+def _restore_global_state():
+    """Snapshot every state field this file's paths touch around each test.
+
+    Covers the test bodies plus everything open_cached_result() mutates
+    (main.py: enrichments clear/update, email buckets, last_results,
+    progress_version) so no field leaks into the next test under any
+    file order. Restore goes through setattr (never __dict__ surgery):
+    AppState is @ft.observable and __dict__ surgery wipes its wrapper
+    internals. Collections restore in place to keep their wrappers.
+    """
+    if state.results_cache is None:
+        state.results_cache = {}
+    if state.enrichments is None:
+        state.enrichments = {}
+    if state.last_results is None:
+        state.last_results = {}
+    saved = {
+        "current_username": state.current_username,
+        "email_found_count": state.email_found_count,
+        "email_not_found_count": state.email_not_found_count,
+        "email_rate_limited_count": state.email_rate_limited_count,
+        "email_results_address": state.email_results_address,
+        "email_total_modules": state.email_total_modules,
+        "email_unavailable_count": state.email_unavailable_count,
+        "is_searching": state.is_searching,
+        "last_results_username": state.last_results_username,
+        "progress_version": state.progress_version,
+        "search_mode": state.search_mode,
+        "search_progress": state.search_progress,
+    }
+    saved_results_cache = dict(state.results_cache)
+    saved_enrichments = dict(state.enrichments)
+    saved_last_results = dict(state.last_results)
+    saved_email_results = list(state.email_results) if state.email_results else []
+    yield
+    for key, value in saved.items():
+        setattr(state, key, value)
+    state.results_cache.clear()
+    state.results_cache.update(saved_results_cache)
+    state.enrichments.clear()
+    state.enrichments.update(saved_enrichments)
+    state.last_results.clear()
+    state.last_results.update(saved_last_results)
+    if state.email_results is None:
+        state.email_results = []
+    state.email_results[:] = saved_email_results
 
 
 def test_active_scan_banner_component():

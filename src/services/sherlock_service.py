@@ -18,7 +18,6 @@ try:
     import maigret
     from maigret.checking import maigret as maigret_search
     from maigret.errors import solution_of as _error_solution
-    from maigret.notify import QueryNotifyPrint
     from maigret.result import MaigretCheckResult, MaigretCheckStatus
     from maigret.sites import MaigretDatabase, MaigretSite
 
@@ -68,7 +67,19 @@ if _MAIGRET_AVAILABLE:
     def _silent_alive_bar(*args: Any, **kwargs: Any) -> _SilentBar:
         return _SilentBar()
 
-    maigret.checking.alive_bar = _silent_alive_bar
+    # Guarded: a maigret build without checking.alive_bar must not kill
+    # this module at import time.
+    try:
+        import maigret.checking as _checking
+
+        if hasattr(_checking, "alive_bar"):
+            _checking.alive_bar = _silent_alive_bar
+        else:
+            logger.warning(
+                "maigret.checking.alive_bar missing — silent-bar patch skipped"
+            )
+    except Exception as exc:
+        logger.warning("Silent-bar patch skipped: %s", exc)
 
     # P3-8 shared-DNS connector defaults: maigret builds a FRESH
     # TCPConnector per site check (checking.py), so the connector's
@@ -94,7 +105,7 @@ if _MAIGRET_AVAILABLE:
         logger.warning("Connector DNS-cache patch failed: %s", exc)
 
 
-def _resolve_local_db() -> str:
+def _resolve_local_db(check_synced: bool = True) -> str:
     """Return a real filesystem path to the site database.
 
     Prefers user-synced or custom database. Otherwise falls back to the
@@ -103,17 +114,18 @@ def _resolve_local_db() -> str:
     sitepackages.zip — a zip *file*, not a folder — so naively joining
     dirname(__file__) yields a virtual path that open() rejects with
     [Errno 20] Not a directory. There we read the resource through the
-    package loader and materialize a copy in the app storage dir,
+    package loader and materialize a copy in the app CACHE dir (it is
+    regenerable — the miss path re-extracts, so eviction is safe),
     re-extracting only when the bundled content changes.
     """
     import hashlib
     import os
     import pkgutil
 
-    from services.storage_service import get_storage_dir
+    from services.storage_service import get_cache_dir, get_storage_dir
 
     synced_path = get_storage_dir() / "synced_data.json"
-    if synced_path.exists():
+    if check_synced and synced_path.exists():
         logger.info("Using synced database: %s", synced_path)
         return str(synced_path)
 
@@ -127,16 +139,24 @@ def _resolve_local_db() -> str:
 
     raw = pkgutil.get_data("maigret", "resources/data.json")
     if raw is None:
-        # Check fallback to sherlock if maigret raw is not present
-        raw = pkgutil.get_data("sherlock_project", "resources/data.json")
-    if raw is None:
         raise FileNotFoundError("bundled resources/data.json not found in package")
+    # NOTE: legacy "sherlock_project" fallback removed — installed dist is
+    # maigret>=0.6.6 (pyproject.toml); a second wrong name only masks errors.
 
-    storage = get_storage_dir()
-    storage.mkdir(parents=True, exist_ok=True)
-    db_path = storage / "bundled_maigret_data.json"
+    cache = get_cache_dir()
+    cache.mkdir(parents=True, exist_ok=True)
+    # One-time migration (Batch 12 tier fix): the materialized copy used to
+    # live in durable storage/ — remove the legacy orphans so they don't
+    # bloat backups forever.
+    try:
+        legacy = get_storage_dir() / "bundled_maigret_data.json"
+        legacy.unlink(missing_ok=True)
+        legacy.with_suffix(".json.sha256").unlink(missing_ok=True)
+    except OSError:
+        pass
+    db_path = cache / "bundled_maigret_data.json"
     digest = hashlib.sha256(raw).hexdigest()
-    hash_path = storage / "bundled_maigret_data.json.sha256"
+    hash_path = cache / "bundled_maigret_data.json.sha256"
     stored_hash = ""
     if hash_path.exists():
         try:
@@ -144,8 +164,31 @@ def _resolve_local_db() -> str:
         except OSError:
             pass
     if not (db_path.exists() and stored_hash == digest):
-        db_path.write_bytes(raw)
-        hash_path.write_text(digest, encoding="utf-8")
+        try:
+            import tempfile
+
+            fd, tmp_s = tempfile.mkstemp(
+                dir=str(cache), prefix=".bundled_maigret_data.", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(raw)
+                os.replace(tmp_s, db_path)
+                hash_path.write_text(digest, encoding="utf-8")
+            finally:
+                try:
+                    os.unlink(tmp_s)
+                except OSError:
+                    pass
+        except OSError as exc:
+            logger.warning(
+                "Bundled DB materialize failed, using in-memory fallback: %s", exc
+            )
+            import tempfile as _tf
+
+            with _tf.NamedTemporaryFile(delete=False, suffix=".json") as fallback:
+                fallback.write(raw)
+            return fallback.name
     logger.info("Using extracted package database: %s", db_path)
     return str(db_path)
 
@@ -184,6 +227,26 @@ _BOT_ERROR_TYPES = frozenset(
 )
 _DEAD_ERROR_PREFIX = "Connecting failure"
 _RATE_ERROR_TYPE = "Rate limited"
+# Normalized substring fallback for error types outside maigret's exact
+# vocabulary ("HTTP 429", "403 Forbidden", "Cloudflare challenge", ...).
+# Checked AFTER the exact vocabulary above, so known types are unchanged.
+_RATE_SUBSTRINGS = ("429", "rate", "too many")
+_WAF_SUBSTRINGS = (
+    "403",
+    "cloudflare",
+    "captcha",
+    "waf",
+    "forbidden",
+    "incapsula",
+    "datadome",
+    "akamai",
+    "perimeterx",
+    "kasada",
+    "bot",
+    "challenge",
+    "denied",
+    "blocked",
+)
 # Generic failures on a site that carries protection tags are almost
 # always the wall rather than the endpoint.
 _GENERIC_ERROR_TYPES = frozenset({"Unknown", "", "HTTP", "Request failed", "Payload"})
@@ -206,6 +269,13 @@ def classify_error(error_type: str | None, protection: list[str] | None = None) 
     if et == _DEAD_ERROR_PREFIX or et.startswith(_DEAD_ERROR_PREFIX + " "):
         return "dead"
     if et in _GENERIC_ERROR_TYPES and protection:
+        return "bot"
+    # Normalized substring fallback — catches "HTTP 429", "429 Too Many
+    # Requests", "403 Forbidden", "Cloudflare challenge", "WAF blocked", etc.
+    low = et.lower()
+    if any(s in low for s in _RATE_SUBSTRINGS):
+        return "rate"
+    if any(s in low for s in _WAF_SUBSTRINGS):
         return "bot"
     if et:
         return "error"
@@ -230,7 +300,7 @@ class _MaigretQueryNotify:
     def __init__(
         self,
         total: int,
-        cancel_event: asyncio.Event,
+        cancel_event: threading.Event,
         progress: SearchProgress | None = None,
         on_progress: Callable[[SearchProgress], None] | None = None,
         sites_lookup: dict[str, Any] | None = None,
@@ -260,7 +330,6 @@ class _MaigretQueryNotify:
         )
 
         url_user = getattr(result, "site_url_user", "") or ""
-        url_main = ""
         site_name = getattr(result, "site_name", "Unknown")
         query_time = getattr(result, "query_time", None)
         context_str = getattr(result, "context", None)
@@ -277,9 +346,8 @@ class _MaigretQueryNotify:
         if error_type is not None and not isinstance(error_type, str):
             error_type = str(error_type)
         site_obj = self.sites_lookup.get(site_name)
-        protection = (
-            list(getattr(site_obj, "protection", []) or []) if site_obj else []
-        )
+        url_main = getattr(site_obj, "url_main", "") or ""
+        protection = list(getattr(site_obj, "protection", []) or []) if site_obj else []
         kw_status = getattr(result, "keyword_match_status", None)
         keyword_hit = getattr(kw_status, "name", "") == "KEYWORD_FOUND"
         badge = classify_error(error_type, protection)
@@ -289,17 +357,32 @@ class _MaigretQueryNotify:
             if status_name == "CLAIMED"
             else (
                 "Available"
-                if status_name in ("AVAILABLE", "ILLEGAL")
-                else ("WAF" if badge == "bot" else "Error")
+                if status_name == "AVAILABLE"
+                # ILLEGAL = username not allowable for this site (checker
+                # skipped), not a probed "available" — own status routed
+                # to errors so counts stay honest.
+                else (
+                    "Skipped"
+                    if status_name == "ILLEGAL"
+                    else ("WAF" if badge == "bot" else "Error")
+                )
             )
         )
+
+        # MaigretCheckResult carries no http_status (it lives on maigret's
+        # internal SiteResult dict, which is NOT passed to query_notify.update
+        # — see maigret checking.py). Read best-effort so a future maigret that
+        # attaches it is picked up without a fork.
+        http_status = getattr(result, "http_status", "") or ""
+        if not isinstance(http_status, str):
+            http_status = str(http_status)
 
         sr = SiteResult(
             site_name=site_name,
             url_main=url_main,
             url_user=url_user,
             status=status_str,
-            http_status="",
+            http_status=http_status,
             query_time=query_time,
             context=context_str,
             tags=tags,
@@ -330,8 +413,8 @@ class _MaigretQueryNotify:
                     self.last_update_time = now
                     try:
                         self.on_progress(self.progress)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("on_progress callback failed: %s", exc)
 
     def finish(self, message: str | None = None, *args, **kwargs) -> None:
         logger.debug("Maigret search finished: %s", message)
@@ -370,10 +453,7 @@ class _MaigretQueryNotify:
 
 def parse_usernames(raw: str) -> list[str]:
     """Parse comma/space separated list of usernames and expand {?} wildcards."""
-    if "," in raw:
-        items = [i.strip() for i in raw.split(",")]
-    else:
-        items = raw.split()
+    items = [i.strip() for i in raw.split(",")] if "," in raw else raw.split()
 
     resolved = []
     checksymbols = ["_", "-", "."]
@@ -400,6 +480,71 @@ def parse_usernames(raw: str) -> list[str]:
 # rare non-username types (vk_id, orcid, …) have a handful of sites each.
 RECURSIVE_TARGET_CAP = 20
 RECURSIVE_USERNAME_SITES = 500
+# "All" depth sentinel for ranked_sites_dict(top=...).
+SCAN_ALL = 9223372036854775807
+
+
+def _mark_cancelled(prog: SearchProgress) -> None:
+    prog.is_running = False
+    prog.is_cancelled = True
+
+
+def _maigret_kwargs(func: Any, **kwargs: Any) -> dict[str, Any]:
+    """Drop kwargs the installed maigret() doesn't accept (version skew)."""
+    import inspect as _inspect
+
+    try:
+        sig = _inspect.signature(func)
+    except TypeError, ValueError:
+        return kwargs
+    params = sig.parameters
+    if any(p.kind == _inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs  # 0.6.6 has **kwargs — pass through
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def extract_holehe_usernames(email_rows: list | None, cap: int = 5) -> list[str]:
+    """High-confidence usernames from holehe-v2 email results.
+
+    github.login, duolingo/etzy usernames, gravatar usernames are
+    platform-verified identities — prime cross-engine pivot candidates for
+    a username scan. Returns deduped strings, most-confident first.
+    """
+    if not email_rows:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in email_rows:
+        if isinstance(r, dict):
+            get = r.get
+        else:
+            _r = r
+
+            def get(k, d=None, _r=_r):
+                return getattr(_r, k, d)
+
+        if not get("exists"):
+            continue
+        others = get("others") or {}
+        extra = (
+            others.get("extra")
+            if isinstance(others, dict) and isinstance(others.get("extra"), dict)
+            else {}
+        )
+        cands = [
+            extra.get("login"),
+            extra.get("username"),
+            extra.get("preferredUsername"),
+        ]
+        for c in cands:
+            if isinstance(c, str) and c.strip():
+                key = c.strip().lower()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(c.strip())
+                    if len(out) >= cap:
+                        return out
+    return out
 
 
 def _collect_recursive_targets(
@@ -464,6 +609,14 @@ def _run_maigret_worker_thread(
     Keeping this off the main thread ensures 100% UI responsiveness for Flet.
     """
     worker_loop = asyncio.new_event_loop()
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        _old_loop = None
+    else:
+        _old_loop = asyncio.get_event_loop()
+        if _old_loop is not None and _old_loop.is_closed():
+            _old_loop = None
     asyncio.set_event_loop(worker_loop)
 
     last_prog: SearchProgress | None = None
@@ -491,6 +644,8 @@ def _run_maigret_worker_thread(
 
         # Per-target output containers, kept for the optional recursive
         # second pass (they carry ids_usernames/ids_links when parsing on).
+        # Skipped entirely when the tail can't consume them.
+        keep_containers = bool(recursive and extract_info)
         containers: dict[str, Any] = {}
 
         for tgt in targets:
@@ -513,34 +668,41 @@ def _run_maigret_worker_thread(
             )
 
             output_container: dict[str, Any] = {}
-            containers[tgt] = output_container
+            if keep_containers:
+                containers[tgt] = output_container
 
             try:
                 await maigret_search(
                     username=tgt,
                     site_dict=sites_to_scan,
                     logger=logger,
-                    query_notify=query_notify,
-                    proxy=proxy,
-                    timeout=timeout,
-                    max_connections=max_conns,
-                    no_progressbar=True,
-                    dns_resolver=dns_res,
-                    is_parsing_enabled=extract_info,
-                    is_enrich_enabled=deep_enrich,
-                    retries=retry_count,
-                    output_container=output_container,
-                    keywords=keywords,
-                    cookies=cookies_path,
-                    i2p_proxy=i2p_proxy,
-                    check_domains=check_domains,
+                    **_maigret_kwargs(
+                        maigret_search,
+                        query_notify=query_notify,
+                        proxy=proxy,
+                        timeout=timeout,
+                        max_connections=max_conns,
+                        no_progressbar=True,
+                        dns_resolver=dns_res,
+                        is_parsing_enabled=extract_info,
+                        is_enrich_enabled=deep_enrich,
+                        retries=retry_count,
+                        output_container=output_container,
+                        keywords=keywords,
+                        cookies=cookies_path,
+                        i2p_proxy=i2p_proxy,
+                        check_domains=check_domains,
+                    ),
                 )
             except asyncio.CancelledError:
                 progress.is_cancelled = True
                 raise
-            except Exception as exc:
-                logger.exception("Maigret search encountered an error: %s", exc)
-                raise
+            except Exception:
+                # Mirror the recursive-tail policy: a failing PRIMARY must
+                # not kill the remaining targets — log loudly, close out
+                # this target, and continue the loop.
+                logger.exception("Maigret search failed for %s", tgt)
+                progress.is_running = False
             finally:
                 progress.is_running = False
 
@@ -558,20 +720,30 @@ def _run_maigret_worker_thread(
         # ── Recursive second pass (state.recursive_search, opt-in) ────
         # Depth is capped at 2 BY CONSTRUCTION: ids discovered during these
         # secondary scans are never expanded again.
-        if (
-            recursive
-            and db is not None
-            and containers
-            and not cancel_event.is_set()
-        ):
+        if recursive and db is not None and containers and not cancel_event.is_set():
             discovered = _collect_recursive_targets(containers, db, targets)
+            # Cross-engine pivot (Batch 10): usernames holehe verified on
+            # email results feed maigret secondaries under the same opt-in
+            # recursive flag. Read live state — no signature threading.
+            try:
+                from core.state import state as _app_state
+
+                _email_rows = list(getattr(_app_state, "email_results", None) or [])
+            except Exception:
+                _email_rows = []
+            if _email_rows:
+                _have = {t.lower() for t in targets} | {k.lower() for k in discovered}
+                for _u in extract_holehe_usernames(_email_rows):
+                    if len(discovered) >= RECURSIVE_TARGET_CAP:
+                        break
+                    if _u.lower() not in _have:
+                        _have.add(_u.lower())
+                        discovered[_u] = "username"
             if discovered:
                 logger.info(
                     "Recursive search: %d secondary target(s): %s",
                     len(discovered),
-                    ", ".join(
-                        f"{k}({v})" for k, v in list(discovered.items())[:10]
-                    ),
+                    ", ".join(f"{k}({v})" for k, v in list(discovered.items())[:10]),
                 )
             else:
                 logger.info(
@@ -591,11 +763,9 @@ def _run_maigret_worker_thread(
                         from core.state import state as app_state
 
                         sites2 = db.ranked_sites_dict(
-                            top=9223372036854775807,
+                            top=SCAN_ALL,
                             disabled=app_state.ignore_exclusions,
-                            excluded_tags=(
-                                [] if app_state.nsfw_enabled else ["nsfw"]
-                            ),
+                            excluded_tags=([] if app_state.nsfw_enabled else ["nsfw"]),
                             id_type=id_type,
                         )
                     except Exception as exc:
@@ -612,6 +782,9 @@ def _run_maigret_worker_thread(
                 # Same list object as state.search_targets (assigned by
                 # reference in search()) — appending keeps the staleness
                 # filter in main._apply_progress from dropping secondary ticks.
+                # THREADING: worker thread appends while the main loop may
+                # iterate state.search_targets; CPython makes append itself
+                # atomic, but readers must iterate a snapshot, never live.
                 targets.append(new_id)
 
                 progress2 = SearchProgress(
@@ -628,27 +801,31 @@ def _run_maigret_worker_thread(
                     sites_lookup=sites2,
                 )
                 container2: dict[str, Any] = {}
-                containers[new_id] = container2
+                if keep_containers:
+                    containers[new_id] = container2
                 try:
                     await maigret_search(
                         username=new_id,
                         site_dict=sites2,
                         logger=logger,
-                        query_notify=notify2,
-                        proxy=proxy,
-                        timeout=timeout,
-                        max_connections=max_conns,
-                        no_progressbar=True,
-                        dns_resolver=dns_res,
-                        is_parsing_enabled=extract_info,
-                        is_enrich_enabled=deep_enrich,
-                        retries=retry_count,
-                        output_container=container2,
-                        id_type=id_type,
-                        keywords=keywords,
-                        cookies=cookies_path,
-                        i2p_proxy=i2p_proxy,
-                        check_domains=check_domains,
+                        **_maigret_kwargs(
+                            maigret_search,
+                            query_notify=notify2,
+                            proxy=proxy,
+                            timeout=timeout,
+                            max_connections=max_conns,
+                            no_progressbar=True,
+                            dns_resolver=dns_res,
+                            is_parsing_enabled=extract_info,
+                            is_enrich_enabled=deep_enrich,
+                            retries=retry_count,
+                            output_container=container2,
+                            id_type=id_type,
+                            keywords=keywords,
+                            cookies=cookies_path,
+                            i2p_proxy=i2p_proxy,
+                            check_domains=check_domains,
+                        ),
                     )
                 except asyncio.CancelledError:
                     progress2.is_cancelled = True
@@ -686,16 +863,22 @@ def _run_maigret_worker_thread(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
         worker_loop.close()
+        try:
+            asyncio.set_event_loop(_old_loop)
+        except Exception:
+            pass
 
 
 class SherlockService:
     """Runs high-performance username OSINT searches powered by Maigret across 5,200+ sites."""
 
     def __init__(self):
-        self._cancel_event = asyncio.Event()
+        # Cooperative cancel only: the worker thread polls _thread_cancel
+        # between targets. There is intentionally no asyncio.Event / task
+        # handle — the scan runs in a threadpool thread that cannot be
+        # interrupted mid-target; cancel takes effect at target boundaries
+        # and suppresses further progress ticks.
         self._thread_cancel = threading.Event()
-        self._search_task: asyncio.Task | None = None
-        self._progress: SearchProgress | None = None
         self._db: Any | None = None
         self._sites_dict: dict[str, Any] = {}
         self._total_sites: int = 0
@@ -726,28 +909,31 @@ class SherlockService:
 
         try:
             logger.info("Loading Maigret site database...")
-            from services.storage_service import get_storage_dir
 
             if state.custom_manifest:
                 path_arg = state.custom_manifest.strip()
                 logger.info("Using custom manifest database: %s", path_arg)
-            elif state.use_local_db:
-                path_arg = _resolve_local_db()
             else:
-                synced_path = get_storage_dir() / "synced_data.json"
-                if synced_path.exists():
-                    path_arg = str(synced_path)
-                    logger.info("Using synced database: %s", path_arg)
-                else:
-                    path_arg = _resolve_local_db()
+                # Single source for synced/bundled resolution (the synced
+                # check lives in _resolve_local_db — no second copy here).
+                # use_local_db skips the synced copy (bundled wins when set).
+                path_arg = _resolve_local_db(check_synced=not state.use_local_db)
 
             def _load_db():
                 # Layer-1 cache: reuse the pickled database when the source
                 # manifest is unchanged (hybrid mtime-then-SHA256 validation
                 # in cache_service). Falls back to a full parse on any miss.
+                # Defensive: try_load contractually returns None on miss, but
+                # a corrupt-pickle raise must never kill the scan — parse instead.
                 from services import cache_service
 
-                cached = cache_service.try_load_compiled_db(path_arg)
+                try:
+                    cached = cache_service.try_load_compiled_db(path_arg)
+                except Exception as exc:
+                    logger.warning(
+                        "Compiled DB cache raised, falling back to parse: %s", exc
+                    )
+                    cached = None
                 if cached is not None:
                     return cached
                 db = MaigretDatabase().load_from_path(path_arg)
@@ -771,18 +957,16 @@ class SherlockService:
             )
             # P3-6: drop sites the sampled DB-health panel flagged on the
             # last run (persisted by the controller, cleared by a healthy run).
-            unhealthy = {
-                n.lower() for n in (state.unhealthy_sites or [])
-            }
+            unhealthy = {n.lower() for n in (state.unhealthy_sites or [])}
             if unhealthy:
                 removed = sum(1 for k in sites_dict if k.lower() in unhealthy)
                 if removed:
                     sites_dict = {
-                        k: v for k, v in sites_dict.items() if k.lower() not in unhealthy
+                        k: v
+                        for k, v in sites_dict.items()
+                        if k.lower() not in unhealthy
                     }
-                    logger.info(
-                        "DB health: excluding %d flagged site(s)", removed
-                    )
+                    logger.info("DB health: excluding %d flagged site(s)", removed)
             self._sites_dict = sites_dict
             self._total_sites = len(sites_dict)
             self._last_config = config
@@ -797,20 +981,26 @@ class SherlockService:
 
             # Layer-5 cache: inverted tag -> names index so SitesScreen chip
             # filtering is an O(1) bucket lookup instead of an O(N) scan.
+            # The on-disk copy is trusted only when its hash matches the
+            # live DB (a manifest update can change tags under same names).
             try:
                 from services import cache_service
 
                 indices = cache_service.build_sites_indices(sites_dict)
-                cache_service.save_sites_indices(indices)
-                state.sites_tag_index = indices["by_tag"]
+                cached = cache_service.load_sites_indices(indices["db_hash"])
+                if cached is not None:
+                    state.sites_tag_index = cached["by_tag"]
+                else:
+                    cache_service.save_sites_indices(indices)
+                    state.sites_tag_index = indices["by_tag"]
             except Exception as exc:
                 logger.warning("Failed to build site tag index: %s", exc)
                 state.sites_tag_index = None
 
             logger.info("Loaded %d Maigret sites", self._total_sites)
             return self._total_sites
-        except Exception as e:
-            logger.error("Failed to load site database: %s", e)
+        except Exception:
+            logger.exception("Failed to load site database")
             return 0
 
     async def search(
@@ -820,7 +1010,16 @@ class SherlockService:
         timeout: int = 10,
         after_primary: Callable[[str, int, int], None] | None = None,
     ) -> SearchProgress:
-        """Run Maigret search on an isolated worker thread with active settings filters."""
+        """Run Maigret search on an isolated worker thread with active settings filters.
+
+        Returns the LAST target's SearchProgress only. Per-target truth is
+        ``state.target_results`` ({target: SearchProgress}), populated on
+        every progress tick via the recording wrapper below. Multi-target
+        callers must read state.target_results, not the return value.
+
+        `after_primary(target, found, total)` fires per finished primary
+        target (first arg is the per-target id, not the raw query).
+        """
         if not _MAIGRET_AVAILABLE:
             raise RuntimeError("Maigret search engine is not available")
 
@@ -832,9 +1031,9 @@ class SherlockService:
         if not targets:
             raise RuntimeError("No valid usernames specified for scanning")
 
-        # Ensure sites database is loaded
-        if not self._sites_dict:
-            await self.load_sites()
+        # Ensure sites database is loaded (load_sites() early-returns on
+        # unchanged config, so this is cheap when nothing changed).
+        await self.load_sites()
 
         sites_to_scan = dict(self._sites_dict)
         if state.selected_sites:
@@ -847,11 +1046,19 @@ class SherlockService:
         if total_sites == 0:
             raise RuntimeError("No sites selected or available for scanning")
 
-        self._cancel_event.clear()
         self._thread_cancel.clear()
 
         proxy = getattr(state, "proxy_url", "") or None
-        max_conns = getattr(state, "max_connections", 50)
+        try:
+            max_conns = int(getattr(state, "max_connections", 50))
+        except TypeError, ValueError:
+            max_conns = 50
+        max_conns = max(1, min(max_conns, 200))
+        try:
+            timeout = int(timeout)
+        except TypeError, ValueError:
+            timeout = 10
+        timeout = max(1, min(timeout, 120))
         dns_res = getattr(state, "dns_resolver", "threaded")
         # On Android / mobile platforms, always use ThreadedResolver (getaddrinfo via OS netd).
         # aiodns / c-ares requires /etc/resolv.conf which does not exist on Android,
@@ -867,7 +1074,11 @@ class SherlockService:
         if is_mobile or not dns_res:
             dns_res = "threaded"
         extract_info = getattr(state, "extract_info", True)
-        retry_count = getattr(state, "retries", 0)
+        try:
+            retry_count = int(getattr(state, "retries", 0))
+        except TypeError, ValueError:
+            retry_count = 0
+        retry_count = max(0, min(retry_count, 5))
         recursive = bool(getattr(state, "recursive_search", False))
         # P3-3/P3-7/P3-9 knobs (is_mobile computed above for DNS).
         deep_enrich = bool(getattr(state, "deep_enrich", False))
@@ -879,10 +1090,19 @@ class SherlockService:
         check_domains = bool(getattr(state, "check_domains", False)) and not is_mobile
 
         # Bridge the worker-thread primary-completion hook to the caller's
-        # (query, found, total) signature — main saves history through it.
+        # (target, found, total) signature — main saves history through it.
+        # First arg is the per-target id, NOT the raw multi-target query.
         def _after_primary(tgt: str, prog: SearchProgress) -> None:
             if after_primary is not None:
-                after_primary(username, len(prog.found), prog.total_sites)
+                after_primary(tgt, len(prog.found), prog.total_sites)
+
+        def _recording_progress(prog: SearchProgress) -> None:
+            """Store per-target truth, then forward to the caller."""
+            try:
+                state.target_results[prog.username] = prog
+            except Exception:
+                pass
+            on_progress(prog)
 
         # Execute on isolated background thread
         res = await asyncio.to_thread(
@@ -896,7 +1116,7 @@ class SherlockService:
             extract_info=extract_info,
             retry_count=retry_count,
             cancel_event=self._thread_cancel,
-            on_progress_cb=on_progress,
+            on_progress_cb=_recording_progress,
             db=self._db,
             recursive=recursive,
             deep_enrich=deep_enrich,
@@ -915,12 +1135,20 @@ class SherlockService:
                     is_cancelled=True,
                 )
             elif self._thread_cancel.is_set() and state.target_results[tgt].is_running:
-                state.target_results[tgt].is_running = False
-                state.target_results[tgt].is_cancelled = True
+                _mark_cancelled(state.target_results[tgt])
 
-        return res or SearchProgress(username=username, total_sites=total_sites)
+        # Last-target-only by contract; see docstring. Multi-target callers
+        # must read state.target_results.
+        return res or SearchProgress(
+            username=targets[0] if targets else username.strip(),
+            total_sites=total_sites,
+        )
 
-    async def run_db_health(self, sample_size: int = 25) -> dict:
+    async def run_db_health(
+        self,
+        sample_size: int = 25,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         """Sampled DB health (P3-6): probe N random enabled sites off-scan.
 
         Never auto-disables (auto_disable=False): results come back for the
@@ -935,18 +1163,32 @@ class SherlockService:
 
         from core.state import state
 
+        try:
+            sample_size = int(sample_size)
+        except TypeError, ValueError:
+            sample_size = 25
+        sample_size = max(1, min(sample_size, 200))
+        cancel = cancel_event or self._thread_cancel
+
         if self._db is None:
             await self.load_sites()
         if self._db is None:
             return {"error": "site database unavailable"}
+        if cancel.is_set():
+            return {
+                "error": "cancelled",
+                "sample": 0,
+                "ok": 0,
+                "flagged": 0,
+                "unhealthy": [],
+                "details": [],
+            }
         try:
             # MaigretDatabase.sites is a LIST (on-device crash this fixes:
             # "'list' object has no attribute 'values'").
             raw_sites = self._db.sites
             iterable = raw_sites.values() if hasattr(raw_sites, "values") else raw_sites
-            candidates = [
-                s for s in iterable if not getattr(s, "disabled", False)
-            ]
+            candidates = [s for s in iterable if not getattr(s, "disabled", False)]
             if not candidates:
                 return {"error": "no enabled sites to check"}
             sample = _random.sample(candidates, min(sample_size, len(candidates)))
@@ -954,6 +1196,15 @@ class SherlockService:
             logger.info(
                 "DB health: probing %d/%d sites...", len(site_data), len(candidates)
             )
+            if cancel.is_set():
+                return {
+                    "error": "cancelled",
+                    "sample": len(site_data),
+                    "ok": 0,
+                    "flagged": 0,
+                    "unhealthy": [],
+                    "details": [],
+                }
             res = await self_check(
                 self._db,
                 site_data,
@@ -991,21 +1242,17 @@ class SherlockService:
             return {"error": f"DB health check failed: {exc}"}
 
     def cancel(self) -> None:
-        """Cancel a running search."""
-        self._cancel_event.set()
+        """Signal cancel — cooperative, between-target boundary only.
+
+        The scan runs in a threadpool thread that cannot be interrupted
+        mid-target: in-flight site checks drain in the background while the
+        worker stops ticking progress at the next target boundary.
+        """
         self._thread_cancel.set()
-        if self._search_task and not self._search_task.done():
-            self._search_task.cancel()
-        if self._progress:
-            self._progress.is_cancelled = True
-            self._progress.is_running = False
 
         from core.state import state
 
         for tgt in state.target_results:
             prog = state.target_results[tgt]
             if prog.is_running:
-                prog.is_running = False
-                prog.is_cancelled = True
-                prog.is_running = False
-                prog.is_cancelled = True
+                _mark_cancelled(prog)

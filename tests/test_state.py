@@ -48,7 +48,10 @@ class TestAppState:
         assert app_state.progress_version == 0
         assert len(app_state.target_results) == 0
         assert len(app_state.search_targets) == 0
-        assert app_state.is_online is True
+        # Connectivity is owned by the connectivity handlers, not by search
+        # lifecycle: reset_search must preserve it (regression: it used to
+        # force is_online=True, hiding the offline banner on cancel).
+        assert app_state.is_online is False
 
     def test_is_online_notifies(self, app_state):
         """Flipping is_online must notify subscribers (drives the reactive

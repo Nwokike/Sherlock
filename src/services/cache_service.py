@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 _PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
 _SHA256_BLOCK = 1 << 16  # 64 KB streaming blocks
 _DNS_TTL_SEC = 24 * 3600
+# Negative DNS cache is deliberately short: a transient failure (captive
+# portal, flaky resolver) must not blacklist a domain for a full day.
+_DNS_DEAD_TTL_SEC = 3600
 
 
 def _cache_root() -> Path:
@@ -63,24 +66,46 @@ def _sha256_file(path: Path) -> str:
 
 
 def _write_atomic(path: Path, writer: Any) -> bool:
-    """Write through a temp file then os.replace; returns success.
+    """Write through a unique temp file then os.replace; returns success.
 
     `writer` is a callable receiving the open temp file handle. Keeping the
     temp file inside the same directory guarantees an atomic same-filesystem
-    rename on every platform we ship.
+    rename on every platform we ship. The temp name is unique per writer
+    (mkstemp) so concurrent writers to the same destination cannot interleave.
     """
+    import tempfile
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.tmp")
-        with open(tmp, "wb") as fh:
-            writer(fh)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        return True
+        fd, tmp_s = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                writer(fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_s, path)
+            return True
+        finally:
+            try:
+                os.unlink(tmp_s)
+            except OSError:
+                pass
     except Exception as exc:
         logger.warning("Cache write failed for %s: %s", path, exc)
         return False
+
+
+def _backup_corrupt(path: Path) -> None:
+    """Rename a corrupt cache file aside for forensics (parse errors only)."""
+    try:
+        if path.is_file() and path.stat().st_size > 0:
+            bak = path.with_name(f"{path.name}.corrupt.{int(time.time())}.bak")
+            os.replace(path, bak)
+            logger.warning("Corrupt cache backed up: %s -> %s", path, bak)
+    except OSError:
+        pass
 
 
 def _write_json_atomic(path: Path, payload: Any) -> bool:
@@ -147,7 +172,20 @@ def try_load_compiled_db(source_path: str) -> Any | None:
         if not pkl_path.is_file():
             return None
 
-        db = pickle.loads(pkl_path.read_bytes())
+        # Payload integrity: the meta carries the pickle's own hash/size so a
+        # truncated or tampered payload is never unpickled. Metas written
+        # before this field existed miss once and are rewritten on next save.
+        if meta.get("pkl_size") != pkl_path.stat().st_size:
+            return None
+        if meta.get("pkl_sha256") is None:
+            return None
+        if _sha256_file(pkl_path) != meta["pkl_sha256"]:
+            logger.info("Compiled DB pickle failed integrity check — discarding")
+            return None
+
+        # Own-written file, gated on the stored sha256: a tampered
+        # artifact fails the hash check before reaching this line.
+        db = pickle.loads(pkl_path.read_bytes())  # noqa: S301
         # Sanity guard: the unpickled object must still look like a loaded
         # MaigretDatabase (sites list populated) before trusting it.
         if not db or not getattr(db, "sites", None):
@@ -180,6 +218,9 @@ def save_compiled_db(source_path: str, db: Any) -> None:
                 # Hash of the SOURCE manifest (what try_load compares) —
                 # hashing the pickle payload here could never match.
                 "hash": _sha256_file(src),
+                # Payload integrity (verified before unpickling in try_load).
+                "pkl_sha256": hashlib.sha256(payload).hexdigest(),
+                "pkl_size": len(payload),
                 "mtime": stat.st_mtime,
                 "size": stat.st_size,
                 "maigret_version": __import__("maigret").__version__,
@@ -218,12 +259,16 @@ def ensure_cached_avatar(url: str) -> str:
     return url
 
 
+_AVATAR_MAX_BYTES = 5 * 1024 * 1024  # 5 MB — avatars are small CDN images
+_AVATAR_CHUNK = 64 * 1024
+
+
 async def schedule_avatar_download(url: str) -> None:
     """Fetch an avatar to the cache in the background (fire-and-forget).
 
-    Uses plain httpx with redirects followed; avatars frequently live on
-    CDN hosts that 301 to the final media URL. Failures are silent — the
-    UI always has the remote URL fallback.
+    Streams the body with a 5 MB cap so a malicious/oversized response can
+    never balloon memory; inherits the shared-client timeout (slow-network
+    tolerant). Failures are silent — the UI always has the remote URL fallback.
     """
     if not url or not isinstance(url, str) or not url.startswith("http"):
         return
@@ -233,17 +278,31 @@ async def schedule_avatar_download(url: str) -> None:
     try:
         from services.http_client import get_client
 
-        resp = await get_client().get(
-            url, timeout=5.0, headers={"User-Agent": "Sherlock/2.x"}
-        )
-        if resp.status_code == 200 and resp.content:
-            _write_atomic(dest, lambda fh: fh.write(resp.content))
-        else:
-            # Visible, not swallowed (owner rule): routine CDN misses
-            # land at INFO; real failures raise into the warning below.
-            logger.info(
-                "Avatar not cached (HTTP %s): %s", resp.status_code, url[:80]
-            )
+        async with get_client().stream(
+            "GET", url, headers={"User-Agent": "Sherlock/2.x"}
+        ) as resp:
+            if resp.status_code != 200:
+                # Visible, not swallowed (owner rule): routine CDN misses
+                # land at INFO; real failures raise into the warning below.
+                logger.info(
+                    "Avatar not cached (HTTP %s): %s", resp.status_code, url[:80]
+                )
+                return
+            raw_len = resp.headers.get("content-length")
+            if raw_len and raw_len.isdigit() and int(raw_len) > _AVATAR_MAX_BYTES:
+                logger.info("Avatar not cached (oversize %s B): %s", raw_len, url[:80])
+                return
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes(_AVATAR_CHUNK):
+                buf += chunk
+                if len(buf) > _AVATAR_MAX_BYTES:
+                    logger.info("Avatar not cached (exceeds 5 MB): %s", url[:80])
+                    return
+            if not buf:
+                logger.info("Avatar not cached (empty body): %s", url[:80])
+                return
+            data = bytes(buf)
+        _write_atomic(dest, lambda fh: fh.write(data))
     except Exception as exc:
         logger.warning("Avatar download failed for %s: %s", url[:80], exc)
 
@@ -257,19 +316,22 @@ def _safe_name_component(raw: str) -> str:
     return cleaned[:48] or "unknown"
 
 
+def _result_url(r) -> str:
+    """URL key for a result row — dict rows and SiteResults alike."""
+    if isinstance(r, dict):
+        return str(r.get("url_user") or r.get("url_main") or "")
+    return str(getattr(r, "url_user", "") or getattr(r, "url_main", "") or "")
+
+
 def results_fingerprint(found: list) -> str:
     """Stable 16-hex fingerprint of a found-URL set.
 
     Two scans of the same target that yield the same claimed accounts map
     to the same fingerprint — so an unchanged re-export reuses the cached
-    PDF/XMind instead of re-running ReportLab table layout.
+    PDF/XMind instead of re-running ReportLab table layout. Empty/URL-less
+    inputs hash deterministically (documented empty-set fingerprint).
     """
-    urls = sorted(
-        {
-            str(getattr(r, "url_user", "") or getattr(r, "url_main", "") or "")
-            for r in found
-        }
-    )
+    urls = sorted({u for u in (_result_url(r) for r in (found or [])) if u})
     blob = "\n".join(urls).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]
 
@@ -311,6 +373,13 @@ _GEO_MIN_TS_KEY = "__pycountry__"
 _GEO_MAX_ENTRIES = 4096
 
 
+def _pycountry_version() -> str:
+    try:
+        return str(getattr(__import__("pycountry"), "__version__", "unknown"))
+    except ImportError:
+        return "unknown"
+
+
 def load_geo_cache() -> dict[str, list[str]]:
     """Load persisted location lookups: string -> [name, flag, alpha2, ...]."""
     data = _read_json(_cache_root() / "geo_cache.json")
@@ -319,18 +388,20 @@ def load_geo_cache() -> dict[str, list[str]]:
     # Stale-cache guard: pycountry data changes between versions can
     # silently change fuzzy matches. Bump or drop the cache when the
     # library version recorded at write time no longer matches.
-    version = __import__("pycountry").__version__
+    version = _pycountry_version()
     if data.get(_GEO_MIN_TS_KEY) != version:
         return {}
     entries = data.get("entries")
-    if isinstance(entries, dict) and len(entries) <= _GEO_MAX_ENTRIES:
-        return {str(k): list(v) for k, v in entries.items() if isinstance(v, list)}
-    return {}
+    if not isinstance(entries, dict):
+        return {}
+    # Trim instead of dropping: a usable prefix survives oversize writes.
+    items = [(str(k), list(v)) for k, v in entries.items() if isinstance(v, list)]
+    return dict(items[:_GEO_MAX_ENTRIES])
 
 
 def save_geo_cache(lookup: dict[str, list[str]]) -> None:
     """Persist location lookups, tagging them with the pycountry version."""
-    version = __import__("pycountry").__version__
+    version = _pycountry_version()
     trimmed = dict(list(lookup.items())[:_GEO_MAX_ENTRIES])
     _write_json_atomic(
         _cache_root() / "geo_cache.json",
@@ -371,9 +442,16 @@ def save_sites_indices(payload: dict[str, Any]) -> None:
     _write_json_atomic(_cache_root() / "sites_indices.json", payload)
 
 
-def load_sites_indices() -> dict[str, Any] | None:
+def load_sites_indices(expected_hash: str | None = None) -> dict[str, Any] | None:
+    """Load cached tag indices, optionally gated on the live DB hash.
+
+    Pass the current DB's hash (same recipe as build_sites_indices) to
+    reject stale indices after a manifest update that kept site names
+    but changed tags. None skips the check (cold-start fast path).
+    """
     data = _read_json(_cache_root() / "sites_indices.json")
-    if isinstance(data, dict) and isinstance(data.get("by_tag"), dict):
+    hash_ok = expected_hash is None or data.get("db_hash") == expected_hash
+    if isinstance(data, dict) and isinstance(data.get("by_tag"), dict) and hash_ok:
         return data
     return None
 
@@ -404,12 +482,16 @@ def load_dns_cache() -> dict[str, dict[str, Any]]:
                     continue
                 ts = rec.get("ts", 0) or 0
                 ips = [str(i) for i in rec.get("ips", []) if i]
-                if ips and (now - ts) > _DNS_TTL_SEC:
+                is_dead = bool(rec.get("dead", False)) or not ips
+                if is_dead:
+                    if (now - ts) > _DNS_DEAD_TTL_SEC:
+                        continue  # negative cache expired — retry next time
+                elif (now - ts) > _DNS_TTL_SEC:
                     continue  # expired A-records
                 entries[str(domain).lower()] = {
                     "ips": ips,
                     "ts": ts,
-                    "dead": bool(rec.get("dead", False)),
+                    "dead": is_dead,
                 }
     _dns_store = entries
     return entries
@@ -487,8 +569,13 @@ async def prewarm_dns(sites: list[tuple[str, str]], max_hosts: int = 300) -> int
             continue
         if host and host not in seen_hosts:
             seen_hosts.add(host)
-            if not is_domain_dead(host):
-                host_list.append(host)
+            if is_domain_dead(host):
+                continue
+            # load_dns_cache already expired stale entries — a live record
+            # means this host is warm; skip the redundant lookup.
+            if get_dns_record(host) is not None:
+                continue
+            host_list.append(host)
             if len(host_list) >= max_hosts:
                 break
 
@@ -537,8 +624,8 @@ def clear_all_caches() -> int:
     try:
         root = _cache_root()
         if root.is_dir():
-            for child in root.iterdir():
-                if child.name.startswith("."):
+            for child in list(root.iterdir()):
+                if child.name.startswith(".") and not child.name.endswith(".tmp"):
                     continue
                 try:
                     if child.is_dir():
@@ -547,6 +634,13 @@ def clear_all_caches() -> int:
                         shutil.rmtree(child, ignore_errors=True)
                     else:
                         child.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+            # Sweep orphan writer tmps in subdirectories (avatars, etc.).
+            for tmp in root.rglob(".*.tmp"):
+                try:
+                    tmp.unlink()
                     removed += 1
                 except OSError:
                     pass

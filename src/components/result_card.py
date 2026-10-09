@@ -25,18 +25,17 @@ def _status_icon_and_color(status: str) -> tuple[str, str]:
     """Map a Sherlock status string to (icon, color)."""
     if status == "Claimed":
         return ft.Icons.CHECK_CIRCLE_ROUNDED, AppColors.SUCCESS
-    elif status in ("Available", "Illegal"):
+    if status in ("Available", "Illegal"):
         return ft.Icons.CANCEL_ROUNDED, ft.Colors.with_opacity(
             tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
         )
-    elif status == "WAF":
+    if status == "WAF":
         return ft.Icons.SHIELD_ROUNDED, AppColors.WARNING
-    elif status == "Unavailable":
+    if status == "Unavailable":
         return ft.Icons.HIDE_SOURCE_ROUNDED, ft.Colors.with_opacity(
             tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
         )
-    else:
-        return ft.Icons.ERROR_OUTLINE_ROUNDED, AppColors.WARNING
+    return ft.Icons.ERROR_OUTLINE_ROUNDED, AppColors.WARNING
 
 
 def _chip(label: str, color: str, bg: str) -> ft.Container:
@@ -53,6 +52,15 @@ def _chip(label: str, color: str, bg: str) -> ft.Container:
         border_radius=tokens.RADIUS_SM,
         bgcolor=bg,
     )
+
+
+def _first_present(mapping: dict, keys: tuple[str, ...]):
+    """First non-None value for keys — preserves real 0/False (no falsy-or)."""
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def ResultCard(
@@ -103,12 +111,13 @@ def ResultCard(
     )
 
     display_url = url_user or url_main or site_name
+    click_target = url_user or url_main
 
     def _handle_click(e):
         if on_tap:
             on_tap()
-        elif on_open and url_user:
-            on_open(url_user)
+        elif on_open and click_target:
+            on_open(click_target)
 
     # ── Extras / Enriched lines ────────────────────────────────────────
     extra_lines: list[ft.Control] = []
@@ -161,7 +170,9 @@ def ResultCard(
     if others and isinstance(others, dict):
         # v2 streams profile media in-band (avatar producers: gravatar,
         # github, etsy, duolingo).
-        v2_media = others.get("media") or {}
+        v2_media = others.get("media")
+        if not isinstance(v2_media, dict):
+            v2_media = {}
         v2_avatar = v2_media.get("avatar") or v2_media.get("thumbnail_url")
         if isinstance(v2_avatar, str) and v2_avatar.startswith("http"):
             avatar_url = avatar_url or v2_avatar
@@ -210,7 +221,9 @@ def ResultCard(
         # holehe-v2 Result.extra — rich per-platform facts (gravatar bio,
         # github login, etsy stats, atlassian SSO type, …) rendered as
         # scannable lines; capped so one card can't flood the list.
-        v2_extra = others.get("extra") or {}
+        v2_extra = others.get("extra")
+        if not isinstance(v2_extra, dict):
+            v2_extra = {}
         _V2_SKIP = {
             "profile_url",
             "url",
@@ -220,7 +233,24 @@ def ResultCard(
             "languages",
             "pronouns",
         }
+        # High-signal identity facts get full rows (not the generic cap loop).
+        for _k in ("bio", "username", "login", "website"):
+            _v = v2_extra.get(_k)
+            if isinstance(_v, str) and _v.strip():
+                _V2_SKIP.add(_k)
+                extra_lines.append(
+                    ft.Text(
+                        f"{_k.replace('_', ' ').title()}: {_v.strip()[:90]}",
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        italic=True,
+                    )
+                )
         v2_shown = 0
+        from core.format import human_date
+
         for k, v in v2_extra.items():
             if k in _V2_SKIP or v in (None, "", [], {}):
                 continue
@@ -230,6 +260,13 @@ def ResultCard(
                 continue
             else:
                 v2_text = str(v)
+                # Date-ish keys get the shared humanizer ("2019-04-01T…" ->
+                # "Apr 1, 2019"); unparseable values keep the raw string.
+                if any(
+                    word in k.lower()
+                    for word in ("date", "time", "created", "joined", "registered")
+                ):
+                    v2_text = human_date(v) or v2_text
             if len(v2_text) > 90:
                 v2_text = v2_text[:87] + "…"
             extra_lines.append(
@@ -289,8 +326,12 @@ def ResultCard(
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
-        followers = enrichment.get("follower_count") or enrichment.get("followers")
-        following = enrichment.get("following_count") or enrichment.get("following")
+        followers = _first_present(
+            enrichment, ("follower_count", "followers", "followerCount")
+        )
+        following = _first_present(
+            enrichment, ("following_count", "following", "followingCount")
+        )
         if followers is not None or following is not None:
             parts = []
             if followers is not None:
@@ -394,6 +435,8 @@ def ResultCard(
                     vertical_alignment=ft.CrossAxisAlignment.START,
                 )
             )
+        if isinstance(protection, str):
+            protection = [protection]
         if protection:
             extra_lines.append(
                 ft.Row(
@@ -567,11 +610,8 @@ def ResultCard(
         expand=True,
     )
 
-    is_clickable = (
-        on_tap is not None
-        or on_open is not None
-        or url_user is not None
-        or url_main is not None
+    is_clickable = (on_tap is not None) or (
+        on_open is not None and click_target is not None
     )
 
     return ft.Container(
@@ -600,5 +640,5 @@ def ResultCard(
             )
         ),
         on_click=_handle_click if is_clickable else None,
-        ink=True if is_clickable else False,
+        ink=is_clickable,
     )

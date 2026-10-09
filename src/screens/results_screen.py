@@ -10,7 +10,6 @@ Both modes support: filter bar, stat cards, cancel, export.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from typing import NamedTuple
@@ -24,6 +23,7 @@ from components.result_card import ResultCard
 from components.stat_card import StatCard
 from core import tokens
 from core.constants import ERR_OPEN_URL, MODE_EMAIL
+from core.tasks import spawn
 from core.theme import AppColors
 from hooks.use_debounce import use_debounce
 from state.app_state import AppStateCtx
@@ -105,6 +105,62 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
     )
 
 
+def clamp_tab_index(tab_index: int, length: int) -> int:
+    """Clamp a shared tab index into a valid range for a Tabs of `length` tabs.
+
+    The tab index is shared across username mode (3 tabs) and email mode
+    (4 tabs): switching modes while sitting on email tab 3 would otherwise pass
+    ``selected_index=3`` to a ``length=3`` Tabs, and ``Tabs.before_update``
+    raises ``IndexError`` (flet 1.0.1 does not clamp).
+    """
+    if length <= 0:
+        return 0
+    return max(0, min(int(tab_index), length - 1))
+
+
+def _email_fingerprint(rows) -> tuple:
+    """Cheap content fingerprint for email result dicts (memo dep)."""
+    try:
+        return tuple(
+            (
+                str(r.get("name", "")),
+                bool(r.get("exists")),
+                bool(r.get("rateLimit")),
+                bool(r.get("unavailable")),
+            )
+            for r in (rows or [])
+        )
+    except Exception:
+        return (len(rows or []),)
+
+
+def _username_fingerprint(items) -> tuple:
+    """Cheap content fingerprint for SiteResults (memo dep)."""
+    try:
+        return tuple(
+            (
+                str(getattr(r, "site_name", "")),
+                str(getattr(r, "status", "")),
+            )
+            for r in (items or [])
+        )
+    except Exception:
+        return (len(items or []),)
+
+
+def _enrichment_fingerprint(enrichments) -> tuple:
+    """Content fingerprint for the enrichments map (memo dep)."""
+    try:
+        if not enrichments:
+            return ()
+        return tuple(
+            (str(k), str(sorted(v.keys())) if isinstance(v, dict) else str(v))
+            for k, v in enrichments.items()
+        )
+    except Exception:
+        return (len(enrichments or {}),)
+
+
 def _build_result_list(
     items,
     empty_title: str,
@@ -174,16 +230,27 @@ def ResultsScreen() -> Control:
             from flet import context
 
             from core.notify import show_snack
+            from core.shared_services import shared_url_launcher
 
             try:
-                await ft.UrlLauncher().launch_url(url)
+                await shared_url_launcher().launch_url(url)
             except Exception as exc:
                 logger.warning("Failed to launch URL %s: %s", url, exc)
                 page = context.page
                 if page:
                     show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
 
-        asyncio.create_task(_launch())
+        spawn(_launch())
+
+    def _pivot_search(handle: str):
+        """Re-run search with a discovered cross-platform handle."""
+        handle = (handle or "").strip().lstrip("@")
+        if not handle:
+            return
+        if "@" in handle:
+            spawn(controller.start_email_search(handle))
+        else:
+            spawn(controller.start_search(handle))
 
     def _show_username_details(r):
         from flet import context
@@ -192,7 +259,9 @@ def ResultsScreen() -> Control:
         if not page:
             return
         with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
+            from core.shared_services import shared_haptics
+
+            spawn(shared_haptics(page).light_impact())
         with contextlib.suppress(Exception):
             page.pop_dialog()
         enrich = (
@@ -210,6 +279,7 @@ def ResultsScreen() -> Control:
             url_main=r.url_main,
             query_time=r.query_time,
             enrichment=enrich,
+            on_pivot=_pivot_search,
         )
 
     def _show_email_details(r):
@@ -219,7 +289,9 @@ def ResultsScreen() -> Control:
         if not page:
             return
         with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
+            from core.shared_services import shared_haptics
+
+            spawn(shared_haptics(page).light_impact())
         with contextlib.suppress(Exception):
             page.pop_dialog()
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
@@ -291,7 +363,10 @@ def ResultsScreen() -> Control:
             raw_unavailable = [r for r in all_email if r.get("unavailable")]
             engine_total = 0
             total = state.email_total_modules or len(all_email) or 121
-            checked = total if all_email else 0
+            # Cached history has no live checked counter: report 0 so the
+            # progress section shows the indeterminate state instead of a
+            # fake 100% (checked == total masked partial/cancelled runs).
+            checked = 0
 
         def _make_email_card(r):
             if r.get("exists"):
@@ -318,24 +393,37 @@ def ResultsScreen() -> Control:
             )
 
         # Apply only-found filter (method filtering was removed together
-        # with old holehe — holehe-v2 validators carry no method metadata)
+        # with old holehe — holehe-v2 validators carry no method metadata).
+        # Keep raw_* intact for stats_row; the tabs/lists use shown_* so the
+        # stat cards report real totals even when only-found is on.
         only_found = getattr(state, "email_only_found", False)
 
-        raw_not_found = [] if only_found else raw_not_found
-        raw_rate_limited = [] if only_found else raw_rate_limited
-        raw_unavailable = [] if only_found else raw_unavailable
+        shown_not_found = [] if only_found else raw_not_found
+        shown_rate_limited = [] if only_found else raw_rate_limited
+        shown_unavailable = [] if only_found else raw_unavailable
 
-        email_found_filtered = _filter_by_name(
-            raw_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
-        )
-        email_not_found_filtered = _filter_by_name(
-            raw_not_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
-        )
+        def _email_filter_key(r):
+            parts = [r.get("name", "") or "", r.get("domain", "") or ""]
+            if r.get("emailrecovery"):
+                parts.append(str(r["emailrecovery"]))
+            if r.get("phoneNumber"):
+                parts.append(str(r["phoneNumber"]))
+            if r.get("method"):
+                parts.append(str(r["method"]))
+            others = r.get("others")
+            if isinstance(others, dict):
+                extra = others.get("extra")
+                if isinstance(extra, dict):
+                    parts.extend(str(v) for v in extra.values() if v)
+            return " ".join(parts)
+
+        email_found_filtered = _filter_by_name(raw_found, _email_filter_key)
+        email_not_found_filtered = _filter_by_name(shown_not_found, _email_filter_key)
         email_rate_limited_filtered = _filter_by_name(
-            raw_rate_limited, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+            shown_rate_limited, _email_filter_key
         )
         email_unavailable_filtered = _filter_by_name(
-            raw_unavailable, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+            shown_unavailable, _email_filter_key
         )
 
         # Predictable alphabetical ordering (A-Z by platform name) across all tabs
@@ -381,10 +469,10 @@ def ResultsScreen() -> Control:
             [
                 tab_index,
                 debounced_filter,
-                len(raw_found),
-                len(raw_not_found),
-                len(raw_rate_limited),
-                len(raw_unavailable),
+                _email_fingerprint(raw_found),
+                _email_fingerprint(shown_not_found),
+                _email_fingerprint(shown_rate_limited),
+                _email_fingerprint(shown_unavailable),
             ],
         )
         tabs = ft.Tabs(
@@ -516,33 +604,63 @@ def ResultsScreen() -> Control:
 
         # P1-1: memoized active-tab card list (one use_memo per branch —
         # hook slot stays stable across email↔username mode switches).
-        _empty_title = "No matches" if debounced_filter else "No results yet"
-        _empty_msg = (
-            f'No results match "{debounced_filter}"'
-            if debounced_filter
-            else "Results will appear as the scan progresses."
-        )
-        username_lists = [found_items, notfound_items, error_items]
+        # Per-tab empty states mirror the email branch (email_specs).
+        if debounced_filter:
+            username_specs = [
+                (found_items, "No matches", f'No results match "{debounced_filter}"'),
+                (
+                    notfound_items,
+                    "No matches",
+                    f'No results match "{debounced_filter}"',
+                ),
+                (
+                    error_items,
+                    "No matches",
+                    f'No results match "{debounced_filter}"',
+                ),
+            ]
+        else:
+            username_specs = [
+                (
+                    found_items,
+                    "No results yet",
+                    "Results will appear as the scan progresses.",
+                ),
+                (
+                    notfound_items,
+                    "All claimed",
+                    "Every checked site confirmed this username is taken.",
+                ),
+                (
+                    error_items,
+                    "No errors",
+                    "All checks completed without errors.",
+                ),
+            ]
         username_slot = ft.use_memo(
             lambda: _build_result_list(
-                username_lists[min(tab_index, len(username_lists) - 1)],
-                _empty_title,
-                _empty_msg,
+                username_specs[min(tab_index, len(username_specs) - 1)][0],
+                username_specs[min(tab_index, len(username_specs) - 1)][1],
+                username_specs[min(tab_index, len(username_specs) - 1)][2],
                 _make_username_card,
                 debounced_filter,
             ),
             [
                 tab_index,
                 debounced_filter,
-                len(username_view.found),
-                len(username_view.not_found),
-                len(username_view.errors),
-                len(state.enrichments or {}),
+                _username_fingerprint(username_view.found),
+                _username_fingerprint(username_view.not_found),
+                _username_fingerprint(username_view.errors),
+                _enrichment_fingerprint(state.enrichments),
             ],
         )
 
+        # Username mode has 3 tabs (0-2) but tab_index is shared with email
+        # mode (4 tabs, 0-3): clamp so switching from email tab 3 cannot raise
+        # IndexError in Tabs.before_update.
+        username_tab_index = clamp_tab_index(tab_index, 3)
         tabs = ft.Tabs(
-            selected_index=tab_index,
+            selected_index=username_tab_index,
             length=3,
             on_change=lambda e: set_tab_index(e.control.selected_index),
             content=ft.Column(
@@ -568,9 +686,15 @@ def ResultsScreen() -> Control:
                     ),
                     ft.TabBarView(
                         controls=[
-                            username_slot if tab_index == 0 else ft.Container(),
-                            username_slot if tab_index == 1 else ft.Container(),
-                            username_slot if tab_index == 2 else ft.Container(),
+                            username_slot
+                            if username_tab_index == 0
+                            else ft.Container(),
+                            username_slot
+                            if username_tab_index == 1
+                            else ft.Container(),
+                            username_slot
+                            if username_tab_index == 2
+                            else ft.Container(),
                         ],
                         expand=True,
                     ),

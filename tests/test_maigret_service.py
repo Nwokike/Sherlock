@@ -102,6 +102,7 @@ def test_sherlock_service_load_sites():
 @pytest.mark.live
 def test_sherlock_service_search_execution():
     """Hits the real GitHub over the network — excluded in CI via -m "not live"."""
+
     async def scenario():
         svc = SherlockService()
         await svc.load_sites()
@@ -277,17 +278,14 @@ class TestRecursiveTargetExtraction:
         containers = {
             "alice": {"X": {"ids_usernames": {"alice": "username"}}},
         }
-        got = _collect_recursive_targets(
-            containers, self._stub_db(), ["Alice"], cap=20
-        )
+        got = _collect_recursive_targets(containers, self._stub_db(), ["Alice"], cap=20)
         assert got == {}
 
     def test_cap_bounds_secondary_targets(self):
         from services.sherlock_service import _collect_recursive_targets
 
         containers = {
-            f"s{i}": {"X": {"ids_usernames": {f"u{i}": "username"}}}
-            for i in range(30)
+            f"s{i}": {"X": {"ids_usernames": {f"u{i}": "username"}}} for i in range(30)
         }
         got = _collect_recursive_targets(containers, self._stub_db(), [], cap=5)
         assert len(got) == 5
@@ -296,6 +294,4 @@ class TestRecursiveTargetExtraction:
         from services.sherlock_service import _collect_recursive_targets
 
         assert _collect_recursive_targets({}, self._stub_db(), []) == {}
-        assert (
-            _collect_recursive_targets({"a": {}}, self._stub_db(), ["a"]) == {}
-        )
+        assert _collect_recursive_targets({"a": {}}, self._stub_db(), ["a"]) == {}

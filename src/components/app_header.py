@@ -6,7 +6,6 @@ Top-right: Version chip + theme cycle (3 modes) + settings gear + screen-specifi
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 
@@ -15,6 +14,7 @@ import flet as ft
 from core import tokens
 from core.constants import APP_VERSION, STORAGE_THEME
 from core.state import state as core_state
+from core.tasks import spawn
 from core.theme import AppColors, is_dark_mode
 
 logger = logging.getLogger("AppHeader")
@@ -138,7 +138,7 @@ def AppHeader(
             except Exception as ex:
                 logger.warning("Failed to persist cycled theme: %s", ex)
 
-        asyncio.create_task(_persist())
+        spawn(_persist())
         try:
             page.update()
         except Exception:

@@ -11,9 +11,22 @@ from pathlib import Path
 
 import flet as ft
 
+from core.tasks import spawn
+
 logger = logging.getLogger(__name__)
 
 _WRITE_DEBOUNCE_SEC = 1.0
+
+
+def _backup_corrupt_file(path: Path) -> None:
+    """Rename a corrupt file aside for forensics (parse errors only)."""
+    try:
+        if path.is_file() and path.stat().st_size > 0:
+            bak = path.with_name(f"{path.name}.corrupt.{int(time.time())}.bak")
+            os.replace(path, bak)
+            logger.warning("Corrupt storage backed up: %s -> %s", path, bak)
+    except OSError:
+        pass
 
 
 def get_storage_dir() -> Path:
@@ -62,7 +75,19 @@ class StorageService:
             self._storage_dir = get_storage_dir()
 
         self._storage_file = self._storage_dir / "storage.json"
-        self._is_web = bool(getattr(page, "session_id", None)) if page else False
+        # Web detection: an explicit page without file-system semantics uses
+        # client_storage. page=None (tests/headless) is always file-backed —
+        # it has no client_storage. When a page exists but carries neither
+        # detection attribute, prefer client_storage (private) over the
+        # server file (shared/ephemeral).
+        if page is None:
+            self._is_web = False
+        else:
+            self._is_web = bool(
+                getattr(page, "session_id", None) or getattr(page, "web", False)
+            )
+            if not hasattr(page, "session_id") and not hasattr(page, "web"):
+                self._is_web = True
 
         if self._is_web:
             self._load_web()
@@ -74,7 +99,16 @@ class StorageService:
             if self._page and hasattr(self._page, "client_storage"):
                 cs = self._page.client_storage
                 raw = cs.get("sherlock_storage")
-                self._data = json.loads(raw) if raw else {}
+                parsed = json.loads(raw) if raw else {}
+                self._data = (
+                    {
+                        k: v
+                        for k, v in parsed.items()
+                        if isinstance(k, str) and isinstance(v, str)
+                    }
+                    if isinstance(parsed, dict)
+                    else {}
+                )
         except Exception as e:
             logger.warning("StorageService._load_web failed: %s", e)
             self._data = {}
@@ -84,29 +118,70 @@ class StorageService:
             self._storage_dir.mkdir(parents=True, exist_ok=True)
             if self._storage_file.exists():
                 raw = self._storage_file.read_text(encoding="utf-8")
-                self._data = json.loads(raw) if raw else {}
+                if not raw.strip():
+                    self._data = {}
+                else:
+                    try:
+                        parsed = json.loads(raw)
+                        self._data = (
+                            {
+                                k: v
+                                for k, v in parsed.items()
+                                if isinstance(k, str) and isinstance(v, str)
+                            }
+                            if isinstance(parsed, dict)
+                            else {}
+                        )
+                    except json.JSONDecodeError, ValueError, UnicodeDecodeError:
+                        # Parse error (not missing file): back the corrupt
+                        # file up before resetting, so evidence survives.
+                        _backup_corrupt_file(self._storage_file)
+                        self._data = {}
             else:
                 self._data = {}
         except Exception as e:
             logger.warning("StorageService._load failed: %s", e)
             self._data = {}
 
+    def _write_snapshot(self, snapshot: dict[str, str]) -> bool:
+        """Synchronous file replace of a caller-owned snapshot.
+
+        No lock, no flag mutation — call via to_thread from flush().
+        Returns success so the caller keeps retry semantics.
+        """
+        import tempfile
+
+        try:
+            self._storage_dir.mkdir(parents=True, exist_ok=True)
+            data = json.dumps(snapshot, ensure_ascii=False, indent=2).encode("utf-8")
+            fd, tmp_s = tempfile.mkstemp(
+                dir=str(self._storage_dir),
+                prefix=f".{self._storage_file.name}.",
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp_s, self._storage_file)
+            finally:
+                try:
+                    os.unlink(tmp_s)
+                except OSError:
+                    pass
+            return True
+        except Exception as e:
+            logger.warning("StorageService._write_snapshot failed: %s", e)
+            return False
+
     def _save_now(self) -> None:
         if self._is_web:
             self._save_now_web()
             return
-        try:
-            self._storage_dir.mkdir(parents=True, exist_ok=True)
-            tmp_file = self._storage_file.with_suffix(".tmp")
-            tmp_file.write_text(
-                json.dumps(self._data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            tmp_file.replace(self._storage_file)
+        if self._write_snapshot(dict(self._data)):
             self._dirty = False
             self._last_write = time.monotonic()
-        except Exception as e:
-            logger.warning("StorageService._save_now failed: %s", e)
 
     def _save_now_web(self) -> None:
         try:
@@ -125,22 +200,48 @@ class StorageService:
             loop = asyncio.get_running_loop()
             self._pending_write_task = loop.call_later(
                 _WRITE_DEBOUNCE_SEC,
-                lambda: loop.create_task(self._flush_task()),
+                lambda: spawn(self._flush_task(), name="storage-flush"),
             )
         except RuntimeError:
             self._save_now()
 
     async def _flush_task(self) -> None:
+        # Clear the handle BEFORE flushing: a set() landing during flush()
+        # re-arms via _schedule_write instead of hitting the early-return
+        # and stranding a dirty write with no timer.
+        self._pending_write_task = None
         try:
             await self.flush()
         finally:
-            self._pending_write_task = None
+            if self._dirty and self._pending_write_task is None:
+                self._schedule_write()
+
+    async def close(self) -> None:
+        """Cancel the debounce timer and flush — call on app teardown so the
+        trailing write window is never lost on exit."""
+        task = self._pending_write_task
+        self._pending_write_task = None
+        if task is not None:
+            try:
+                task.cancel()
+            except Exception:
+                pass
+        await self.flush()
 
     async def get(self, key: str) -> str | None:
         async with self._lock:
             return self._data.get(key)
 
     async def set(self, key: str, value: str) -> None:
+        if not isinstance(key, str):
+            raise TypeError(
+                f"StorageService.set key must be str, got {type(key).__name__}"
+            )
+        if not isinstance(value, str):
+            raise TypeError(
+                f"StorageService.set value for {key!r} must be str, "
+                f"got {type(value).__name__}"
+            )
         async with self._lock:
             self._data[key] = value
             self._dirty = True
@@ -148,14 +249,40 @@ class StorageService:
 
     async def delete(self, key: str) -> None:
         async with self._lock:
-            self._data.pop(key, None)
+            if key not in self._data:
+                return
+            del self._data[key]
             self._dirty = True
         self._schedule_write()
 
+    async def clear(self) -> None:
+        async with self._lock:
+            if not self._data:
+                return
+            self._data.clear()
+            self._dirty = True
+        self._schedule_write()
+
+    async def get_all(self) -> dict[str, str]:
+        async with self._lock:
+            return dict(self._data)
+
     async def flush(self) -> None:
         async with self._lock:
-            if self._dirty:
-                self._save_now()
+            if not self._dirty:
+                return
+            if self._is_web:
+                self._save_now_web()  # fast client_storage, keep under lock
+                return
+            snapshot = dict(self._data)
+        # Write outside the lock so gets/sets never stall on fsync.
+        ok = await asyncio.to_thread(self._write_snapshot, snapshot)
+        async with self._lock:
+            if ok and self._data == snapshot:
+                self._dirty = False
+            # else: concurrent mutation during write — stay dirty; the
+            # _flush_task re-arm persists it on the next pass.
+            self._last_write = time.monotonic()
 
 
 def load_history_entries(raw: str | None) -> list[dict]:
@@ -170,7 +297,7 @@ def load_history_entries(raw: str | None) -> list[dict]:
         entries = json.loads(raw)
         if not isinstance(entries, list):
             return []
-        return list(reversed(entries))
+        return [e for e in reversed(entries) if isinstance(e, dict)]
     except Exception:
         return []
 
@@ -180,5 +307,5 @@ def encode_history_entries(entries: list[dict], new_entry: dict | None = None) -
     out = list(entries)
     if new_entry is not None:
         out.append(new_entry)
-        out = out[-50:]
+    out = out[-50:]
     return json.dumps(out)

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import os
 import re
@@ -27,6 +28,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
+
+from core.tasks import spawn
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +57,7 @@ def _load_validators_pkg() -> dict:
     import inspect
     import pkgutil
 
-    import holehe_v2.core.shim  # noqa: F401 — result alias must exist first
+    import holehe_v2.core.shim  # noqa: F401, RUF100 — result alias must exist first
     import holehe_v2.modules as pkg
 
     validators: dict = {}
@@ -78,10 +81,14 @@ def _load_validators_pkg() -> dict:
 # v2's impersonate-path modules (github, canva, figma, patreon, quora,
 # tumblr, walmart, ...) bind impersonate_request_async at module load.
 # We wrap the helper BEFORE the first load_validators() so every bound
-# reference is wrapped too. The wrapper picks the fingerprint per scan:
-# the stealth toggle requests a modern Chrome (chrome131), otherwise
-# upstream's chrome120 default is used. Modules that pass an explicit
-# fingerprint keep theirs.
+# reference is wrapped too. The wrapper picks the fingerprint per scan via
+# a ContextVar (module-global _FINGERPRINT raced across concurrent scans;
+# validators bind the wrapped fn at import, so per-scan rebinding can't work).
+# Modules that pass an explicit fingerprint keep theirs.
+_SCAN_FINGERPRINT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "sherlock_email_fingerprint", default=None
+)
+# Legacy alias (kept for back-compat; the wrapper no longer reads it).
 _FINGERPRINT: str | None = None
 
 if _HOLEHE_AVAILABLE:
@@ -91,22 +98,15 @@ if _HOLEHE_AVAILABLE:
         if not getattr(_imp, "_sherlock_wrapped", False):
             _orig_impersonate = _imp.impersonate_request_async
 
-            async def _impersonate_wrapped(
-                url,
-                method="GET",
-                headers=None,
-                data=None,
-                allow_redirects=True,
-                impersonate=None,
-            ):
-                return await _orig_impersonate(
-                    url,
-                    method=method,
-                    headers=headers,
-                    data=data,
-                    allow_redirects=allow_redirects,
-                    impersonate=impersonate or _FINGERPRINT or "chrome120",
+            async def _impersonate_wrapped(url, method="GET", *args, **kwargs):
+                # Fingerprint default preserved: explicit arg wins, else the
+                # per-scan ContextVar, else upstream's chrome120. Everything
+                # else passes through untouched for forward-compat with new
+                # upstream params (proxy/timeout/cookies/...).
+                kwargs["impersonate"] = (
+                    kwargs.get("impersonate") or _SCAN_FINGERPRINT.get() or "chrome120"
                 )
+                return await _orig_impersonate(url, method, *args, **kwargs)
 
             _imp.impersonate_request_async = _impersonate_wrapped
             _imp._sherlock_wrapped = True
@@ -122,7 +122,8 @@ if _HOLEHE_AVAILABLE:
 # (403/429 use word boundaries so "HTTP Error: 404" never matches.)
 _RATE_LIMITED_RE = re.compile(
     r"\b(?:403|429)\b"
-    r"|rate.?limit"
+    r"|rate.?limit|too many requests|rate exceeded|limit exceeded"
+    r"|try again later|temporarily blocked|throttl"
     r"|waf|cloudflare|datadome|captcha"
     r"|forbidden|bot challenge"
     r"|ip (?:has been |may be )?flagged"
@@ -131,13 +132,18 @@ _RATE_LIMITED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Single backoff before one rate-limit retry (see _run_one). Short by
+# design: scans are long, and the semaphore slot is held while waiting,
+# so this also throttles how fast retries re-hit the site.
+_RATE_RETRY_DELAY_SEC = 2.0
+
 
 def _is_rate_limited(message: str | None) -> bool:
     """True when v2's error message says the site blocked us."""
     return bool(_RATE_LIMITED_RE.search(message or ""))
 
 
-EMAIL_FORMAT = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+EMAIL_FORMAT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
 @dataclass
@@ -202,6 +208,9 @@ def _first(value):
         return value[0] if value else None
     if isinstance(value, str):
         return value or None
+    # Numeric phones (int) and other scalars pass through — callers str() them.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
     return None
 
 
@@ -267,7 +276,15 @@ def _unavailable_result(name: str, message: str) -> EmailResult:
         domain=_domain_from(name, None),
         exists=None,
         unavailable=True,
-        others={"error": message},
+        # Same keys as _map_result so consumers can read others["extra"] /
+        # others["message"] unconditionally; "error" kept for back-compat.
+        others={
+            "message": message,
+            "url": None,
+            "extra": {},
+            "media": {},
+            "error": message,
+        },
     )
 
 
@@ -285,7 +302,13 @@ _PROXY_KEYS = (
 
 
 def _install_proxy(proxy: str):
-    """Set proxy env vars for the scan; return a restore callable."""
+    """Set proxy env vars for the scan; return a restore callable.
+
+    Process-global by necessity (validators build their own clients):
+    concurrent scans and host env readers observe it during the window.
+    Serialized by the is_running overlap guard — do not parallelize
+    scans without a lock.
+    """
     if not proxy:
         return lambda: None
     saved = {k: os.environ.get(k) for k in _PROXY_KEYS}
@@ -328,9 +351,7 @@ class EmailService:
                     "empty. Package layout: %s",
                     __import__("holehe_v2").__file__,
                 )
-                raise RuntimeError(
-                    "holehe-v2 validator discovery returned 0 modules"
-                )
+                raise RuntimeError("holehe-v2 validator discovery returned 0 modules")
             logger.info("holehe-v2: %d validators loaded", len(loaded))
             _holehe_modules = loaded
 
@@ -351,8 +372,11 @@ class EmailService:
             return 0
         try:
             return len(self._load_modules())
-        except Exception:
-            return 181  # fallback
+        except Exception as exc:
+            # No hardcoded fallback: a stale constant (was 181) drifts with
+            # every holehe release; 0 forces callers onto live counts.
+            logger.warning("total_modules: discovery failed: %s", exc)
+            return 0
 
     async def search(
         self,
@@ -363,6 +387,8 @@ class EmailService:
         concurrency: int = 15,
         use_curl_cffi: bool = True,
         proxy: str = "",
+        *,
+        use_stealth_fingerprint: bool | None = None,
     ) -> EmailSearchProgress:
         """Run a holehe-v2 email scan on an isolated worker thread.
 
@@ -372,12 +398,14 @@ class EmailService:
         running it on the main Flet loop starved the socket server and
         froze the UI (dead cancel button, dead back button).
 
-        `use_curl_cffi` selects the TLS fingerprint for v2's
-        impersonate-path modules (modern chrome131 vs upstream chrome120).
-        `proxy` is injected via HTTP(S)_PROXY env vars for the scan only —
-        v2's validators build their own clients, so this is the only hook.
+        `use_stealth_fingerprint` (alias `use_curl_cffi`) selects the TLS
+        fingerprint for v2's impersonate-path modules (modern chrome131 vs
+        upstream chrome120). `proxy` is injected via HTTP(S)_PROXY env vars
+        for the scan only — v2's validators build their own clients, so
+        this is the only hook.
         """
-        global _FINGERPRINT
+        if use_stealth_fingerprint is None:
+            use_stealth_fingerprint = use_curl_cffi
 
         if not _HOLEHE_AVAILABLE:
             raise RuntimeError("holehe-v2 is not available")
@@ -386,37 +414,50 @@ class EmailService:
             raise ValueError(f"Invalid email address: {email}")
 
         fingerprint = None
-        if use_curl_cffi:
+        if use_stealth_fingerprint:
             # P2-3 rotation: Android devices present as Chrome Android
             # (chrome131_android); desktops as chrome131.
             fingerprint = "chrome131"
             try:
                 from flet import context as _flet_context
 
-                if _flet_context.page and hasattr(_flet_context.page, "platform"):
-                    if _flet_context.page.platform.is_mobile():
-                        fingerprint = "chrome131_android"
+                if (
+                    _flet_context.page
+                    and hasattr(_flet_context.page, "platform")
+                    and _flet_context.page.platform.is_mobile()
+                ):
+                    fingerprint = "chrome131_android"
             except Exception:
                 pass
-        _FINGERPRINT = fingerprint
         # Only gravatar honours this, but it's free; every other timeout
         # is enforced below with asyncio.wait_for.
         set_global_timeout(float(timeout))
 
         modules = self._load_modules(skip_password_recovery)
 
+        if self._progress is not None and self._progress.is_running:
+            raise RuntimeError(
+                "Email search already running — cancel before starting a new one"
+            )
         self._thread_cancel.clear()
         self._tasks.clear()
 
-        return await asyncio.to_thread(
-            self._scan_in_worker,
-            email,
-            modules,
-            timeout,
-            concurrency,
-            proxy,
-            on_progress,
-        )
+        try:
+            return await asyncio.to_thread(
+                self._scan_in_worker,
+                email,
+                modules,
+                timeout,
+                concurrency,
+                proxy,
+                on_progress,
+                fingerprint,
+            )
+        except asyncio.CancelledError:
+            # Outer cancellation (Flet side): stop the worker too, or it
+            # keeps running and ticking progress on a dead UI.
+            self.cancel()
+            raise
 
     def _scan_in_worker(
         self,
@@ -426,8 +467,10 @@ class EmailService:
         concurrency: int,
         proxy: str,
         on_progress: Callable[[EmailSearchProgress], None],
+        fingerprint: str | None = None,
     ) -> EmailSearchProgress:
         """Run the whole holehe-v2 scan on this worker thread's private loop."""
+        token = _SCAN_FINGERPRINT.set(fingerprint)
         worker_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(worker_loop)
         self._worker_loop = worker_loop
@@ -437,8 +480,23 @@ class EmailService:
             email=email, total_modules=total, is_running=True
         )
         self._progress = progress
+
+        def _snapshot() -> EmailSearchProgress:
+            """Copy lists so the UI thread never sees a mutating object."""
+            return EmailSearchProgress(
+                email=progress.email,
+                total_modules=progress.total_modules,
+                checked_modules=progress.checked_modules,
+                found=list(progress.found),
+                not_found=list(progress.not_found),
+                rate_limited=list(progress.rate_limited),
+                unavailable=list(progress.unavailable),
+                is_running=progress.is_running,
+                is_cancelled=progress.is_cancelled,
+            )
+
         try:
-            on_progress(progress)
+            on_progress(_snapshot())
         except Exception:
             pass
 
@@ -448,38 +506,67 @@ class EmailService:
         def _notify() -> None:
             """Throttled worker→bridge tick (bridge coalesces again at ~2Hz)."""
             try:
-                on_progress(progress)
+                on_progress(_snapshot())
             except Exception:
                 pass
 
         async def _run_one(name: str, fn: Callable) -> None:
-            """Run a single validator and bucket its Result."""
+            """Run a single validator and bucket its Result.
+
+            One rate-limited response gets a single backoff retry (the site
+            answered, so a short wait often clears it); the retry is
+            skipped when the scan was cancelled during the wait.
+            """
             nonlocal last_update_time
 
-            if self._thread_cancel.is_set():
-                return
+            async def _attempt():
+                if self._thread_cancel.is_set():
+                    return None
+                try:
+                    # wait_for is mandatory: only 1/181 validators honour
+                    # the global timeout and 18 impersonate-path modules
+                    # have none.
+                    r = await asyncio.wait_for(fn(email), timeout)
+                except TimeoutError:
+                    return _unavailable_result(name, "Connection timed out")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("Validator %s failed: %s", name, exc)
+                    return _unavailable_result(name, str(exc))
+                return _map_result(name, r)
 
+            result = None
             try:
-                # wait_for is mandatory: only 1/181 validators honour the
-                # global timeout and 18 impersonate-path modules have none.
-                r = await asyncio.wait_for(fn(email), timeout)
-            except TimeoutError:
-                result = _unavailable_result(name, "Connection timed out")
+                result = await _attempt()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                # _map_result junk guard lives inside _attempt; this covers
+                # anything the mapping raised before it was folded in.
                 logger.warning("Validator %s failed: %s", name, exc)
                 result = _unavailable_result(name, str(exc))
-            else:
-                try:
-                    result = _map_result(name, r)
-                except Exception as exc:
-                    logger.warning("Validator %s returned junk: %s", name, exc)
-                    result = _unavailable_result(name, str(exc))
+            if (
+                result is not None
+                and result.rate_limit
+                and not self._thread_cancel.is_set()
+            ):
+                await asyncio.sleep(_RATE_RETRY_DELAY_SEC)
+                if self._thread_cancel.is_set():
+                    return
+                retried = await _attempt()
+                if retried is not None:
+                    result = retried
+            if result is None:
+                return
 
             async with progress_lock:
                 progress.checked_modules += 1
                 if result.rate_limit:
+                    # "Frequent" = this scan is being broadly throttled (2+
+                    # rate-limits already seen), not just one strict module.
+                    if len(progress.rate_limited) >= 2:
+                        result.frequent_rate_limit = True
                     progress.rate_limited.append(result)
                 elif result.unavailable:
                     progress.unavailable.append(result)
@@ -496,7 +583,9 @@ class EmailService:
         async def _runner() -> EmailSearchProgress:
             restore_proxy = _install_proxy(proxy)
             try:
-                sem = asyncio.Semaphore(max(4, min(30, concurrency)))
+                # Floor is 1, not 4: an explicit concurrency=1 (stealth)
+                # must be honored, not silently quadrupled.
+                sem = asyncio.Semaphore(max(1, min(30, concurrency)))
 
                 async def _bounded(name: str, fn: Callable):
                     async with sem:
@@ -505,7 +594,7 @@ class EmailService:
                         await _run_one(name, fn)
 
                 self._tasks = [
-                    asyncio.create_task(_bounded(name, fn))
+                    spawn(_bounded(name, fn), name=f"holehe-{name}")
                     for name, fn in modules.items()
                 ]
                 await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -516,8 +605,8 @@ class EmailService:
 
         try:
             return worker_loop.run_until_complete(_runner())
-        except Exception as exc:
-            logger.exception("Email search worker failed: %s", exc)
+        except Exception:
+            logger.exception("Email search worker failed")
             raise
         finally:
             progress.is_running = False
@@ -530,11 +619,12 @@ class EmailService:
                 )
             self._tasks.clear()
             self._worker_loop = None
+            _SCAN_FINGERPRINT.reset(token)
             with contextlib.suppress(Exception):
                 asyncio.set_event_loop(None)
             worker_loop.close()
             try:
-                on_progress(progress)
+                on_progress(_snapshot())
             except Exception:
                 pass
 
@@ -546,6 +636,12 @@ class EmailService:
         so awaited requests abort immediately.
         """
         self._thread_cancel.set()
+        # Snapshot liveness BEFORE the blocking wakeup below: waking the
+        # worker loop can release the GIL, letting the worker finish its
+        # teardown (is_running=False) before we evaluate the mark — a
+        # cancel that lands on a live scan must still mark it cancelled.
+        progress = self._progress
+        was_live = progress is not None and progress.is_running
         loop = self._worker_loop
         tasks = list(self._tasks)
         if loop is not None and loop.is_running():
@@ -559,6 +655,8 @@ class EmailService:
                 loop.call_soon_threadsafe(_cancel_all)
             except RuntimeError:
                 pass  # worker already tearing down
-        if self._progress:
-            self._progress.is_cancelled = True
-            self._progress.is_running = False
+        # Only mark a LIVE scan: flipping a completed/stale progress to
+        # cancelled rewrites history after the fact.
+        if was_live:
+            progress.is_cancelled = True
+            progress.is_running = False

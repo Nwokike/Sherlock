@@ -1,8 +1,24 @@
 """Application-wide constants."""
 
+import os
+
+# UI-automation hook: with SHERLOCK_TEST_IDS=1 the major interactive
+# controls carry key= identifiers so test drivers can target them
+# deterministically. Off by default — zero cost in production.
+USE_TEST_IDS = os.environ.get("SHERLOCK_TEST_IDS", "") == "1"
+
+
+def test_id(name: str) -> str | None:
+    """Return the automation id when test mode is on, else None."""
+    return name if USE_TEST_IDS else None
+
+
 APP_NAME = "Sherlock"
-APP_VERSION = "2.2.0"
-APP_BUILD_NUMBER = 12
+APP_VERSION = "2.3.0"
+APP_BUILD_NUMBER = 13
+
+# Fallback site count shown before the database load lands.
+SITES_TOTAL_FALLBACK = 5203
 
 # ── Update & Distribution URLs ─────────────────────────────────────────
 UPDATE_CONFIG_URL = (
@@ -28,7 +44,7 @@ STORAGE_EMAIL_CONCURRENCY = "sherlock_email_concurrency"
 STORAGE_EMAIL_ONLY_FOUND = "sherlock_email_only_found"
 STORAGE_PROXY_URL = "sherlock_proxy_url"
 STORAGE_ENRICHMENT_MODE = "sherlock_enrichment_mode"
-STORAGE_NO_PASSWORD_RECOVERY = "sherlock_no_pw_recovery"
+STORAGE_NO_PASSWORD_RECOVERY = "sherlock_no_pw_recovery"  # noqa: S105 — storage-KEY name, not a secret
 STORAGE_SEARCH_KEYWORDS = "sherlock_search_keywords"
 STORAGE_DEEP_ENRICH = "sherlock_deep_enrich"
 STORAGE_COOKIES_PATH = "sherlock_cookies_path"
@@ -36,9 +52,11 @@ STORAGE_I2P_PROXY = "sherlock_i2p_proxy"
 STORAGE_CHECK_DOMAINS = "sherlock_check_domains"
 STORAGE_DB_UNHEALTHY = "sherlock_db_unhealthy"
 STORAGE_BIOMETRIC_LOCK = "sherlock_biometric_lock"
+STORAGE_BIOMETRIC_STRICT = "sherlock_biometric_strict"
 STORAGE_SCAN_DEPTH = "sherlock_scan_depth"
 STORAGE_CACHED_RESULTS = "sherlock_cached_results"
 STORAGE_RECURSIVE_SEARCH = "sherlock_recursive_search"
+STORAGE_PERMUTE = "sherlock_permute"
 STORAGE_EXTRACT_INFO = "sherlock_extract_info"
 STORAGE_MAX_CONNECTIONS = "sherlock_max_connections"
 STORAGE_RETRIES = "sherlock_retries"

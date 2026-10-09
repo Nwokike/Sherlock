@@ -21,6 +21,17 @@ from core.constants import (
 logger = logging.getLogger("UpdateService")
 
 
+def _safe_https_url(value: object, default: str | None) -> str | None:
+    """Allow only https:// URLs for update/install links, else the default."""
+    if isinstance(value, str) and value.startswith("https://"):
+        return value
+    return default
+
+
+def _safe_text(value: object, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
 @dataclass
 class UpdateInfo:
     version: str
@@ -70,28 +81,30 @@ class UpdateService:
                 return None
 
             server_build = data.get("build_number", 0)
-            if (
-                not isinstance(server_build, int)
-                or server_build <= APP_BUILD_NUMBER
-            ):
+            # Policy: announcements are gated on build_number like updates
+            # (prevents remote announcement spam on every launch).
+            if not isinstance(server_build, int) or server_build <= APP_BUILD_NUMBER:
                 return None
+            raw_type = data.get("type")
+            safe_type = raw_type if raw_type in ("update", "announcement") else "update"
+            if safe_type == "announcement":
+                default_title = "Announcement"
+            else:
+                default_title = (
+                    f"Version {_safe_text(data.get('version'), '')} Available!"
+                )
             info = UpdateInfo(
-                version=str(data.get("version", APP_VERSION)),
+                version=_safe_text(data.get("version"), APP_VERSION)[:50],
                 build_number=int(server_build),
-                type=str(data.get("type", "update")),
-                title=str(
-                    data.get(
-                        "title",
-                        f"Version {data.get('version', '')} Available!"
-                        if data.get("type") != "announcement"
-                        else "Announcement",
-                    )
+                type=safe_type,
+                title=_safe_text(data.get("title"), default_title)[:500],
+                release_notes=_safe_text(data.get("release_notes"), "")[:10000],
+                mandatory=data.get("mandatory") is True,
+                github_url=_safe_https_url(data.get("github_url"), GITHUB_RELEASES_URL),
+                playstore_url=_safe_https_url(
+                    data.get("playstore_url"), PLAY_STORE_URL
                 ),
-                release_notes=str(data.get("release_notes", "")),
-                mandatory=bool(data.get("mandatory", False)),
-                github_url=str(data.get("github_url", GITHUB_RELEASES_URL)),
-                playstore_url=str(data.get("playstore_url", PLAY_STORE_URL)),
-                action_url=data.get("action_url"),
+                action_url=_safe_https_url(data.get("action_url"), None),
             )
             logger.info(
                 "New update/announcement found: build %s (current: %s)",

@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+from urllib.parse import urlparse
 
 import flet as ft
 from flet import Control
@@ -22,6 +24,7 @@ from core.constants import (
     APP_NAME,
     APP_VERSION,
     STORAGE_BIOMETRIC_LOCK,
+    STORAGE_BIOMETRIC_STRICT,
     STORAGE_CHECK_DOMAINS,
     STORAGE_COOKIES_PATH,
     STORAGE_DEEP_ENRICH,
@@ -38,6 +41,7 @@ from core.constants import (
     STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
+    STORAGE_PERMUTE,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_RETRIES,
@@ -50,11 +54,77 @@ from core.constants import (
 )
 from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
 from core.notify import show_snack
+from core.tasks import spawn
 from core.theme import AppColors, is_dark_mode
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
 logger = logging.getLogger("SettingsScreen")
+
+
+_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+
+
+def _parse_proxy(value: str) -> str | None:
+    """Validate a proxy URL. Returns error reason, or None if valid.
+
+    Empty string = direct connection (valid). Rejects bare schemes
+    (``http://`` with no host), unknown schemes, and out-of-range ports.
+    """
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+    try:
+        parts = urlparse(cleaned)
+    except Exception:
+        return "unparseable URL"
+    if parts.scheme.lower() not in _PROXY_SCHEMES:
+        return "scheme must be http://, https://, socks5:// or socks5h://"
+    if not parts.hostname:
+        return "missing host (bare scheme is not a proxy)"
+    try:
+        port = parts.port
+    except ValueError:
+        return "invalid port"
+    if port is not None and not (1 <= port <= 65535):
+        return f"port {port} out of range 1-65535"
+    return None
+
+
+def _validate_manifest(value: str) -> str | None:
+    """Validate a custom site-DB manifest. Returns error reason, or None.
+
+    Empty = bundled DB (valid). Format-only, no network I/O: URLs are checked
+    for shape (https required), local paths for existence + JSON object with
+    a ``sites`` key. Reachability is left to load_sites(), which falls back
+    with a log there.
+    """
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+    low = cleaned.lower()
+    if low.startswith(("http://", "https://")):
+        try:
+            parts = urlparse(cleaned)
+        except Exception:
+            return "unparseable URL"
+        if not parts.hostname:
+            return "URL has no host"
+        if parts.scheme.lower() == "http":
+            return "use https:// for manifests (http rejected)"
+        return None
+    if not os.path.isfile(cleaned):
+        return "file not found"
+    try:
+        import json
+
+        with open(cleaned, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return "not valid JSON"
+    if not isinstance(data, dict) or "sites" not in data:
+        return 'JSON must be an object with a "sites" key'
+    return None
 
 
 def _setting_row(
@@ -172,6 +242,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     is_mobile = bool(page and hasattr(page, "platform") and page.platform.is_mobile())
 
     async def _on_theme_change(val: str):
+        if page is None:
+            return
         if val == "system":
             new_mode = ft.ThemeMode.SYSTEM
         elif val == "light":
@@ -190,7 +262,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         except Exception:
             pass
 
-    def _create_theme_card(mode: str, label: str, icon: str):
+    def _create_theme_card(mode: str, label: str, icon: ft.IconData) -> ft.Container:
         curr_mode = (
             page.theme_mode
             if page and hasattr(page, "theme_mode")
@@ -240,117 +312,237 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             ),
             expand=True,
             ink=True,
-            on_click=lambda e, m=mode: asyncio.create_task(_on_theme_change(m)),
-            animate=ft.Animation(tokens.ANIM_FAST, "easeOut"),
+            on_click=lambda e, m=mode: spawn(_on_theme_change(m)),
+            animate=ft.Animation(tokens.ANIM_FAST, ft.AnimationCurve.EASE_OUT),
         )
 
-    def _toggle_nsfw(val: bool):
-        state.nsfw_enabled = val
-        asyncio.create_task(_persist(STORAGE_NSFW, "true" if val else "false"))
+    def _set_nsfw(val: bool):
+        """Single writer for the NSFW toggle pair.
+
+        The engine reads only ``nsfw_enabled``; ``safe_search`` is kept as a
+        derived mirror so the two storage keys can never diverge.
+        """
+        state.nsfw_enabled = bool(val)
+        state.safe_search = not bool(val)
+        spawn(_persist(STORAGE_NSFW, "true" if val else "false"))
+        spawn(_persist(STORAGE_SAFE_SEARCH, "false" if val else "true"))
         if controller.refresh_sites:
-            asyncio.create_task(controller.refresh_sites())
+            spawn(controller.refresh_sites())
+
+    def _toggle_nsfw(val: bool):
+        _set_nsfw(bool(val))
 
     def _toggle_exclusions(val: bool):
         state.ignore_exclusions = val
-        asyncio.create_task(_persist(STORAGE_EXCLUSIONS, "true" if val else "false"))
+        spawn(_persist(STORAGE_EXCLUSIONS, "true" if val else "false"))
         if controller.refresh_sites:
-            asyncio.create_task(controller.refresh_sites())
+            spawn(controller.refresh_sites())
 
     def _toggle_local_db(val: bool):
         state.use_local_db = val
-        asyncio.create_task(_persist(STORAGE_LOCAL_DB, "true" if val else "false"))
+        spawn(_persist(STORAGE_LOCAL_DB, "true" if val else "false"))
         if controller.refresh_sites:
-            asyncio.create_task(controller.refresh_sites())
-
-    def _on_manifest_change(val: str):
-        state.custom_manifest = val
-        asyncio.create_task(_persist(STORAGE_MANIFEST, val))
-        # refresh_sites is debounced via AppController — not per-keystroke.
+            spawn(controller.refresh_sites())
 
     def _on_manifest_submit(e):
-        val = e.control.value.strip() if e.control.value else ""
+        raw = e.control.value or ""
+        err = _validate_manifest(raw)
+        if err is not None:
+            show_snack(page, f"Invalid manifest: {err}.", bgcolor=AppColors.WARNING)
+            e.control.value = state.custom_manifest or ""
+            e.control.update()
+            return
+        val = raw.strip()
         state.custom_manifest = val
-        asyncio.create_task(_persist(STORAGE_MANIFEST, val))
+        spawn(_persist(STORAGE_MANIFEST, val))
         if controller.refresh_sites:
-            asyncio.create_task(controller.refresh_sites())
+            spawn(controller.refresh_sites())
 
-    def _on_timeout_change(val: str):
-        state.timeout = int(val)
-        asyncio.create_task(_persist(STORAGE_TIMEOUT, val))
+    def _slider_live(label_fmt: str):
+        """on_change handler: update the bubble label only (no state/persist)."""
 
-    def _on_email_timeout_change(val: str):
-        state.email_timeout = int(val)
-        asyncio.create_task(_persist(STORAGE_EMAIL_TIMEOUT, val))
+        def _live(e):
+            try:
+                e.control.label = label_fmt.format(int(e.control.value))
+                e.control.update()
+            except Exception:
+                pass
 
-    def _on_email_concurrency_change(val: str):
-        state.email_concurrency = max(5, min(30, int(val)))
-        asyncio.create_task(_persist(STORAGE_EMAIL_CONCURRENCY, val))
+        return _live
+
+    def _slider_commit(storage_key: str, apply):
+        """on_change_end handler: commit state + persist once per gesture."""
+
+        def _commit(e):
+            try:
+                v = int(e.control.value)
+            except TypeError, ValueError:
+                return
+            apply(v)
+            spawn(_persist(storage_key, str(v)))
+            try:
+                e.control.update()
+            except Exception:
+                pass
+
+        return _commit
+
+    def _apply_timeout(v: int):
+        state.timeout = v
+
+    def _apply_email_timeout(v: int):
+        state.email_timeout = v
+
+    def _apply_email_concurrency(v: int):
+        state.email_concurrency = max(5, min(30, v))
+
+    def _apply_max_connections(v: int):
+        state.max_connections = max(10, min(100, v))
 
     def _toggle_email_only_found(val: bool):
         state.email_only_found = val
-        asyncio.create_task(
-            _persist(STORAGE_EMAIL_ONLY_FOUND, "true" if val else "false")
-        )
+        spawn(_persist(STORAGE_EMAIL_ONLY_FOUND, "true" if val else "false"))
 
-    def _on_proxy_change(val: str):
-        cleaned = val.strip()
-        if cleaned and not any(
-            cleaned.lower().startswith(p)
-            for p in ("http://", "https://", "socks5://", "socks5h://")
-        ):
-            show_snack(
-                page,
-                "Invalid proxy URL. Please use http://, https://, or socks5://",
-                bgcolor=AppColors.WARNING,
-            )
+    def _on_proxy_change(e):
+        raw = e.control.value or ""
+        err = _parse_proxy(raw)
+        if err is not None:
+            show_snack(page, f"Invalid proxy URL: {err}.", bgcolor=AppColors.WARNING)
+            e.control.value = state.proxy_url or ""
+            e.control.update()
             return
+        cleaned = raw.strip()
         state.proxy_url = cleaned
-        asyncio.create_task(_persist(STORAGE_PROXY_URL, cleaned))
+        spawn(_persist(STORAGE_PROXY_URL, cleaned))
 
     def _on_enrichment_mode_change(val: str):
         state.enrichment_mode = val
-        asyncio.create_task(_persist(STORAGE_ENRICHMENT_MODE, val))
+        spawn(_persist(STORAGE_ENRICHMENT_MODE, val))
 
     def _on_keywords_change(val: str):
         cleaned = (val or "").strip()
         state.search_keywords = cleaned
-        asyncio.create_task(_persist(STORAGE_SEARCH_KEYWORDS, cleaned))
+        spawn(_persist(STORAGE_SEARCH_KEYWORDS, cleaned))
 
     def _on_deep_enrich_change(val: bool):
         state.deep_enrich = bool(val)
-        asyncio.create_task(
-            _persist(STORAGE_DEEP_ENRICH, "true" if val else "false")
-        )
+        spawn(_persist(STORAGE_DEEP_ENRICH, "true" if val else "false"))
 
-    def _on_cookies_change(val: str):
-        cleaned = (val or "").strip()
-        state.cookies_path = cleaned
-        asyncio.create_task(_persist(STORAGE_COOKIES_PATH, cleaned))
+    def _on_cookies_change(e):
+        raw = (e.control.value or "").strip()
+        if raw and not os.path.isfile(raw):
+            show_snack(
+                page, f"Cookies file not found: {raw}", bgcolor=AppColors.WARNING
+            )
+            e.control.value = state.cookies_path or ""
+            e.control.update()
+            return
+        state.cookies_path = raw
+        spawn(_persist(STORAGE_COOKIES_PATH, raw))
 
-    def _on_i2p_change(val: str):
-        cleaned = (val or "").strip()
+    def _on_i2p_change(e):
+        raw = e.control.value or ""
+        err = _parse_proxy(raw)
+        if err is not None:
+            show_snack(page, f"Invalid I2P gateway: {err}.", bgcolor=AppColors.WARNING)
+            e.control.value = state.i2p_proxy or ""
+            e.control.update()
+            return
+        cleaned = raw.strip()
         state.i2p_proxy = cleaned
-        asyncio.create_task(_persist(STORAGE_I2P_PROXY, cleaned))
+        spawn(_persist(STORAGE_I2P_PROXY, cleaned))
 
     def _on_check_domains_change(val: bool):
         state.check_domains = bool(val)
-        asyncio.create_task(
-            _persist(STORAGE_CHECK_DOMAINS, "true" if val else "false")
-        )
+        spawn(_persist(STORAGE_CHECK_DOMAINS, "true" if val else "false"))
 
     def _toggle_biometric_lock(val: bool):
         state.biometric_lock = bool(val)
         if not val:
             state.history_unlocked = False
-        asyncio.create_task(
-            _persist(STORAGE_BIOMETRIC_LOCK, "true" if val else "false")
-        )
+        spawn(_persist(STORAGE_BIOMETRIC_LOCK, "true" if val else "false"))
+
+    _capability_text, _set_capability_text = ft.use_state("checking…")
+
+    def _load_capability():
+        async def _fetch():
+            try:
+                from services.biometric_service import capability_label
+
+                _set_capability_text(await capability_label())
+            except Exception:
+                pass
+
+        spawn(_fetch())
+
+    ft.use_effect(_load_capability, [])
+
+    def _toggle_biometric_strict(val: bool):
+        state.biometric_strict = bool(val)
+        spawn(_persist(STORAGE_BIOMETRIC_STRICT, "true" if val else "false"))
+
+    _health_running = False
+
+    _db_update_running = False
+
+    async def _run_db_update_check(e=None):
+        nonlocal _db_update_running
+        if _db_update_running:
+            show_snack(page, "Site-DB update already running…")
+            return
+        if page is None:
+            return
+        try:
+            from maigret.db_updater import force_update
+        except ImportError:
+            show_snack(page, "Site-DB updater unavailable", bgcolor=AppColors.WARNING)
+            return
+        _db_update_running = True
+        btn = e.control if e is not None and hasattr(e, "control") else None
+        if btn is not None:
+            btn.disabled = True
+            with contextlib.suppress(Exception):
+                btn.update()
+        show_snack(page, "Site database: checking for updates…")
+        try:
+            updated = await asyncio.to_thread(force_update)
+            if controller.refresh_sites:
+                await controller.refresh_sites()
+            show_snack(
+                page,
+                "Site database updated — reloaded"
+                if updated
+                else "Site database already current",
+                bgcolor=AppColors.SUCCESS,
+            )
+        except Exception as exc:
+            logger.exception("Site-DB update failed")
+            show_snack(page, f"Site-DB update failed: {exc}", bgcolor=AppColors.ERROR)
+        finally:
+            _db_update_running = False
+            if btn is not None:
+                btn.disabled = False
+                with contextlib.suppress(Exception):
+                    btn.update()
 
     async def _run_db_health_check(e=None):
+        nonlocal _health_running
+        if _health_running:
+            show_snack(page, "Health check already running…")
+            return
+        if page is None:
+            return
+        if not controller.run_db_health:
+            return
+        _health_running = True
+        btn = e.control if e is not None and hasattr(e, "control") else None
+        if btn is not None:
+            btn.disabled = True
+            with contextlib.suppress(Exception):
+                btn.update()
         show_snack(page, "DB health: probing 25 sites… (takes up to a minute)")
         try:
-            if controller.run_db_health:
-                await controller.run_db_health()
+            await controller.run_db_health()
         except Exception as exc:
             # Fire-and-forget tasks eat exceptions — never let this die
             # silently (owner saw exactly that on device).
@@ -358,59 +550,60 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             show_snack(
                 page, f"DB health failed: {exc}", bgcolor=AppColors.ERROR, duration=8000
             )
+        finally:
+            _health_running = False
+            if btn is not None:
+                btn.disabled = False
+                with contextlib.suppress(Exception):
+                    btn.update()
 
     def _toggle_no_password_recovery(val: bool):
         state.no_password_recovery = val
-        asyncio.create_task(
-            _persist(STORAGE_NO_PASSWORD_RECOVERY, "true" if val else "false")
-        )
+        spawn(_persist(STORAGE_NO_PASSWORD_RECOVERY, "true" if val else "false"))
 
     def _on_scan_depth_change(val: str):
         state.scan_depth = val
-        asyncio.create_task(_persist(STORAGE_SCAN_DEPTH, val))
-        asyncio.create_task(controller.refresh_sites())
+        spawn(_persist(STORAGE_SCAN_DEPTH, val))
+        spawn(controller.refresh_sites())
 
     def _toggle_recursive_search(val: bool):
         state.recursive_search = val
-        asyncio.create_task(
-            _persist(STORAGE_RECURSIVE_SEARCH, "true" if val else "false")
-        )
+        spawn(_persist(STORAGE_RECURSIVE_SEARCH, "true" if val else "false"))
+
+    def _toggle_permute(val: bool):
+        state.permute_enabled = val
+        spawn(_persist(STORAGE_PERMUTE, "true" if val else "false"))
 
     def _toggle_extract_info(val: bool):
         state.extract_info = val
-        asyncio.create_task(_persist(STORAGE_EXTRACT_INFO, "true" if val else "false"))
-
-    def _on_max_connections_change(val: str):
-        state.max_connections = max(10, min(100, int(val)))
-        asyncio.create_task(_persist(STORAGE_MAX_CONNECTIONS, val))
+        spawn(_persist(STORAGE_EXTRACT_INFO, "true" if val else "false"))
 
     def _on_retries_change(val: str):
         state.retries = int(val)
-        asyncio.create_task(_persist(STORAGE_RETRIES, val))
+        spawn(_persist(STORAGE_RETRIES, val))
 
     def _on_dns_resolver_change(val: str):
         state.dns_resolver = val
-        asyncio.create_task(_persist(STORAGE_DNS_RESOLVER, val))
+        spawn(_persist(STORAGE_DNS_RESOLVER, val))
 
     def _toggle_use_curl_cffi(val: bool):
         state.use_curl_cffi = val
-        asyncio.create_task(_persist(STORAGE_USE_CURL_CFFI, "true" if val else "false"))
+        spawn(_persist(STORAGE_USE_CURL_CFFI, "true" if val else "false"))
 
     def _toggle_safe_search(val: bool):
-        state.safe_search = val
-        state.nsfw_enabled = not val
-        asyncio.create_task(_persist(STORAGE_SAFE_SEARCH, "true" if val else "false"))
-        asyncio.create_task(_persist(STORAGE_NSFW, "false" if val else "true"))
-        if controller.refresh_sites:
-            asyncio.create_task(controller.refresh_sites())
+        _set_nsfw(not val)
 
     async def _persist(key: str, value: str):
-        from flet import context
+        try:
+            from flet import context
 
-        from services.storage_service import StorageService
+            from services.storage_service import StorageService
 
-        storage = StorageService(context.page)
-        await storage.set(key, value)
+            storage = StorageService(context.page)
+            await storage.set(key, value)
+            await storage.flush()
+        except Exception as exc:
+            logger.debug("Settings persist failed for %s: %s", key, exc)
 
     # ─── Cards ──────────────────────────────────────────────────────────
 
@@ -493,6 +686,21 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             ft.Switch(
                 value=getattr(state, "recursive_search", False),
                 on_change=lambda e: _toggle_recursive_search(e.control.value),
+                active_color=ft.Colors.PRIMARY,
+            ),
+            stacked=narrow,
+        ),
+        ft.Divider(
+            height=1,
+            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+        ),
+        _setting_row(
+            ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+            "Username Permutations",
+            "Also scan separator variants of the handle (john.doe -> john_doe, john-doe, johndoe). Multiplies scan length.",
+            ft.Switch(
+                value=getattr(state, "permute_enabled", False),
+                on_change=lambda e: _toggle_permute(e.control.value),
                 active_color=ft.Colors.PRIMARY,
             ),
             stacked=narrow,
@@ -627,8 +835,9 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     divisions=5,
                     label=f"{state.email_timeout}s",
                     active_color=AppColors.PRIMARY,
-                    on_change=lambda e: _on_email_timeout_change(
-                        str(int(e.control.value))
+                    on_change=_slider_live("{}s"),
+                    on_change_end=_slider_commit(
+                        STORAGE_EMAIL_TIMEOUT, _apply_email_timeout
                     ),
                 ),
                 stacked=narrow,
@@ -643,13 +852,14 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 "Parallel checks — lower is stealthier, higher is faster",
                 ft.Slider(
                     value=float(getattr(state, "email_concurrency", 12)),
-                    min=4,
+                    min=5,
                     max=30,
-                    divisions=13,
+                    divisions=25,
                     label=f"{getattr(state, 'email_concurrency', 12)}",
                     active_color=AppColors.PRIMARY,
-                    on_change=lambda e: _on_email_concurrency_change(
-                        str(int(e.control.value))
+                    on_change=_slider_live("{}"),
+                    on_change_end=_slider_commit(
+                        STORAGE_EMAIL_CONCURRENCY, _apply_email_concurrency
                     ),
                 ),
                 stacked=narrow,
@@ -766,8 +976,9 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     divisions=9,
                     label=f"{getattr(state, 'max_connections', 50)}",
                     active_color=AppColors.PRIMARY,
-                    on_change=lambda e: _on_max_connections_change(
-                        str(int(e.control.value))
+                    on_change=_slider_live("{}"),
+                    on_change_end=_slider_commit(
+                        STORAGE_MAX_CONNECTIONS, _apply_max_connections
                     ),
                 ),
                 stacked=narrow,
@@ -802,7 +1013,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     divisions=11,
                     label=f"{state.timeout}s",
                     active_color=AppColors.PRIMARY,
-                    on_change=lambda e: _on_timeout_change(str(int(e.control.value))),
+                    on_change=_slider_live("{}s"),
+                    on_change_end=_slider_commit(STORAGE_TIMEOUT, _apply_timeout),
                 ),
                 stacked=narrow,
             ),
@@ -832,7 +1044,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                         ft.Column(
                             controls=[
                                 ft.Text(
-                                    "Custom Manifest",
+                                    "Custom Site-DB Manifest",
                                     size=tokens.FONT_MD,
                                     weight=ft.FontWeight.W_500,
                                 ),
@@ -859,7 +1071,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             ),
             ft.Container(
                 content=ft.TextField(
-                    value=state.custom_manifest,
+                    value=state.custom_manifest or "",
                     hint_text="https://raw.githubusercontent.com/.../data.json",
                     border={
                         ft.ControlState.DEFAULT: ft.OutlineInputBorder(
@@ -880,8 +1092,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     content_padding=tokens.SPACE_SM,
                     bgcolor=ft.Colors.SURFACE,
                     filled=True,
-                    on_change=lambda e: _on_manifest_change(e.control.value),
                     on_submit=_on_manifest_submit,
+                    on_blur=_on_manifest_submit,
                 ),
                 padding=ft.Padding(
                     left=tokens.SPACE_LG,
@@ -963,7 +1175,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         [
             ft.Container(
                 content=ft.TextField(
-                    value=state.proxy_url,
+                    value=state.proxy_url or "",
                     hint_text="socks5://127.0.0.1:1080 or http://proxy:8080 (empty = direct)",
                     label="Proxy URL",
                     prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
@@ -980,8 +1192,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     content_padding=tokens.SPACE_SM,
                     bgcolor=ft.Colors.SURFACE,
                     filled=True,
-                    on_submit=lambda e: _on_proxy_change(e.control.value),
-                    on_blur=lambda e: _on_proxy_change(e.control.value),
+                    on_submit=_on_proxy_change,
+                    on_blur=_on_proxy_change,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD
@@ -989,7 +1201,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             ),
             ft.Container(
                 content=ft.TextField(
-                    value=state.i2p_proxy,
+                    value=state.i2p_proxy or "",
                     hint_text="http://127.0.0.1:4444 (empty = unused)",
                     label="I2P Gateway (optional)",
                     prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
@@ -1006,8 +1218,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     content_padding=tokens.SPACE_SM,
                     bgcolor=ft.Colors.SURFACE,
                     filled=True,
-                    on_submit=lambda e: _on_i2p_change(e.control.value),
-                    on_blur=lambda e: _on_i2p_change(e.control.value),
+                    on_submit=_on_i2p_change,
+                    on_blur=_on_i2p_change,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
@@ -1015,7 +1227,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             ),
             ft.Container(
                 content=ft.TextField(
-                    value=state.cookies_path,
+                    value=state.cookies_path or "",
                     hint_text="path/to/cookies.txt — auth-gated sites",
                     label="Cookies File (optional)",
                     prefix_icon=ft.Icons.PASSWORD_ROUNDED,
@@ -1032,8 +1244,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     content_padding=tokens.SPACE_SM,
                     bgcolor=ft.Colors.SURFACE,
                     filled=True,
-                    on_submit=lambda e: _on_cookies_change(e.control.value),
-                    on_blur=lambda e: _on_cookies_change(e.control.value),
+                    on_submit=_on_cookies_change,
+                    on_blur=_on_cookies_change,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_MD
@@ -1096,11 +1308,15 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         ]
     )
 
+    _TERMINAL_DISPLAY_LINES = 500
+
     def _open_terminal():
+        if page is None:
+            return
         with contextlib.suppress(Exception):
             page.pop_dialog()
 
-        logs_list = in_memory_log_handler.get_logs()
+        logs_list = in_memory_log_handler.get_logs()[-_TERMINAL_DISPLAY_LINES:]
         log_text = ft.Text(
             value="\n".join(logs_list)
             if logs_list
@@ -1113,7 +1329,9 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
         async def _copy_logs(e):
             try:
-                cb = ft.Clipboard()
+                from core.shared_services import shared_clipboard
+
+                cb = shared_clipboard(page)
                 current_logs = "\n".join(in_memory_log_handler.get_logs())
                 await cb.set(current_logs)
                 show_snack(page, "Logs copied to clipboard", bgcolor=AppColors.SUCCESS)
@@ -1131,7 +1349,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
         def _refresh_telemetry(e):
             telemetry_text.value = get_telemetry_snapshot()
-            cur_logs = in_memory_log_handler.get_logs()
+            cur_logs = in_memory_log_handler.get_logs()[-_TERMINAL_DISPLAY_LINES:]
             if cur_logs:
                 log_text.value = "\n".join(cur_logs)
             page.update()
@@ -1219,7 +1437,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ft.TextButton(
                     "Copy Logs",
                     icon=ft.Icons.COPY_ROUNDED,
-                    on_click=lambda e: asyncio.create_task(_copy_logs(e)),
+                    on_click=lambda e: spawn(_copy_logs(e)),
                 ),
                 ft.TextButton(
                     "Clear",
@@ -1257,7 +1475,22 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ft.FilledButton(
                     "Run Check",
                     icon=ft.Icons.SEARCH_ROUNDED,
-                    on_click=lambda e: asyncio.create_task(_run_db_health_check(e)),
+                    on_click=lambda e: spawn(_run_db_health_check(e)),
+                ),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
+                "Site Database Update",
+                "Fetch the latest 5,200+ network definitions from upstream",
+                ft.FilledButton(
+                    "Check for Update",
+                    icon=ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
+                    on_click=lambda e: spawn(_run_db_update_check(e)),
                 ),
                 stacked=narrow,
             ),
@@ -1268,10 +1501,25 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.FINGERPRINT_ROUNDED,
                 "Biometric App Lock",
-                "Require fingerprint/face unlock to open History",
+                f"Require unlock to open History ({_capability_text})",
                 ft.Switch(
                     value=state.biometric_lock,
                     on_change=lambda e: _toggle_biometric_lock(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
+                ),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.SECURITY_ROUNDED,
+                "Biometrics Only",
+                "Disallow device-PIN fallback (stricter, needs enrolled biometrics)",
+                ft.Switch(
+                    value=state.biometric_strict,
+                    on_change=lambda e: _toggle_biometric_strict(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
                 stacked=narrow,
@@ -1296,7 +1544,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             build_banner_ad(),
             SectionHeader("CONNECTION & SPEED"),
             performance_card,
-            SectionHeader("CUSTOM MANIFEST"),
+            SectionHeader("CUSTOM SITE-DB MANIFEST"),
             manifest_card,
             build_banner_ad(),
             SectionHeader("TROUBLESHOOTING & LOGS"),

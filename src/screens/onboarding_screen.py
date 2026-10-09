@@ -6,7 +6,6 @@ Premium onboarding with swipe gestures, animated dots, and gradient backdrop.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 
@@ -15,6 +14,7 @@ from flet import Control
 
 from core import tokens
 from core.constants import STORAGE_ONBOARDING_DONE
+from core.tasks import spawn
 from core.theme import AppColors, is_dark_mode
 
 logger = logging.getLogger("OnboardingScreen")
@@ -132,33 +132,34 @@ def OnboardingScreen() -> Control:
         state.has_accepted_terms = True
         state.is_first_launch = False
 
-    def _on_next(e=None):
+    def _buzz():
         with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
+            from core.shared_services import shared_haptics
+
+            spawn(shared_haptics().light_impact())
+
+    def _on_next(e=None):
+        _buzz()
         if is_last:
-            asyncio.create_task(_finish())
+            spawn(_finish())
         else:
             set_page_idx(page_idx + 1)
 
     def _on_skip(e):
-        with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
-        asyncio.create_task(_finish())
+        _buzz()
+        spawn(_finish())
 
     def _on_swipe(e: ft.DragEndEvent):
         if e.primary_velocity is not None:
             if e.primary_velocity < -200 and not is_last:
-                with contextlib.suppress(Exception):
-                    asyncio.create_task(ft.HapticFeedback().light_impact())
+                _buzz()
                 set_page_idx(min(page_idx + 1, len(_SLIDES) - 1))
             elif e.primary_velocity > 200 and page_idx > 0:
-                with contextlib.suppress(Exception):
-                    asyncio.create_task(ft.HapticFeedback().light_impact())
+                _buzz()
                 set_page_idx(page_idx - 1)
 
     def _on_dot_click(idx: int):
-        with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
+        _buzz()
         set_page_idx(idx)
 
     # Dot indicators (tappable)
@@ -172,7 +173,7 @@ def OnboardingScreen() -> Control:
             bgcolor=ft.Colors.PRIMARY
             if is_active
             else ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE),
-            animate=ft.Animation(tokens.ANIM_SLOW, "easeOut"),
+            animate=ft.Animation(tokens.ANIM_SLOW, ft.AnimationCurve.EASE_OUT),
         )
         dots.append(
             ft.GestureDetector(

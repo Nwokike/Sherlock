@@ -1,5 +1,6 @@
 """Comprehensive tests for Screen-by-Screen audit polish, engine synchronization, and modern UI controls."""
 
+import pytest
 from flet.components.component import Component, Renderer
 
 from core.constants import APP_BUILD_NUMBER, APP_VERSION, MODE_EMAIL, MODE_USERNAME
@@ -7,12 +8,50 @@ from core.state import state
 from screens.history_screen import HistoryScreen
 from screens.home_screen import HomeScreen
 from screens.onboarding_screen import _SLIDES, OnboardingScreen
-from screens.results_screen import ResultsScreen
+from screens.results_screen import ResultsScreen, clamp_tab_index
 from screens.settings_screen import SettingsScreen
 from screens.sites_screen import CATEGORY_TAGS, SitesScreen
 from services.sherlock_service import SearchProgress, SiteResult
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+
+@pytest.fixture(autouse=True)
+def _restore_global_state():
+    """Snapshot the state singleton around each test.
+
+    This file exercises many screens that mutate global state; without a
+    restore, whichever test runs next (under any file order) inherits the
+    pollution (found via reverse-order run: stale current_username).
+    Restore goes through setattr (never __dict__ surgery): AppState is
+    @ft.observable and __dict__ surgery wipes its wrapper internals.
+    Collections are reassigned as plain copies so __setattr__ re-wraps
+    them into ObservableList/ObservableDict like __init__ does.
+    """
+    saved = {
+        "biometric_lock": state.biometric_lock,
+        "current_username": state.current_username,
+        "email_results": list(state.email_results) if state.email_results else [],
+        "enrichment_mode": state.enrichment_mode,
+        "enrichments": dict(state.enrichments) if state.enrichments else {},
+        "history": list(state.history),
+        "ignore_exclusions": state.ignore_exclusions,
+        "is_searching": state.is_searching,
+        "no_password_recovery": state.no_password_recovery,
+        "nsfw_enabled": state.nsfw_enabled,
+        "recursive_search": state.recursive_search,
+        "scan_depth": state.scan_depth,
+        "search_mode": state.search_mode,
+        "search_progress": state.search_progress,
+        "sites_cache": list(state.sites_cache),
+        "sites_tags_map": dict(state.sites_tags_map),
+        "sites_total": state.sites_total,
+        "sites_version": state.sites_version,
+        "use_curl_cffi": state.use_curl_cffi,
+    }
+    yield
+    for key, value in saved.items():
+        setattr(state, key, value)
 
 
 def _mount_screen(comp_fn):
@@ -147,6 +186,21 @@ def test_results_screen_stable_stat_cards():
     # Stat cards should reflect 1 found, 1 not found, 5203 total
     assert "1" in texts
     assert "5203" in texts
+
+
+def test_clamp_tab_index_email_to_username_switch():
+    """Switching from email tab 3 to username mode must not raise IndexError.
+
+    The tab index is shared across modes (email has 4 tabs, username has 3).
+    flet 1.0.1 Tabs.before_update raises IndexError for selected_index=3 with
+    length=3 instead of clamping, so the screen clamps explicitly.
+    """
+    assert clamp_tab_index(3, 3) == 2
+    assert clamp_tab_index(2, 3) == 2
+    assert clamp_tab_index(0, 3) == 0
+    assert clamp_tab_index(3, 4) == 3
+    assert clamp_tab_index(-1, 3) == 0
+    assert clamp_tab_index(0, 0) == 0
 
 
 # ── 4. SettingsScreen Tests ────────────────────────────────────────────

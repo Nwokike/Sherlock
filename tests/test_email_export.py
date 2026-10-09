@@ -141,10 +141,6 @@ class TestV2ExtrasRendering:
         from components.result_card import ResultCard
 
         extras = {f"field_{i}": f"value{i}" for i in range(10)}
-        card = ResultCard(
-            site_name="X", status="Available", others={"extra": extras}
-        )
-        rendered = [
-            t for t in self._texts(card) if t.startswith("Field ")
-        ]
+        card = ResultCard(site_name="X", status="Available", others={"extra": extras})
+        rendered = [t for t in self._texts(card) if t.startswith("Field ")]
         assert len(rendered) == 6

@@ -18,6 +18,7 @@ import contextlib
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import flet as ft
@@ -56,6 +57,7 @@ from core.constants import (
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_ONBOARDING_DONE,
+    STORAGE_PERMUTE,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_RETRIES,
@@ -69,7 +71,9 @@ from core.constants import (
     STORAGE_USE_CURL_CFFI,
 )
 from core.logger_handler import in_memory_log_handler
+from core.shared_services import mount_shared_services
 from core.state import state
+from core.tasks import spawn
 from core.theme import AppTheme
 from services.ad_service import AdService
 from services.email_service import EmailResult, EmailSearchProgress, EmailService
@@ -112,10 +116,20 @@ class AppController:
         self._enrich_queue: asyncio.Queue[str] | None = None
         self._enriched_seen: set[str] = set()
         self._enrich_worker_task: asyncio.Task | None = None
+        # Enrichment generation: bumped on every kill/new search. The old
+        # drain worker captures its generation at entry and self-quiesces
+        # (skips writes) once a newer generation exists — orphaned
+        # _enrich_single/avatar tasks can never contaminate the next scan.
+        self._enrich_gen: int = 0
+        # Per-scan avatar warm budget (reset in _register_search_task).
+        self._avatar_warmed: int = 0
         # Handle of the in-flight search task (the home-screen `_run`
         # task awaiting start_search/start_email_search) — cancelled
         # instantly when a new search supersedes it.
         self._search_task: asyncio.Task | None = None
+        # Serializes history read-modify-write (primary-done bridge vs
+        # final save) so concurrent upserts can't interleave and lose one.
+        self._history_lock = asyncio.Lock()
         # Coalesced progress bridge throttling
         self._last_progress_emit: float = 0.0
         self._pending_progress: Any | None = None
@@ -155,12 +169,13 @@ class AppController:
             current = None
 
         killed = []
+        self._enrich_gen += 1
         if self._enrich_worker_task and not self._enrich_worker_task.done():
-            self._enrich_worker_task.cancel()
+            self._cancel_task_threadsafe(self._enrich_worker_task)
             killed.append("enrich-worker")
         self._enrich_queue = None
         if self._render_flush_task and not self._render_flush_task.done():
-            self._render_flush_task.cancel()
+            self._cancel_task_threadsafe(self._render_flush_task)
             killed.append("render-flusher")
         self._render_flush_task = None
         if hasattr(self.sherlock_service, "cancel"):
@@ -174,7 +189,7 @@ class AppController:
             and self._search_task is not current
             and not self._search_task.done()
         ):
-            self._search_task.cancel()
+            self._cancel_task_threadsafe(self._search_task)
             killed.append("search-task")
         state.is_searching = False
         logger.info("KILL %s → cancelled: %s", reason, ", ".join(killed) or "nothing")
@@ -182,6 +197,7 @@ class AppController:
     def _register_search_task(self) -> None:
         """Register the calling task as the active search (killable)."""
         self._search_task = asyncio.current_task()
+        self._avatar_warmed = 0
         self._start_render_flusher()
 
     def _start_render_flusher(self) -> None:
@@ -190,7 +206,24 @@ class AppController:
             return
         self._render_dirty = False
         self._pending_enrichments = {}
-        self._render_flush_task = asyncio.create_task(self._render_flusher())
+        self._render_flush_task = spawn(self._render_flusher())
+
+    def _stop_render_flusher(self) -> None:
+        """Stop the flusher on normal completion (no kill follows).
+
+        Flushes any residual pending enrichments first so the tail batch
+        is never lost, then cancels the idle 0.5s wake loop — otherwise it
+        spins for the app lifetime.
+        """
+        pending, self._pending_enrichments = self._pending_enrichments, {}
+        if pending:
+            try:
+                state.enrichments.update(pending)
+            except Exception:
+                pass
+        task, self._render_flush_task = self._render_flush_task, None
+        if task and not task.done():
+            task.cancel()
 
     async def _render_flusher(self) -> None:
         """The ONLY progress_version bumper during a scan (~2Hz max).
@@ -258,6 +291,11 @@ class AppController:
         self.connectivity = ft.Connectivity()
         self.connectivity.on_change = self._on_connectivity_change
         self.page.services.append(self.connectivity)
+
+        # Shared transient services (haptics/clipboard/share/url-launcher):
+        # mount one of each so per-click helpers reuse instead of registering
+        # a new service on every tap.
+        mount_shared_services(self.page)
         self.page.run_task(self._init_connectivity)
         self.page.on_app_lifecycle_state_change = self._on_lifecycle_change
 
@@ -365,7 +403,10 @@ class AppController:
 
             timeout_raw = await self.storage.get(STORAGE_TIMEOUT)
             if timeout_raw:
-                state.timeout = int(timeout_raw)
+                try:
+                    state.timeout = int(timeout_raw)
+                except TypeError, ValueError:
+                    logger.warning("Ignoring corrupt stored timeout: %r", timeout_raw)
 
             local_db_raw = await self.storage.get(STORAGE_LOCAL_DB)
             if local_db_raw:
@@ -400,23 +441,35 @@ class AppController:
 
             email_timeout_raw = await self.storage.get(STORAGE_EMAIL_TIMEOUT)
             if email_timeout_raw:
-                val = int(email_timeout_raw)
-                # Migration: old default 10 → new default 30
-                if val == 10:
-                    state.email_timeout = 30
-                    await self.storage.set(STORAGE_EMAIL_TIMEOUT, "30")
-                else:
-                    state.email_timeout = val
+                try:
+                    val = int(email_timeout_raw)
+                except TypeError, ValueError:
+                    logger.warning(
+                        "Ignoring corrupt stored email timeout: %r", email_timeout_raw
+                    )
+                    val = None
+                if val is not None:
+                    # Migration: old default 10 → new default 30
+                    if val == 10:
+                        state.email_timeout = 30
+                        await self.storage.set(STORAGE_EMAIL_TIMEOUT, "30")
+                    else:
+                        state.email_timeout = val
 
             conc_raw = await self.storage.get(STORAGE_EMAIL_CONCURRENCY)
             if conc_raw:
-                val = max(5, min(30, int(conc_raw)))
-                # Migration: old default 15 → new default 5
-                if val == 15:
-                    state.email_concurrency = 5
-                    await self.storage.set(STORAGE_EMAIL_CONCURRENCY, "5")
-                else:
-                    state.email_concurrency = val
+                try:
+                    val = max(5, min(30, int(conc_raw)))
+                except TypeError, ValueError:
+                    logger.warning("Ignoring corrupt stored concurrency: %r", conc_raw)
+                    val = None
+                if val is not None:
+                    # Migration: old default 15 → new default 5
+                    if val == 15:
+                        state.email_concurrency = 5
+                        await self.storage.set(STORAGE_EMAIL_CONCURRENCY, "5")
+                    else:
+                        state.email_concurrency = val
             only_found_raw = await self.storage.get(STORAGE_EMAIL_ONLY_FOUND)
             if only_found_raw is not None:
                 state.email_only_found = only_found_raw == "true"
@@ -466,10 +519,19 @@ class AppController:
             bio_raw = await self.storage.get(STORAGE_BIOMETRIC_LOCK)
             if bio_raw is not None:
                 state.biometric_lock = bio_raw == "true"
+            from core.constants import STORAGE_BIOMETRIC_STRICT
+
+            strict_raw = await self.storage.get(STORAGE_BIOMETRIC_STRICT)
+            if strict_raw is not None:
+                state.biometric_strict = strict_raw == "true"
 
             rec_raw = await self.storage.get(STORAGE_RECURSIVE_SEARCH)
             if rec_raw is not None:
                 state.recursive_search = rec_raw == "true"
+
+            perm_raw = await self.storage.get(STORAGE_PERMUTE)
+            if perm_raw is not None:
+                state.permute_enabled = perm_raw == "true"
 
             ext_raw = await self.storage.get(STORAGE_EXTRACT_INFO)
             if ext_raw is not None:
@@ -557,8 +619,8 @@ class AppController:
 
         # NEW SEARCH = PRIORITY: kill any prior activity instantly,
         # whether it is still running or just draining its tail.
-        self._kill_all_activity(f"username-search[{target_clean}]")
-        self._register_search_task()
+        # NOTE: the kill runs AFTER the offline gate — a doomed new search
+        # (offline/empty) must never kill a healthy running scan.
 
         # Offline gate — don't launch a 400-site scan that can only
         # produce timeouts. History/settings still work offline.
@@ -566,6 +628,9 @@ class AppController:
             logger.info("Search blocked: device offline")
             self._show_snack(MSG_SEARCH_OFFLINE, duration=10000)
             return
+
+        self._kill_all_activity(f"username-search[{target_clean}]")
+        self._register_search_task()
 
         state.current_username = target_clean
         state.is_searching = True
@@ -592,7 +657,7 @@ class AppController:
         self._enriched_seen.clear()
         self._enrich_queue = asyncio.Queue()
         if self.enrich_service and self.enrich_service.is_available:
-            self._enrich_worker_task = asyncio.create_task(self._drain_enrich_queue())
+            self._enrich_worker_task = spawn(self._drain_enrich_queue())
 
         # Make sure sites are loaded before searching
         try:
@@ -600,10 +665,25 @@ class AppController:
         except Exception as e:
             logger.warning("load_sites failed before scan: %s", e)
 
+        # Permute: separator variants join the target list (engine parses
+        # the comma-joined string; per-target truth lands in
+        # state.target_results and is merged into last_results below).
+        scan_query = target_clean
+        if state.permute_enabled:
+            from core.permute import permute_username
+
+            variants = permute_username(target_clean)
+            if variants:
+                scan_query = ",".join([target_clean, *variants])
+                logger.info(
+                    "Permute: +%d handle variant(s) joined the scan",
+                    len(variants),
+                )
+
         # Bridge the thread-shed progress callbacks onto the main loop
         try:
             result = await self.sherlock_service.search(
-                username=username,
+                username=scan_query,
                 on_progress=self._progress_from_thread,
                 timeout=state.timeout,
                 after_primary=self._on_username_primary_done,
@@ -611,34 +691,47 @@ class AppController:
             # If this scan was cancelled or superseded by another search, do not clobber state
             if (
                 getattr(result, "is_cancelled", False)
-                or state.current_username != username
+                or state.current_username != target_clean
                 or state.search_mode != MODE_USERNAME
             ):
                 logger.info(
                     "WATCHDOG: username search %r cancelled/superseded — ignoring results",
-                    username,
+                    target_clean,
                 )
                 state.is_searching = False
                 username_progress.is_running = False
                 state.progress_version += 1
+                self._stop_render_flusher()
                 return
 
             state.is_searching = False
-            state.last_results = {
-                r.site_name: r
-                for r in (result.found + result.not_found + result.errors)
-            }
-            state.last_results_username = username
+            merged_results: dict = {}
+
+            def _merge_result(r) -> None:
+                existing = merged_results.get(r.site_name)
+                # Prefer the CLAIMED row when two handles hit the same site.
+                if existing is None or (
+                    r.status == "Claimed" and existing.status != "Claimed"
+                ):
+                    merged_results[r.site_name] = r
+
+            for prog in list((state.target_results or {}).values()):
+                for r in prog.found + prog.not_found + prog.errors:
+                    _merge_result(r)
+            for r in result.found + result.not_found + result.errors:
+                _merge_result(r)
+            state.last_results = merged_results
+            state.last_results_username = target_clean
             logger.info(
                 "WATCHDOG: username search COMPLETE %r — %d/%d checked, %d found",
-                username,
+                target_clean,
                 result.checked_sites,
                 result.total_sites,
                 len(result.found),
             )
 
             await self._save_to_history(
-                username, len(result.found), result.total_sites, mode=MODE_USERNAME
+                target_clean, len(result.found), result.total_sites, mode=MODE_USERNAME
             )
 
             # Final progress apply (enqueues any remaining found URLs).
@@ -646,11 +739,12 @@ class AppController:
             # and the final result object may be the live one (silent assign).
             await self._apply_progress(result)
             state.progress_version += 1
+            self._stop_render_flusher()
         except asyncio.CancelledError:
-            logger.info("WATCHDOG: username search %r killed mid-flight", username)
+            logger.info("WATCHDOG: username search %r killed mid-flight", target_clean)
             raise
         except Exception as e:
-            if getattr(state, "current_username", None) == username:
+            if getattr(state, "current_username", None) == target_clean:
                 logger.exception("Search failed")
                 state.is_searching = False
                 username_progress.is_running = False
@@ -675,12 +769,14 @@ class AppController:
                     else ERR_GENERIC
                 )
                 self._show_snack(msg, duration=10000)
+                self._stop_render_flusher()
 
     async def _drain_enrich_queue(self) -> None:
         """Stream profile enrichment in real-time as sites are found."""
         if not self.enrich_service or not self.enrich_service.is_available:
             return
 
+        gen = self._enrich_gen
         use_mutations = getattr(state, "enrichment_mode", "basic") == "full"
         concurrency = 3 if use_mutations else 4
         semaphore = asyncio.Semaphore(concurrency)
@@ -688,34 +784,59 @@ class AppController:
 
         async def _enrich_single(url: str) -> None:
             async with semaphore:
+                if gen != self._enrich_gen:
+                    return
                 try:
                     fn = (
                         self.enrich_service.enrich_url_with_mutations
                         if use_mutations
                         else self.enrich_service.enrich_url
                     )
-                    data = await fn(url, timeout=8 if use_mutations else 6)
-                    if data:
+                    # Forward stored cookies (auth-gated schemes) + UA so
+                    # enrichment performs instead of failing logged-out.
+                    cookies_path = (state.cookies_path or "").strip() or None
+                    cookies_str = ""
+                    if cookies_path:
+                        try:
+                            cookies_str = (
+                                Path(cookies_path).read_text(encoding="utf-8")
+                                if Path(cookies_path).is_file()
+                                else ""
+                            )
+                        except OSError:
+                            cookies_str = ""
+                    data = await fn(
+                        url,
+                        timeout=8 if use_mutations else 6,
+                        cookies=cookies_str or None,
+                        user_agent="Sherlock/2.x",
+                    )
+                    if data and gen == self._enrich_gen:
                         # Batch into the flusher — never bump per URL: every
                         # observable write re-renders the whole tree.
                         self._pending_enrichments[url] = data
                         self._render_dirty = True
 
                         # Warm the on-device avatar cache in the background once
-                        # per found profile (never on the render path).
-                        avatar_url = (
-                            data.get("image") or data.get("avatar") or data.get("photo")
-                        )
-                        if (
-                            avatar_url
-                            and isinstance(avatar_url, str)
-                            and avatar_url.startswith("http")
-                        ):
-                            from services.cache_service import (
-                                schedule_avatar_download,
+                        # per found profile (never on the render path). Bounded
+                        # like the email path — unbounded spawns stall the loop.
+                        if self._avatar_warmed < 50:
+                            avatar_url = (
+                                data.get("image")
+                                or data.get("avatar")
+                                or data.get("photo")
                             )
+                            if (
+                                avatar_url
+                                and isinstance(avatar_url, str)
+                                and avatar_url.startswith("http")
+                            ):
+                                from services.cache_service import (
+                                    schedule_avatar_download,
+                                )
 
-                            asyncio.create_task(schedule_avatar_download(avatar_url))
+                                spawn(schedule_avatar_download(avatar_url))
+                                self._avatar_warmed += 1
                 except Exception as exc:
                     logger.warning("Streaming enrichment error for %s: %s", url, exc)
 
@@ -724,6 +845,12 @@ class AppController:
             or (self._enrich_queue and not self._enrich_queue.empty())
             or pending_tasks
         ):
+            if gen != self._enrich_gen:
+                # Superseded by a newer search — stop draining; children
+                # self-quiesce via the generation check above.
+                for t in pending_tasks:
+                    t.cancel()
+                return
             # Clean up completed tasks
             done = {t for t in pending_tasks if t.done()}
             pending_tasks.difference_update(done)
@@ -731,7 +858,7 @@ class AppController:
             if self._enrich_queue and not self._enrich_queue.empty():
                 try:
                     url = self._enrich_queue.get_nowait()
-                    t = asyncio.create_task(_enrich_single(url))
+                    t = spawn(_enrich_single(url))
                     pending_tasks.add(t)
                 except Exception:
                     pass
@@ -739,7 +866,7 @@ class AppController:
                 await asyncio.sleep(0.1)
 
         # Final wait for in-flight tasks when scan completes
-        if pending_tasks:
+        if pending_tasks and gen == self._enrich_gen:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
 
     def _progress_from_thread(self, progress) -> None:
@@ -770,9 +897,13 @@ class AppController:
                 self._render_dirty = True
 
         if delay > 0.001:
-            self._main_loop.call_later(
-                delay,
-                lambda: asyncio.run_coroutine_threadsafe(_flush(), self._main_loop),
+            # call_later is NOT thread-safe — this bridge runs on the worker
+            # thread, so schedule through call_soon_threadsafe.
+            self._main_loop.call_soon_threadsafe(
+                lambda: self._main_loop.call_later(
+                    delay,
+                    lambda: asyncio.run_coroutine_threadsafe(_flush(), self._main_loop),
+                )
             )
         else:
             try:
@@ -809,10 +940,21 @@ class AppController:
             if getattr(progress, "email", None) != state.current_username:
                 logger.debug("Dropping stale email progress tick — superseded scan")
                 return
+        elif (state.current_username or "").strip() and (
+            getattr(progress, "username", "") or ""
+        ).strip().lower() != (state.current_username or "").strip().lower():
+            # Identity check mirroring the email branch: a superseded scan's
+            # late ticks must never clobber the current search, even when both
+            # targets remain in the mutated search_targets list. Skipped when
+            # no identity is set (cached reattach writes progress directly).
+            logger.debug("Dropping stale username progress tick — superseded scan")
+            return
         elif (
             state.search_targets
             and state.is_searching
-            and getattr(progress, "username", None) not in state.search_targets
+            # Snapshot: the worker thread appends secondaries to this same
+            # list object; never iterate it live (see sherlock_service).
+            and getattr(progress, "username", None) not in list(state.search_targets)
         ):
             logger.debug("Dropping stale username progress tick — superseded scan")
             return
@@ -830,6 +972,22 @@ class AppController:
                 if url and url not in self._enriched_seen:
                     self._enriched_seen.add(url)
                     self._enrich_queue.put_nowait(url)
+
+    def _cancel_task_threadsafe(self, task: asyncio.Task | None) -> None:
+        """Cancel a task from any thread (sync UI callbacks may run off-loop)."""
+        if task is None or task.done():
+            return
+        try:
+            loop = self._main_loop
+            if loop is not None and asyncio.get_running_loop() is not loop:
+                loop.call_soon_threadsafe(task.cancel)
+                return
+        except RuntimeError:
+            pass
+        try:
+            task.cancel()
+        except Exception:
+            pass
 
     def cancel_search(self) -> None:
         """Cancel a running search (sync — called from UI)."""
@@ -867,11 +1025,8 @@ class AppController:
                 self._controller_methods.show_results()
             return
 
-        # NEW SEARCH = PRIORITY: kill any prior activity instantly,
-        # whether it is still running or just draining its tail.
-        self._kill_all_activity(f"email-search[{email_clean}]")
-        self._register_search_task()
-
+        # NOTE: the kill runs AFTER the gates — a doomed new search
+        # (offline/invalid) must never kill a healthy running scan.
         # Offline gate
         if not state.is_online:
             logger.info("Email search blocked: device offline")
@@ -884,6 +1039,9 @@ class AppController:
         if not validate_email(email_clean):
             self._show_snack(ERR_INVALID_EMAIL)
             return
+
+        self._kill_all_activity(f"email-search[{email_clean}]")
+        self._register_search_task()
 
         state.current_username = email_clean
         state.is_searching = True
@@ -927,6 +1085,7 @@ class AppController:
                 state.is_searching = False
                 email_progress.is_running = False
                 state.progress_version += 1
+                self._stop_render_flusher()
                 return
 
             state.is_searching = False
@@ -987,7 +1146,7 @@ class AppController:
                 media = (rrow.get("others") or {}).get("media") or {}
                 avatar = media.get("avatar")
                 if isinstance(avatar, str) and avatar.startswith("http"):
-                    asyncio.create_task(schedule_avatar_download(avatar))
+                    spawn(schedule_avatar_download(avatar))
                     warmed += 1
                 if warmed >= 50:
                     break
@@ -1006,6 +1165,7 @@ class AppController:
             # (silent assign).
             await self._apply_progress(result)
             state.progress_version += 1
+            self._stop_render_flusher()
         except asyncio.CancelledError:
             logger.info("WATCHDOG: email search %r killed mid-flight", email)
             raise
@@ -1013,6 +1173,7 @@ class AppController:
             state.is_searching = False
             email_progress.is_running = False
             state.progress_version += 1
+            self._stop_render_flusher()
             logger.warning("Email search rejected: %s", ve)
             self._show_snack(str(ve))
         except Exception as e:
@@ -1038,6 +1199,7 @@ class AppController:
                 else ERR_GENERIC
             )
             self._show_snack(msg, duration=10000)
+            self._stop_render_flusher()
 
     def cancel_email_search(self) -> None:
         """Cancel a running email search (sync — called from UI)."""
@@ -1087,11 +1249,16 @@ class AppController:
         if not snapshot:
             return False
 
+        query_norm = query.strip().lower()
+        current_norm = (state.current_username or "").strip().lower()
+        if state.is_searching and current_norm == query_norm:
+            # Same-target live scan: re-attach, do NOT clobber with a stale
+            # snapshot (mirrors the start_search smart re-attach).
+            if self._controller_methods and self._controller_methods.show_results:
+                self._controller_methods.show_results()
+            return True
         # Cancel any active scan if opening a different target
-        if (
-            state.is_searching
-            and state.current_username.strip().lower() != query.strip().lower()
-        ):
+        if state.is_searching:
             self._kill_all_activity(f"open-cached-result[{query}]")
 
         if mode == MODE_USERNAME:
@@ -1164,38 +1331,65 @@ class AppController:
             }
             state.search_mode = MODE_USERNAME
             state.search_progress = progress
+            # Clear-first: update() alone would leak the previous target's
+            # enrichments (stale avatars) into this cached result.
+            state.enrichments.clear()
             if snapshot.get("enrichments"):
                 state.enrichments.update(snapshot["enrichments"])
         else:
-            all_email = snapshot.get("email_results", [])
-            found_count = len(
-                [r for r in all_email if r.get("exists") and not r.get("rateLimit")]
-            )
+            all_email = snapshot.get("email_results", []) or []
+            found_dicts = [
+                r for r in all_email if r.get("exists") and not r.get("rateLimit")
+            ]
+            not_found_dicts = [
+                r
+                for r in all_email
+                if not r.get("exists")
+                and not r.get("rateLimit")
+                and not r.get("unavailable")
+            ]
+            rate_limited_dicts = [
+                r for r in all_email if r.get("rateLimit") and not r.get("unavailable")
+            ]
+            unavailable_dicts = [r for r in all_email if r.get("unavailable")]
             state.email_results[:] = all_email
             state.email_results_address = query.strip()
             state.current_username = query.strip()
             state.search_mode = MODE_EMAIL
-            state.email_found_count = found_count
-            state.email_total_modules = snapshot.get("total", len(all_email) or 181)
+            state.email_found_count = len(found_dicts)
+            state.email_not_found_count = len(not_found_dicts)
+            state.email_rate_limited_count = len(rate_limited_dicts)
+            state.email_unavailable_count = len(unavailable_dicts)
+            state.email_total_modules = snapshot.get("total") or len(all_email)
+            # Username enrichments are URL-keyed profile data — meaningless
+            # for email rows. Clear so stale avatars can't leak in, and bump
+            # the generation so any draining worker self-quiesces.
+            state.enrichments.clear()
+            self._enrich_gen += 1
+            self._enriched_seen.clear()
+
+            def _to_email_result(r):
+                return EmailResult(
+                    name=r.get("name", ""),
+                    domain=r.get("domain", ""),
+                    method=r.get("method", ""),
+                    exists=r.get("exists"),
+                    rate_limit=r.get("rateLimit", False),
+                    frequent_rate_limit=r.get("frequent_rate_limit", False),
+                    unavailable=r.get("unavailable", False),
+                    email_recovery=r.get("emailrecovery"),
+                    phone_number=r.get("phoneNumber"),
+                    others=r.get("others"),
+                )
+
             state.search_progress = EmailSearchProgress(
                 email=query.strip(),
                 total_modules=state.email_total_modules,
                 checked_modules=state.email_total_modules,
-                found=[
-                    EmailResult(
-                        name=r.get("name", ""),
-                        domain=r.get("domain", ""),
-                        method=r.get("method", ""),
-                        exists=r.get("exists"),
-                        rate_limit=r.get("rateLimit", False),
-                        frequent_rate_limit=r.get("frequent_rate_limit", False),
-                        email_recovery=r.get("emailrecovery"),
-                        phone_number=r.get("phoneNumber"),
-                        others=r.get("others"),
-                    )
-                    for r in all_email
-                    if r.get("exists") and not r.get("rateLimit")
-                ],
+                found=[_to_email_result(r) for r in found_dicts],
+                not_found=[_to_email_result(r) for r in not_found_dicts],
+                rate_limited=[_to_email_result(r) for r in rate_limited_dicts],
+                unavailable=[_to_email_result(r) for r in unavailable_dicts],
                 is_running=False,
             )
 
@@ -1216,9 +1410,7 @@ class AppController:
             return
 
         def _schedule():
-            asyncio.ensure_future(
-                self._save_to_history(query, found, total, mode=MODE_USERNAME)
-            )
+            spawn(self._save_to_history(query, found, total, mode=MODE_USERNAME))
 
         try:
             loop.call_soon_threadsafe(_schedule)
@@ -1246,6 +1438,7 @@ class AppController:
                             "status": getattr(r, "status", "Claimed"),
                             "http_status": getattr(r, "http_status", ""),
                             "query_time": getattr(r, "query_time", None),
+                            "context": getattr(r, "context", None),
                             "tags": getattr(r, "tags", []),
                             "ids_data": getattr(r, "ids_data", None),
                             "error_type": getattr(r, "error_type", None),
@@ -1319,21 +1512,24 @@ class AppController:
                 "total": total,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M"),
             }
-            raw = await self.storage.get(STORAGE_HISTORY)
-            entries = json.loads(raw) if raw else []
-            # Upsert: a username scan saves when its PRIMARY pass completes
-            # (so Recent appears immediately) and again after the recursive
-            # tail with final counts — same query+mode replaces, no dupes.
-            if (
-                entries
-                and entries[-1].get("query") == entry["query"]
-                and entries[-1].get("mode") == entry["mode"]
-            ):
-                entries[-1] = entry
-            else:
-                entries.append(entry)
-            entries = entries[-50:]
-            await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
+            # The whole read-modify-write runs under the history lock so the
+            # primary-done bridge and the final save can't interleave.
+            async with self._history_lock:
+                raw = await self.storage.get(STORAGE_HISTORY)
+                entries = json.loads(raw) if raw else []
+                # Upsert: a username scan saves when its PRIMARY pass completes
+                # (so Recent appears immediately) and again after the recursive
+                # tail with final counts — same query+mode replaces, no dupes.
+                if (
+                    entries
+                    and entries[-1].get("query") == entry["query"]
+                    and entries[-1].get("mode") == entry["mode"]
+                ):
+                    entries[-1] = entry
+                else:
+                    entries.append(entry)
+                entries = entries[-50:]
+                await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
             # Observable mirror is newest-first (display order); the
             # stored list stays oldest-first. Loaders must reverse.
             if (
@@ -1412,7 +1608,7 @@ class AppController:
 
     def on_error(self, e) -> None:
         """Page-level error handler. Best-effort snackbar."""
-        logger.error("Page error: %s", e.data)
+        logger.error("Page error: %s", getattr(e, "data", e))
         self._show_snack(ERR_GENERIC)
 
     # --- Connectivity -------------------------------------------------
@@ -1432,7 +1628,10 @@ class AppController:
         """Native listener callback for device connectivity changes."""
         was_online = state.is_online
         try:
-            types = getattr(e, "connectivity", None) or [e.data]
+            types = getattr(e, "connectivity", None) or [getattr(e, "data", None)]
+            types = [t for t in types if t is not None]
+            if not types:
+                return
             state.is_online = ft.ConnectivityType.NONE not in types
         except Exception:
             return
@@ -1448,6 +1647,9 @@ class AppController:
         backgrounded and the connectivity listener may not fire for it."""
         if e.state not in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):
             return
+        # Re-lock history on resume from background — a real app-lock,
+        # not a one-time session gate.
+        state.history_unlocked = False
         if not self.connectivity:
             return
         try:
@@ -1490,7 +1692,8 @@ async def main(page: ft.Page) -> None:
         # (no suppression inside close_client).
         from services.http_client import close_client
 
-        await close_client()
+        with contextlib.suppress(Exception):
+            await close_client()
 
     page.on_close = _on_close
 

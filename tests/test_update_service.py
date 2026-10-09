@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import flet as ft
 
 from core.constants import APP_BUILD_NUMBER, APP_VERSION
+
+
+def _fake_client_for(mock_resp=None, side_effect=None):
+    """Stub for services.http_client.get_client (the definition site).
+
+    check_for_update calls get_client().get(url, timeout=...) — patching
+    httpx.AsyncClient here would hit real network.
+    """
+    fake_client = MagicMock()
+    if side_effect is not None:
+        fake_client.get = AsyncMock(side_effect=side_effect)
+    else:
+        fake_client.get = AsyncMock(return_value=mock_resp)
+    return fake_client
 
 
 class TestUpdateInfo:
@@ -67,7 +81,10 @@ class TestUpdateService:
         mock_resp.status_code = 200
         mock_resp.json.return_value = mock_data
 
-        with patch("httpx.AsyncClient.get", return_value=mock_resp):
+        with patch(
+            "services.http_client.get_client",
+            return_value=_fake_client_for(mock_resp),
+        ):
             result = asyncio.run(service.check_for_update())
 
         assert result is not None
@@ -91,7 +108,10 @@ class TestUpdateService:
         mock_resp.status_code = 200
         mock_resp.json.return_value = mock_data
 
-        with patch("httpx.AsyncClient.get", return_value=mock_resp):
+        with patch(
+            "services.http_client.get_client",
+            return_value=_fake_client_for(mock_resp),
+        ):
             result = asyncio.run(service.check_for_update())
 
         assert result is None
@@ -115,7 +135,10 @@ class TestUpdateService:
         mock_resp.status_code = 200
         mock_resp.json.return_value = mock_data
 
-        with patch("httpx.AsyncClient.get", return_value=mock_resp):
+        with patch(
+            "services.http_client.get_client",
+            return_value=_fake_client_for(mock_resp),
+        ):
             result = asyncio.run(service.check_for_update())
 
         assert result is not None
@@ -135,7 +158,10 @@ class TestUpdateService:
         mock_resp = MagicMock()
         mock_resp.status_code = 404
 
-        with patch("httpx.AsyncClient.get", return_value=mock_resp):
+        with patch(
+            "services.http_client.get_client",
+            return_value=_fake_client_for(mock_resp),
+        ):
             result = asyncio.run(service.check_for_update())
 
         assert result is None
@@ -146,7 +172,10 @@ class TestUpdateService:
 
         service = UpdateService()
 
-        with patch("httpx.AsyncClient.get", side_effect=Exception("Connection failed")):
+        with patch(
+            "services.http_client.get_client",
+            return_value=_fake_client_for(side_effect=Exception("Connection failed")),
+        ):
             result = asyncio.run(service.check_for_update())
 
         assert result is None

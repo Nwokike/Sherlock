@@ -6,11 +6,14 @@ closures + chrome sync via use_effect. Manages both appbar AND navigation_bar.
 
 import asyncio
 import logging
+import re
+import unicodedata
 
 import flet as ft
 from flet import Control
 
 from components.active_scan_banner import ActiveScanBanner
+from core.tasks import spawn
 from core.theme import AppColors
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -28,6 +31,29 @@ _TAB_ICONS = (
 def _should_show_onboarding(state) -> bool:
     """Mirror of the branch in AppShell — exported for tests."""
     return state.is_first_launch or not state.has_accepted_terms
+
+
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def _safe_filename(raw: object, max_len: int = 64) -> str:
+    """Slugify user input for the export save-dialog filename (stdlib only).
+
+    NFKD ascii-fold → lower → [^a-z0-9]+ → "-" → strip, with "scan"
+    fallback, Windows-reserved guard (CON/PRN/AUX/NUL/COM1-9/LPT1-9), and a
+    64-char cap on the slug portion.
+    """
+    text = unicodedata.normalize("NFKD", str(raw or ""))
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    text = text[:max_len].strip("-") or "scan"
+    if text.upper() in _WINDOWS_RESERVED:
+        text = f"{text}-file"
+    return text
 
 
 def _email_export_bytes(format_type: str, app_state) -> bytes | None:
@@ -82,9 +108,7 @@ def _email_export_bytes(format_type: str, app_state) -> bytes | None:
                     r.get("domain", ""),
                     _status_of(r),
                     others.get("message") or others.get("error") or "",
-                    json.dumps(extra, ensure_ascii=False, default=str)
-                    if extra
-                    else "",
+                    json.dumps(extra, ensure_ascii=False, default=str) if extra else "",
                 ]
             )
         return out.getvalue().encode("utf-8")
@@ -102,8 +126,7 @@ def _email_export_bytes(format_type: str, app_state) -> bytes | None:
         )
 
     lines = [f"Sherlock email OSINT — {addr}", ""] + [
-        f"{r.get('name', '?')} ({r.get('domain', '')}): {_status_of(r)}"
-        for r in rows
+        f"{r.get('name', '?')} ({r.get('domain', '')}): {_status_of(r)}" for r in rows
     ]
     return ("\n".join(lines) + "\n").encode("utf-8")
 
@@ -116,12 +139,15 @@ def _dashboard_scaffold(body: Control) -> Control:
 def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
     """Build the appropriate appbar for the current view/tab."""
     from core import tokens
+    from core.constants import SITES_TOTAL_FALLBACK
 
     if active_view == "results":
 
         def _copy_urls(e):
             try:
-                asyncio.create_task(ft.HapticFeedback().medium_impact())
+                from core.shared_services import shared_haptics
+
+                spawn(shared_haptics().medium_impact())
             except Exception:
                 pass
 
@@ -133,12 +159,18 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 from core.state import state as app_state
 
                 if not (app_state.search_progress and app_state.search_progress.found):
+                    show_snack(page, "Nothing to copy yet", bgcolor=AppColors.WARNING)
                     return
                 urls = [
                     r.url_user for r in app_state.search_progress.found if r.url_user
                 ]
+                if not urls:
+                    show_snack(page, "Nothing to copy yet", bgcolor=AppColors.WARNING)
+                    return
                 try:
-                    cb = ft.Clipboard()
+                    from core.shared_services import shared_clipboard
+
+                    cb = shared_clipboard(page)
                     await cb.set("\n".join(urls))
                     show_snack(
                         page,
@@ -151,35 +183,48 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         page, "Couldn't copy — try again.", bgcolor=AppColors.ERROR
                     )
 
-            asyncio.create_task(_copy())
+            spawn(_copy())
 
         def _share_urls(e):
             try:
-                asyncio.create_task(ft.HapticFeedback().light_impact())
+                from core.shared_services import shared_haptics
+
+                spawn(shared_haptics().light_impact())
             except Exception:
                 pass
 
             async def _share():
+                from flet import context
+
+                from core.notify import show_snack
                 from core.state import state as app_state
 
+                page = context.page
                 if not (app_state.search_progress and app_state.search_progress.found):
+                    show_snack(page, "Nothing to share yet", bgcolor=AppColors.WARNING)
                     return
                 urls = [
                     r.url_user for r in app_state.search_progress.found if r.url_user
                 ]
                 if not urls:
+                    show_snack(page, "Nothing to share yet", bgcolor=AppColors.WARNING)
                     return
                 share_text_content = "\n".join(urls[:20])
+                if len(urls) > 20:
+                    show_snack(
+                        page,
+                        f"Sharing first 20 of {len(urls)} URLs",
+                        bgcolor=AppColors.WARNING,
+                    )
                 try:
-                    # Service construction self-registers with the page —
-                    # appending to page.services is redundant and pins a
-                    # reference that defeats Flet's service GC.
-                    share_service = ft.Share()
+                    from core.shared_services import shared_share
+
+                    share_service = shared_share()
                     await share_service.share_text(share_text_content)
                 except Exception as ex:
                     logger.warning("Share failed: %s", ex)
 
-            asyncio.create_task(_share())
+            spawn(_share())
 
         def _on_export_click(format_type: str):
             """Full export dialog — Excel, CSV, or Text (original Sherlock behavior)."""
@@ -228,7 +273,8 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                                 not_found=list(progress.not_found),
                                 errors=list(progress.errors),
                                 enrichments=dict(app_state.enrichments or {}),
-                                total_sites=progress.total_sites or 5203,
+                                total_sites=progress.total_sites
+                                or SITES_TOTAL_FALLBACK,
                                 checked_sites=progress.checked_sites
                                 or len(progress.found),
                             )
@@ -267,38 +313,14 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                             )
 
                     elif format_type == "csv":
-                        import csv
-                        import io
+                        from services.report_service import generate_csv_report
 
-                        output = io.StringIO()
-                        writer = csv.writer(output)
-                        writer.writerow(
-                            [
-                                "username",
-                                "name",
-                                "url_main",
-                                "url_user",
-                                "exists",
-                                "http_status",
-                                "response_time_s",
-                            ]
+                        report_bytes = generate_csv_report(
+                            getattr(progress, "username", username),
+                            list(progress.found),
+                            list(progress.not_found),
+                            list(progress.errors),
                         )
-                        all_results = (
-                            progress.found + progress.not_found + progress.errors
-                        )
-                        for r in all_results:
-                            writer.writerow(
-                                [
-                                    progress.username,
-                                    r.site_name,
-                                    r.url_main,
-                                    r.url_user or r.url_main,
-                                    r.status,
-                                    r.http_status,
-                                    f"{r.query_time:.2f}" if r.query_time else "",
-                                ]
-                            )
-                        report_bytes = output.getvalue().encode("utf-8")
 
                     elif format_type == "json":
                         import json
@@ -364,7 +386,8 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                                 not_found=list(progress.not_found),
                                 errors=list(progress.errors),
                                 enrichments=dict(app_state.enrichments or {}),
-                                total_sites=progress.total_sites or 5203,
+                                total_sites=progress.total_sites
+                                or SITES_TOTAL_FALLBACK,
                                 checked_sites=progress.checked_sites
                                 or len(progress.found),
                             )
@@ -380,19 +403,19 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                                 report_bytes,
                             )
                     else:
-                        output = []
-                        for r in progress.found:
-                            if r.url_user:
-                                output.append(f"{r.url_user}\n")
-                        output.append(f"Total Detected : {len(progress.found)}\n")
-                        report_bytes = "".join(output).encode("utf-8")
+                        from services.report_service import generate_txt_report
+
+                        report_bytes = generate_txt_report(
+                            getattr(progress, "username", username),
+                            list(progress.found),
+                        )
 
                     ext = format_type.lower()
                     # Self-registers on construction; a page.services append
                     # would pin it against Flet's service GC.
                     file_picker = ft.FilePicker()
                     path = await file_picker.save_file(
-                        file_name=f"sherlock_{username}.{ext}",
+                        file_name=f"sherlock_{_safe_filename(username)}.{ext}",
                         allowed_extensions=[ext],
                         dialog_title=f"Save scan report as {format_type.upper()}",
                         src_bytes=report_bytes,
@@ -417,7 +440,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
                     show_snack(page, "Saved successfully!", bgcolor=AppColors.SUCCESS)
                 except Exception as ex:
-                    logger.exception("Export failed: %s", ex)
+                    logger.exception("Export failed")
                     from core.notify import show_snack
 
                     show_snack(
@@ -427,7 +450,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         duration=10000,
                     )
 
-            asyncio.create_task(_do_export())
+            spawn(_do_export())
 
         def _show_graph_analysis_dialog(progress, app_state):
             from flet import context
@@ -523,9 +546,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             hub_rows = [
                 ft.Row(
                     [
-                        ft.Icon(
-                            ft.Icons.HUB_ROUNDED, size=14, color=AppColors.PRIMARY
-                        ),
+                        ft.Icon(ft.Icons.HUB_ROUNDED, size=14, color=AppColors.PRIMARY),
                         ft.Text(
                             item["label"],
                             size=tokens.FONT_SM,
@@ -547,7 +568,9 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 import json
 
                 try:
-                    cb = ft.Clipboard()
+                    from core.shared_services import shared_clipboard
+
+                    cb = shared_clipboard(page)
                     if cy_data:
                         await cb.set(json.dumps(cy_data, indent=2))
                         from core.notify import show_snack
@@ -562,12 +585,13 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
             async def _copy_cypher():
                 try:
+                    from core.shared_services import shared_clipboard
                     from services.graph_service import export_cypher
 
                     text = export_cypher(G)
                     if not text:
                         raise RuntimeError("empty Cypher export")
-                    cb = ft.Clipboard()
+                    cb = shared_clipboard(page)
                     await cb.set(text)
                     from core.notify import show_snack
 
@@ -578,12 +602,15 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     logger.warning("Failed to copy Cypher: %s", exc)
                     from core.notify import show_snack
 
-                    show_snack(page, f"Cypher copy failed: {exc}", bgcolor=AppColors.ERROR)
+                    show_snack(
+                        page, f"Cypher copy failed: {exc}", bgcolor=AppColors.ERROR
+                    )
 
             async def _open_interactive_viewer():
                 try:
                     from pathlib import Path as _Path
 
+                    from core.shared_services import shared_url_launcher
                     from services.graph_service import export_pyvis_html
                     from services.storage_service import get_cache_dir
 
@@ -592,13 +619,15 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     )
                     if not saved:
                         raise RuntimeError("pyvis export unavailable")
-                    await ft.UrlLauncher().launch_url(saved.as_uri())
+                    await shared_url_launcher(page).launch_url(saved.as_uri())
                 except Exception as exc:
                     logger.warning("Interactive viewer failed: %s", exc)
                     from core.notify import show_snack
 
                     show_snack(
-                        page, f"Interactive viewer failed: {exc}", bgcolor=AppColors.ERROR
+                        page,
+                        f"Interactive viewer failed: {exc}",
+                        bgcolor=AppColors.ERROR,
                     )
 
             communities = analytics.get("communities", [])
@@ -710,23 +739,23 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     ft.TextButton(
                         "Copy Cytoscape JSON",
                         icon=ft.Icons.COPY_ROUNDED,
-                        on_click=lambda e: asyncio.create_task(_copy_cytoscape()),
+                        on_click=lambda e: spawn(_copy_cytoscape()),
                     ),
                     ft.TextButton(
                         "Cypher",
                         icon=ft.Icons.DATA_OBJECT_ROUNDED,
-                        on_click=lambda e: asyncio.create_task(_copy_cypher()),
+                        on_click=lambda e: spawn(_copy_cypher()),
                         tooltip="Copy Neo4j Cypher to clipboard",
                     ),
                     ft.TextButton(
                         "Viewer",
                         icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
-                        on_click=lambda e: asyncio.create_task(
-                            _open_interactive_viewer()
-                        ),
+                        on_click=lambda e: spawn(_open_interactive_viewer()),
                         tooltip="Open interactive graph in your browser",
                     ),
-                    ft.TextButton("Close", on_click=lambda e: controller.close_dialog()),
+                    ft.TextButton(
+                        "Close", on_click=lambda e: controller.close_dialog()
+                    ),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
             )
@@ -737,128 +766,122 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
             if not app_state.search_progress:
                 return
+            dialog_is_email = (
+                getattr(app_state.search_progress, "email", None) is not None
+            )
+
+            def _export_tile(
+                title: str,
+                subtitle: str,
+                icon,
+                format_type: str,
+            ) -> ft.ListTile:
+                return ft.ListTile(
+                    title=ft.Text(
+                        title,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    subtitle=ft.Text(subtitle),
+                    leading=ft.Icon(
+                        icon,
+                        color=AppColors.PRIMARY,
+                    ),
+                    on_click=lambda e, f=format_type: (
+                        controller.close_dialog(),
+                        _on_export_click(f),
+                    ),
+                )
+
+            tiles = [
+                ft.ListTile(
+                    title=ft.Text(
+                        "Identity Network Analysis",
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    subtitle=ft.Text("Graph clustering & hub analytics"),
+                    leading=ft.Icon(
+                        ft.Icons.ACCOUNT_TREE_ROUNDED,
+                        color=AppColors.PRIMARY,
+                    ),
+                    on_click=lambda e: (
+                        controller.close_dialog(),
+                        _show_graph_analysis_dialog(
+                            app_state.search_progress, app_state
+                        ),
+                    ),
+                ),
+            ]
+            if dialog_is_email:
+                tiles.append(
+                    ft.ListTile(
+                        title=ft.Text(
+                            "Email formats: CSV, JSON, Markdown, HTML, TXT",
+                            weight=ft.FontWeight.W_600,
+                        ),
+                        subtitle=ft.Text("PDF/XMind dossiers are username-mode only"),
+                    )
+                )
+            else:
+                tiles.append(
+                    _export_tile(
+                        "PDF Intelligence Dossier (.pdf)",
+                        "Gold-branded printable report",
+                        ft.Icons.PICTURE_AS_PDF_ROUNDED,
+                        "pdf",
+                    )
+                )
+                tiles.append(
+                    _export_tile(
+                        "XMind Mind Map (.xmind)",
+                        "Visual intelligence case file",
+                        ft.Icons.HUB_ROUNDED,
+                        "xmind",
+                    )
+                )
+            tiles.append(
+                _export_tile(
+                    "CSV Spreadsheet (.csv)",
+                    "Spreadsheet compatible data",
+                    ft.Icons.TABLE_CHART_ROUNDED,
+                    "csv",
+                )
+            )
+            tiles.append(
+                _export_tile(
+                    "JSON Data (.json)",
+                    "Structured JSON export",
+                    ft.Icons.DATA_OBJECT_ROUNDED,
+                    "json",
+                )
+            )
+            tiles.append(
+                _export_tile(
+                    "Markdown Report (.md)",
+                    "Shareable plain-text dossier",
+                    ft.Icons.DESCRIPTION_ROUNDED,
+                    "md",
+                )
+            )
+            tiles.append(
+                _export_tile(
+                    "HTML Dossier (.html)",
+                    "Offline single-file report",
+                    ft.Icons.HTML_ROUNDED,
+                    "html",
+                )
+            )
+            tiles.append(
+                _export_tile(
+                    "Plain Text List (.txt)",
+                    "Discovered URLs only",
+                    ft.Icons.ARTICLE_ROUNDED,
+                    "txt",
+                )
+            )
             sheet = ft.BottomSheet(
                 content=ft.Container(
                     content=ft.ListView(
-                        controls=[
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "Identity Network Analysis",
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                subtitle=ft.Text("Graph clustering & hub analytics"),
-                                leading=ft.Icon(
-                                    ft.Icons.ACCOUNT_TREE_ROUNDED,
-                                    color=AppColors.PRIMARY,
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _show_graph_analysis_dialog(
-                                        app_state.search_progress, app_state
-                                    ),
-                                ),
-                            ),
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "PDF Intelligence Dossier (.pdf)",
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                subtitle=ft.Text("Gold-branded printable report"),
-                                leading=ft.Icon(
-                                    ft.Icons.PICTURE_AS_PDF_ROUNDED,
-                                    color=AppColors.PRIMARY,
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _on_export_click("pdf"),
-                                ),
-                            ),
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "XMind Mind Map (.xmind)",
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                subtitle=ft.Text("Visual intelligence case file"),
-                                leading=ft.Icon(
-                                    ft.Icons.HUB_ROUNDED, color=AppColors.PRIMARY
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _on_export_click("xmind"),
-                                ),
-                            ),
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "CSV Spreadsheet (.csv)", weight=ft.FontWeight.W_600
-                                ),
-                                subtitle=ft.Text("Spreadsheet compatible data"),
-                                leading=ft.Icon(
-                                    ft.Icons.TABLE_CHART_ROUNDED,
-                                    color=AppColors.PRIMARY,
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _on_export_click("csv"),
-                                ),
-                            ),
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "JSON Data (.json)", weight=ft.FontWeight.W_600
-                                ),
-                                subtitle=ft.Text("Structured JSON export"),
-                                leading=ft.Icon(
-                                    ft.Icons.DATA_OBJECT_ROUNDED,
-                                    color=AppColors.PRIMARY,
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _on_export_click("json"),
-                                ),
-                            ),
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "Markdown Report (.md)",
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                subtitle=ft.Text("Shareable plain-text dossier"),
-                                leading=ft.Icon(
-                                    ft.Icons.DESCRIPTION_ROUNDED,
-                                    color=AppColors.PRIMARY,
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _on_export_click("md"),
-                                ),
-                            ),
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "HTML Dossier (.html)",
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                subtitle=ft.Text("Offline single-file report"),
-                                leading=ft.Icon(
-                                    ft.Icons.HTML_ROUNDED,
-                                    color=AppColors.PRIMARY,
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _on_export_click("html"),
-                                ),
-                            ),
-                            ft.ListTile(
-                                title=ft.Text(
-                                    "Plain Text List (.txt)", weight=ft.FontWeight.W_600
-                                ),
-                                subtitle=ft.Text("Discovered URLs only"),
-                                leading=ft.Icon(
-                                    ft.Icons.ARTICLE_ROUNDED, color=AppColors.PRIMARY
-                                ),
-                                on_click=lambda e: (
-                                    controller.close_dialog(),
-                                    _on_export_click("txt"),
-                                ),
-                            ),
-                        ],
+                        controls=tiles,
                         spacing=0,
                         padding=ft.Padding(0, 0, 0, tokens.SPACE_MD),
                     ),
@@ -872,6 +895,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _restart(e):
             from core.constants import MODE_EMAIL as _MODE_EMAIL
+            from core.constants import MODE_USERNAME as _MODE_USERNAME
             from core.state import state as app_state
 
             # Owner fix: the retry button must respect the MODE of the
@@ -879,20 +903,25 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             # (previously it only ever started a username scan, so the
             # email retry silently did nothing or restarted an old query).
             prog = app_state.search_progress
-            is_email = app_state.search_mode == _MODE_EMAIL or getattr(
-                prog, "email", None
-                ) is not None
+            is_email = (
+                app_state.search_mode == _MODE_EMAIL
+                or getattr(prog, "email", None) is not None
+            )
             if is_email:
-                target = app_state.email_results_address or getattr(
-                    prog, "email", None
-                )
+                target = app_state.email_results_address or getattr(prog, "email", None)
                 if target:
-                    asyncio.create_task(controller.start_email_search(target))
+                    # Set searching state synchronously so ResultsScreen never
+                    # renders an empty frame before the engine's first tick.
+                    app_state.current_username = target.strip()
+                    app_state.is_searching = True
+                    app_state.search_mode = _MODE_EMAIL
+                    spawn(controller.start_email_search(target))
                     controller.show_results()
             elif app_state.last_results_username:
-                asyncio.create_task(
-                    controller.start_search(app_state.last_results_username)
-                )
+                app_state.current_username = app_state.last_results_username.strip()
+                app_state.is_searching = True
+                app_state.search_mode = _MODE_USERNAME
+                spawn(controller.start_search(app_state.last_results_username))
                 controller.show_results()
 
         from core.constants import MODE_EMAIL
@@ -916,13 +945,18 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         tooltip="Share URLs",
                         on_click=_share_urls,
                     ),
-                    ft.IconButton(
-                        icon=ft.Icons.DOWNLOAD_ROUNDED,
-                        tooltip="Export",
-                        on_click=_show_export_dialog,
-                    ),
                 ]
             )
+        # Export is available in both modes: the export sheet filters its
+        # tiles by mode (email exports CSV/JSON/TXT/Markdown/HTML; PDF/XMind
+        # dossiers are username-mode and show guidance instead).
+        _actions.append(
+            ft.IconButton(
+                icon=ft.Icons.DOWNLOAD_ROUNDED,
+                tooltip="Export",
+                on_click=_show_export_dialog,
+            )
+        )
         _actions.append(
             ft.IconButton(
                 icon=ft.Icons.REFRESH_ROUNDED,
@@ -933,6 +967,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
         return ft.AppBar(
             leading=ft.IconButton(
                 icon=ft.Icons.ARROW_BACK_ROUNDED,
+                tooltip="Back",
                 on_click=lambda e: controller.go_home(),
             ),
             title=ft.Text(
@@ -949,6 +984,7 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
         return ft.AppBar(
             leading=ft.IconButton(
                 icon=ft.Icons.ARROW_BACK_ROUNDED,
+                tooltip="Back",
                 on_click=lambda e: controller.back(),
             ),
             title=ft.Text(
@@ -1004,14 +1040,17 @@ def AppShell() -> Control:
             set_active_tab(0)
 
     controller.handle_system_back = _system_back
-    controller.show_settings = lambda: (
-        set_active_view("dashboard"),
-        set_active_tab(2),
-    )
-    controller.show_history = lambda: (
-        set_active_view("dashboard"),
-        set_active_tab(1),
-    )
+
+    def _show_settings():
+        set_active_view("dashboard")
+        set_active_tab(2)
+
+    def _show_history():
+        set_active_view("dashboard")
+        set_active_tab(1)
+
+    controller.show_settings = _show_settings
+    controller.show_history = _show_history
 
     from flet import context
 
@@ -1081,6 +1120,7 @@ def AppShell() -> Control:
             active_tab,
             active_view,
             state.has_accepted_terms,
+            state.is_first_launch,
             state.theme_mode,
         ],
     )
@@ -1103,17 +1143,20 @@ def AppShell() -> Control:
         active_banner = None
         if state.is_searching and state.current_username:
             from core.constants import MODE_EMAIL, MODE_USERNAME
+            from services.email_service import EmailSearchProgress
 
             prog = state.search_progress
-            checked = getattr(prog, "checked_sites", 0) or getattr(
-                prog, "checked_modules", 0
-            )
-            total = getattr(prog, "total_sites", 0) or getattr(prog, "total_modules", 0)
-            active_scan_mode = (
-                MODE_EMAIL
-                if (prog and hasattr(prog, "checked_modules"))
-                else MODE_USERNAME
-            )
+            # Explicit per-mode counters — the old `a or b` fallback leaked
+            # the other mode's counter when the live one was legitimately 0
+            # at scan start.
+            if isinstance(prog, EmailSearchProgress):
+                checked = prog.checked_modules
+                total = prog.total_modules
+                active_scan_mode = MODE_EMAIL
+            else:
+                checked = getattr(prog, "checked_sites", 0) or 0
+                total = getattr(prog, "total_sites", 0) or 0
+                active_scan_mode = MODE_USERNAME
 
             def _view_active_scan(mode=active_scan_mode):
                 state.search_mode = mode

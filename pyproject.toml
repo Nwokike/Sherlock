@@ -1,6 +1,6 @@
 [project]
 name = "sherlock"
-version = "2.2.0"
+version = "2.3.0"
 description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -17,7 +17,11 @@ dependencies = [
 [tool.flet]
 org = "ng.kiri"
 product = "Sherlock"
-build_number = 12
+description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
+company = "Kiri"
+copyright = "Copyright © 2026 Kiri. All rights reserved."
+build_number = 13
+icon = "src/assets/icon.png"
 
 [tool.flet.app]
 path = "src"
@@ -31,6 +35,9 @@ startup_message = "Initializing Sherlock..."
 [tool.flet.android]
 bundle_id = "ng.kiri.sherlock"
 target_arch = ["arm64-v8a", "x86_64"]
+# Branded adaptive-icon backdrop (app dark tone) — also drives the
+# Android 12+ splash background behind the launcher icon.
+adaptive_icon_background = "#1c1a14"
 
 [tool.flet.android.manifest_application]
 usesCleartextTraffic = "true"
@@ -56,6 +63,9 @@ key_alias = "upload"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 addopts = ["-ra", "-q"]
+# Hard per-test ceiling: a hang (network stub regression, worker deadlock)
+# fails that test instead of stalling CI for the default 0 (no limit).
+timeout = 60
 strict_markers = true
 strict_config = true
 markers = [
@@ -78,8 +88,29 @@ dev = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "UP", "B", "Q", "C4", "PERF", "ERA", "I", "T20", "DTZ"]
-ignore = ["E501"]
+select = [
+    "E", "F", "W", "UP", "B", "Q", "C4", "PERF", "ERA", "I", "T20", "DTZ", "RUF",
+    "S", "TRY", "BLE", "EM", "A", "SIM", "RET", "RSE",
+]
+ignore = [
+    "E501",
+    # Message-string style: this app raises with inline human messages on
+    # purpose (owner rule: visible, specific errors); classes-per-message
+    # would be churn with no behavioral gain.
+    "EM101", "EM102", "EM103", "TRY003",
+    # Wide-except + log (BLE001) and silent best-effort no-ops (S110,
+    # SIM105) are the documented owner pattern across services/UI: cleanup,
+    # restore, and persist paths intentionally pass on failure while every
+    # load-bearing path logs. Narrowing 200+ sites is regression churn.
+    "BLE001", "S110", "SIM105",
+    # TRY300/TRY301 are style-only reshuffles inside engine hot paths
+    # (email/sherlock) — churn risk with zero behavioral gain.
+    "TRY300", "TRY301",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert by design (pytest); S105 is a storage-KEY name, not a secret.
+"tests/**" = ["S101"]
 
 # Build-time pruning: serious_python cleanup globs — the ONLY channel that
 # shrinks artifacts (post-build rm cannot; deps are re-packaged from

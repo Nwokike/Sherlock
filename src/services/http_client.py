@@ -16,19 +16,33 @@ import logging
 
 import httpx
 
+from core.tasks import spawn
+
 logger = logging.getLogger(__name__)
 
 _client: httpx.AsyncClient | None = None
 _client_proxy: str | None = None
+_client_retries: int | None = None
+
+
+def _get_retries() -> int:
+    from core.state import state
+
+    try:
+        retries = int(getattr(state, "retries", 0) or 0)
+    except TypeError, ValueError:
+        retries = 0
+    return max(0, min(3, retries))
 
 
 def get_client() -> httpx.AsyncClient:
-    """Return the shared client, rebuilding it when state.proxy_url changes."""
-    global _client, _client_proxy
+    """Return the shared client, rebuilding when proxy/retries change."""
+    global _client, _client_proxy, _client_retries
     from core.state import state
 
     proxy = (getattr(state, "proxy_url", "") or "").strip() or None
-    if _client is not None and proxy == _client_proxy:
+    retries = _get_retries()
+    if _client is not None and proxy == _client_proxy and retries == _client_retries:
         return _client
     if _client is not None:
         _drain(_client)
@@ -37,20 +51,50 @@ def get_client() -> httpx.AsyncClient:
         max_keepalive_connections=10,
         keepalive_expiry=30.0,
     )
-    _client = httpx.AsyncClient(limits=limits, proxy=proxy, follow_redirects=True)
+    timeout = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
+    # NOTE: do NOT wire as transport=+proxy= combo — when transport= is
+    # given, httpx builds proxy mounts internally WITHOUT retries, so the
+    # proxy leg would silently lose retry behavior. Both legs explicit.
+    direct = httpx.AsyncHTTPTransport(retries=retries, limits=limits, http2=True)
+    if proxy:
+        proxy_transport = httpx.AsyncHTTPTransport(
+            retries=retries, limits=limits, http2=True, proxy=proxy
+        )
+        _client = httpx.AsyncClient(
+            transport=direct,
+            mounts={"all://": proxy_transport},
+            timeout=timeout,
+            http2=True,
+            follow_redirects=True,
+        )
+    else:
+        _client = httpx.AsyncClient(
+            transport=direct,
+            timeout=timeout,
+            http2=True,
+            limits=limits,
+            follow_redirects=True,
+        )
     _client_proxy = proxy
-    logger.info("Shared httpx client (re)built (proxy=%s)", proxy or "direct")
+    _client_retries = retries
+    logger.info(
+        "Shared httpx client (re)built (proxy=%s, retries=%d)",
+        proxy or "direct",
+        retries,
+    )
     return _client
 
 
 def _drain(old: httpx.AsyncClient) -> None:
     """Close a replaced client without blocking; visible on failure."""
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
-        logger.warning("Shared httpx client swapped with no running loop — relying on GC")
+        logger.warning(
+            "Shared httpx client swapped with no running loop — relying on GC"
+        )
         return
-    loop.create_task(_aclose(old))
+    spawn(_aclose(old), name="httpx-aclose")
 
 
 async def _aclose(client: httpx.AsyncClient) -> None:
@@ -62,7 +106,7 @@ async def _aclose(client: httpx.AsyncClient) -> None:
 
 async def close_client() -> None:
     """Close the pooled client (wired into page on_close)."""
-    global _client, _client_proxy
-    old, _client, _client_proxy = _client, None, None
+    global _client, _client_proxy, _client_retries
+    old, _client, _client_proxy, _client_retries = _client, None, None, None
     if old is not None:
         await _aclose(old)

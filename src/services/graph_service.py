@@ -8,6 +8,8 @@ full names, bio links, and cross-platform handles).
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -34,12 +36,19 @@ COLOR_NAME = "#BD93F9"  # Purple
 COLOR_LINK = "#8BE9FD"  # Cyan
 
 
+def _field(row, key: str, default=""):
+    """Mapping-or-attribute read: dict rows and SiteResult objects alike."""
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
 def build_identity_graph(
     username: str,
     found_accounts: list,
     enrichments: dict | None = None,
     email_results: list | None = None,
-) -> Any | None:
+) -> nx.Graph | None:
     """Build a NetworkX Graph modeling the identity network for a target.
 
     Connects:
@@ -69,11 +78,12 @@ def build_identity_graph(
         title=f"Target Query: {username}",
     )
 
-    # 2. Add found accounts
-    for r in found_accounts:
-        site = getattr(r, "site_name", "Unknown")
-        acc_id = f"acc:{site}"
-        url = getattr(r, "url_user", None) or getattr(r, "url_main", "") or ""
+    # 2. Add found accounts (index i keeps ids unique when names collide
+    # or repeat across rows; ids are lower-normalized, labels keep case).
+    for i, r in enumerate(found_accounts):
+        site = str(_field(r, "site_name", "Unknown")).strip() or "Unknown"
+        url = _field(r, "url_user", None) or _field(r, "url_main", "") or ""
+        acc_id = f"acc:{site.lower()}:{i}" if not url else f"acc:{url.lower()}"
 
         G.add_node(
             acc_id,
@@ -89,13 +99,15 @@ def build_identity_graph(
 
         # 3. Add enrichment evidences per account
         data = enrichments.get(url) or {}
-        if not data and hasattr(r, "ids_data") and isinstance(r.ids_data, dict):
-            data = r.ids_data
+        if not data:
+            ids_data = _field(r, "ids_data", None)
+            if isinstance(ids_data, dict):
+                data = ids_data
 
-        # Shared full name
+        # Shared full name (original case preserved — no .title() mangling).
         name_val = data.get("fullname") or data.get("name")
         if name_val and isinstance(name_val, str) and len(name_val.strip()) > 2:
-            clean_name = name_val.strip().title()
+            clean_name = name_val.strip()
             name_node_id = f"name:{clean_name.lower()}"
             if not G.has_node(name_node_id):
                 G.add_node(
@@ -158,41 +170,74 @@ def build_identity_graph(
                     color=COLOR_EMAIL,
                     title=f"Registered Email on {domain}",
                 )
-                G.add_edge(
-                    target_id, email_acc_id, weight=0.9, reason="registered_email"
-                )
+            G.add_edge(target_id, email_acc_id, weight=0.9, reason="registered_email")
 
             rec_email = er.get("emailrecovery")
-            if rec_email and "@" in rec_email:
-                rec_node_id = f"rec_email:{rec_email.strip().lower()}"
+            if isinstance(rec_email, str) and "@" in rec_email:
+                rec_clean = rec_email.strip().lower()
+                rec_node_id = f"rec_email:{rec_clean}"
                 if not G.has_node(rec_node_id):
                     G.add_node(
                         rec_node_id,
                         kind="evidence_email",
-                        label=rec_email,
+                        label=rec_clean,
                         size=10,
                         color=COLOR_EMAIL,
-                        title=f"Recovery Email Hint: {rec_email}",
+                        title=f"Recovery Email Hint: {rec_clean}",
                     )
                 G.add_edge(
                     email_acc_id, rec_node_id, weight=0.85, reason="recovery_hint"
                 )
 
             phone = er.get("phoneNumber")
-            if phone:
-                phone_node_id = f"phone:{phone.strip()}"
-                if not G.has_node(phone_node_id):
-                    G.add_node(
+            if isinstance(phone, (str, int)):
+                phone_s = str(phone).strip()
+                if phone_s:
+                    phone_node_id = f"phone:{phone_s}"
+                    if not G.has_node(phone_node_id):
+                        G.add_node(
+                            phone_node_id,
+                            kind="evidence_phone",
+                            label=phone_s,
+                            size=10,
+                            color=COLOR_PHONE,
+                            title=f"Recovery Phone Hint: {phone_s}",
+                        )
+                    G.add_edge(
+                        email_acc_id,
                         phone_node_id,
-                        kind="evidence_phone",
-                        label=phone,
-                        size=10,
-                        color=COLOR_PHONE,
-                        title=f"Recovery Phone Hint: {phone}",
+                        weight=0.85,
+                        reason="recovery_phone",
                     )
-                G.add_edge(
-                    email_acc_id, phone_node_id, weight=0.85, reason="recovery_phone"
-                )
+
+            # holehe-v2 Result.extra identity facts (gravatar verified
+            # accounts / websites / links, github login, etsy bio, ...).
+            others = er.get("others")
+            extra = (
+                others.get("extra")
+                if isinstance(others, dict) and isinstance(others.get("extra"), dict)
+                else {}
+            )
+            for _key in ("verified_accounts", "websites", "links"):
+                _vals = extra.get(_key)
+                if not isinstance(_vals, (list, tuple)):
+                    _vals = [_vals] if _vals else []
+                for _v in list(_vals)[:5]:
+                    _s = str(_v).strip()
+                    if not _s:
+                        continue
+                    _nid = f"link:{_s.lower()}"
+                    if not G.has_node(_nid):
+                        G.add_node(
+                            _nid,
+                            kind="evidence_link",
+                            label=_s[:30],
+                            url=_s,
+                            size=10,
+                            color=COLOR_LINK,
+                            title=f"Linked Identity ({_key}): {_s}",
+                        )
+                    G.add_edge(email_acc_id, _nid, weight=0.7, reason="linked_identity")
 
     logger.info(
         "Identity graph built for %s: %d nodes, %d edges",
@@ -228,13 +273,17 @@ def export_node_link_json(G: Any) -> dict | None:
 def get_graph_analytics(G: Any) -> dict:
     """Compute centralities, clusters, and graph metrics."""
     if not _NETWORKX_AVAILABLE or G is None or len(G.nodes) == 0:
+        # Same schema as the success path below — consumers may index
+        # component_sizes / top_canonical_nodes unconditionally.
         return {
             "nodes": 0,
             "edges": 0,
             "components": 0,
+            "component_sizes": [],
             "density": 0.0,
             "communities": [],
             "bridge_nodes": [],
+            "top_canonical_nodes": [],
         }
 
     components = list(nx.connected_components(G))
@@ -252,7 +301,12 @@ def get_graph_analytics(G: Any) -> dict:
             (
                 {
                     "size": len(c),
-                    "members": [G.nodes[m].get("label", m) for m in list(c)[:5]],
+                    "members": [
+                        G.nodes[m].get("label", m)
+                        for m in sorted(
+                            c, key=lambda m: str(G.nodes[m].get("label", m))
+                        )[:5]
+                    ],
                 }
                 for c in comms
             ),
@@ -263,6 +317,8 @@ def get_graph_analytics(G: Any) -> dict:
         logger.debug("Community detection skipped: %s", exc)
 
     bridges = []
+    top_pagerank = []
+    top_closeness = []
     if len(G.nodes) <= 150:
         try:
             bc = nx.betweenness_centrality(G)
@@ -277,6 +333,30 @@ def get_graph_analytics(G: Any) -> dict:
             )[:3]
         except Exception as exc:
             logger.debug("Betweenness skipped: %s", exc)
+        try:
+            pr = nx.pagerank(G)
+            top_pagerank = sorted(
+                (
+                    {"id": n, "label": G.nodes[n].get("label", n), "score": round(s, 3)}
+                    for n, s in pr.items()
+                ),
+                key=lambda x: x["score"],
+                reverse=True,
+            )[:5]
+        except Exception as exc:
+            logger.debug("PageRank skipped: %s", exc)
+        try:
+            cc = nx.closeness_centrality(G)
+            top_closeness = sorted(
+                (
+                    {"id": n, "label": G.nodes[n].get("label", n), "score": round(s, 3)}
+                    for n, s in cc.items()
+                ),
+                key=lambda x: x["score"],
+                reverse=True,
+            )[:5]
+        except Exception as exc:
+            logger.debug("Closeness skipped: %s", exc)
 
     return {
         "nodes": len(G.nodes),
@@ -294,7 +374,26 @@ def get_graph_analytics(G: Any) -> dict:
             }
             for node_id, score in top_canonical
         ],
+        "top_pagerank": top_pagerank,
+        "top_closeness": top_closeness,
     }
+
+
+def export_graphml_gexf(
+    G: Any, out_path: str | Path, fmt: str = "graphml"
+) -> Path | None:
+    """Write Gephi-compatible GraphML/GEXF (all attrs are scalars — safe)."""
+    if not _NETWORKX_AVAILABLE or G is None:
+        return None
+    try:
+        writer = nx.write_graphml if fmt == "graphml" else nx.write_gexf
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        writer(G, out)
+        return out
+    except Exception as exc:
+        logger.warning("GraphML/GEXF export failed: %s", exc)
+        return None
 
 
 def export_cypher(G: Any) -> str:
@@ -303,11 +402,17 @@ def export_cypher(G: Any) -> str:
         return ""
 
     def esc(value) -> str:
-        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+        return (
+            str(value)
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        )
 
     lines = ["// Sherlock identity graph — Cypher export"]
     for n, d in G.nodes(data=True):
-        kind = str(d.get("kind", "node"))
+        kind = re.sub(r"[^A-Za-z0-9_]", "_", str(d.get("kind", "node"))) or "node"
         label = esc(d.get("label", n))
         lines.append(f"MERGE (`{kind}`:Entity {{id: '{esc(n)}', label: '{label}'}});")
     for u, v, d in G.edges(data=True):
@@ -316,13 +421,13 @@ def export_cypher(G: Any) -> str:
             f"MATCH (a {{id: '{esc(u)}'}}), (b {{id: '{esc(v)}'}}) "
             f"MERGE (a)-[:LINK {{reason: '{reason}'}}]->(b);"
         )
-    logger.info(
-        "Cypher export: %d nodes, %d edges", len(G.nodes), len(G.edges)
-    )
+    logger.info("Cypher export: %d nodes, %d edges", len(G.nodes), len(G.edges))
     return "\n".join(lines) + "\n"
 
 
-def export_pyvis_html(G: Any, out_path: Any) -> Any:
+def export_pyvis_html(
+    G: Any, out_path: str | Path, *, physics: bool = True, kinds: set[str] | None = None
+) -> Path | None:
     """Write a self-contained interactive graph (P4-6, pyvis inline CDN).
 
     Returns the written Path, or None (logged) on any failure — the caller
@@ -344,8 +449,12 @@ def export_pyvis_html(G: Any, out_path: Any) -> Any:
             notebook=False,
             directed=False,
             cdn_resources="in_line",
+            select_menu=True,
+            filter_menu=True,
         )
         for n, d in G.nodes(data=True):
+            if kinds is not None and d.get("kind") not in kinds:
+                continue
             net.add_node(
                 n,
                 label=str(d.get("label", n)),
@@ -354,9 +463,17 @@ def export_pyvis_html(G: Any, out_path: Any) -> Any:
                 size=int(d.get("size", 12)),
             )
         for u, v, d in G.edges(data=True):
-            net.add_edge(u, v, title=str(d.get("reason", "linked")))
-        from pathlib import Path
-
+            reason = str(d.get("reason", "linked"))
+            net.add_edge(
+                u,
+                v,
+                title=reason,
+                color="#8C6B1A" if "member" in reason else "#D4AF37",
+            )
+        try:
+            net.toggle_physics(physics)
+        except Exception:
+            pass
         out = Path(out_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(net.generate_html(notebook=False), encoding="utf-8")

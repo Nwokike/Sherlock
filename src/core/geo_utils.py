@@ -17,7 +17,10 @@ try:
 except ImportError as err:
     logger.warning("pycountry library not available: %s", err)
     pycountry = None
-    remove_accents = lambda s: s  # noqa: E731
+
+    def remove_accents(s):
+        return s
+
 
 # L2 disk cache (cache/geo_cache.json via cache_service) layered under the
 # in-memory lru_cache: a cold launch restores past lookups instead of
@@ -80,15 +83,17 @@ def _record_disk_hit(key: str, c: CountryInfo | None) -> None:
     import time as _time
 
     now = _time.monotonic()
-    if _GEO_FLUSH_DIRTY[0] or (now - _LAST_GEO_FLUSH[0]) < _GEO_FLUSH_INTERVAL:
+    if (now - _LAST_GEO_FLUSH[0]) < _GEO_FLUSH_INTERVAL:
         _GEO_FLUSH_DIRTY[0] = True  # memory holds it; disk flushes later
         return
     _LAST_GEO_FLUSH[0] = now
+    _GEO_FLUSH_DIRTY[0] = False
     try:
         from services.cache_service import save_geo_cache
 
         save_geo_cache(store)
     except Exception:
+        _GEO_FLUSH_DIRTY[0] = True
         pass
 
 

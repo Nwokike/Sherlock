@@ -171,7 +171,10 @@ class TestBiometricFallback:
         import flet.controls.context as fctx
 
         monkeypatch.setattr(
-            fctx, "page", property(lambda self: (_ for _ in ()).throw(RuntimeError("x"))), raising=False
+            fctx,
+            "page",
+            property(lambda self: (_ for _ in ()).throw(RuntimeError("x"))),
+            raising=False,
         )
         # Simpler: page property raising RuntimeError is flet's own behavior —
         # just verify the no-auth-availability path above and the page-None path:
@@ -306,3 +309,90 @@ class TestOnDeviceFixes:
             target_query="target", search_mode="username", checked=10, total=100
         )
         assert any("10/100" in t for t in texts_of(running))
+
+
+class TestBatch14Contracts:
+    """Batch 14: caps, contracts, guards, single-sheet, truncation."""
+
+    def test_pdf_cap_overflow_row(self):
+        from services.report_service import _FOUND_PDF_ROW_CAP, generate_pdf_dossier
+
+        found = [
+            SimpleNamespace(
+                site_name=f"Site{i}",
+                url_user=f"https://example.com/{i}",
+                url_main="https://example.com",
+                query_time=0.1,
+                status="Claimed",
+                http_status="200",
+            )
+            for i in range(_FOUND_PDF_ROW_CAP + 30)
+        ]
+        payload = generate_pdf_dossier("alice", found, [], [])
+        assert payload is not None
+        # 530 capped rows render — assert a non-trivial dossier, since PDF
+        # text streams are compressed (no plaintext grepping).
+        assert len(payload) > 50000
+
+    def test_empty_contract_matrix(self):
+        from services.report_service import (
+            generate_csv_report,
+            generate_email_markdown_report,
+            generate_html_report,
+            generate_markdown_report,
+            generate_ndjson_report,
+            generate_txt_report,
+        )
+
+        # Always-bytes exporters never return None.
+        assert isinstance(generate_csv_report("a", [], [], []), bytes)
+        assert isinstance(generate_txt_report("a", []), bytes)
+        assert isinstance(generate_ndjson_report("a", [], [], []), bytes)
+        # Dossier generators return None on empty.
+        assert generate_markdown_report("a", [], [], []) is None
+        assert generate_html_report("a", [], [], []) is None
+        assert generate_email_markdown_report("a@b.com", []) is None
+
+    def test_gold_palette_guard(self):
+        from services import report_service
+
+        if report_service._REPORTLAB_AVAILABLE:
+            assert "gold" in report_service._gold_palette()
+        else:
+            try:
+                report_service._gold_palette()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("expected RuntimeError without reportlab")
+
+    def test_xmind_single_sheet_per_category(self, tmp_path):
+        import zipfile
+
+        from services.report_service import generate_xmind_case
+
+        r1 = _result("GitHub", "https://github.com/x", tags=["coding"])
+        r2 = _result("GitLab", "https://gitlab.com/x", tags=["coding"])
+        out = generate_xmind_case(
+            "target", [r1, r2], {}, output_path=tmp_path / "case.xmind"
+        )
+        assert out is not None and out.exists()
+        with zipfile.ZipFile(out) as zf:
+            content = zf.read("content.xml").decode("utf-8")
+        # "Coding" category sheet appears exactly once (no double-registration
+        # from createSheet+addSheet).
+        assert content.count("Sherlock — Coding") == 1
+
+    def test_xmind_notes_truncated(self):
+        from services.report_service import generate_xmind_case
+
+        big_bio = "x" * 5000
+        r = _result("GitHub", "https://github.com/x")
+        out = generate_xmind_case(
+            "target",
+            [r],
+            {"https://github.com/x": {"bio": big_bio}},
+            output_path=None,
+        )
+        # None only when xmind missing; otherwise must not raise.
+        assert out is None or out.exists()

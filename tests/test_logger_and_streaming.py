@@ -65,6 +65,12 @@ def test_streaming_enrichment_queues_and_processes():
         # Start worker task
         worker_task = asyncio.create_task(controller._drain_enrich_queue())
 
+        # Simulate the live scan this progress belongs to: identity must
+        # match or _apply_progress drops the tick as superseded. Saved and
+        # restored so suite order cannot pollute other tests.
+        prev_username = state.current_username
+        state.current_username = "testuser"
+
         progress = SearchProgress(
             username="testuser",
             found=[
@@ -96,6 +102,7 @@ def test_streaming_enrichment_queues_and_processes():
         # Verify enrichment was applied to state
         assert "https://github.com/testuser" in state.enrichments
         enrichment_data = state.enrichments["https://github.com/testuser"]
+        state.current_username = prev_username
         assert enrichment_data.get("name") == "Enriched User"
 
     asyncio.run(run_test())

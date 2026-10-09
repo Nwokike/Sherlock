@@ -89,6 +89,9 @@ class AppState:
     # bypass via biometric_service, so nobody gets stranded).
     biometric_lock: bool = True
     history_unlocked: bool = False
+    # Strict biometrics: no device-PIN fallback (opt-in; default allows it
+    # so users without enrolled biometrics aren't stranded).
+    biometric_strict: bool = False
     selected_sites: list[str] | None = None
     use_local_db: bool = True
     custom_manifest: str = ""
@@ -97,6 +100,9 @@ class AppState:
     # Recursive search is the headline feature — on unless the user opts out
     # (stored values are still honored on load).
     recursive_search: bool = True
+    # Scan separator variants of the handle (john.doe -> john_doe, ...) —
+    # multiplies scan length; deliberate opt-in.
+    permute_enabled: bool = False
     extract_info: bool = True
     max_connections: int = 50
     retries: int = 0
@@ -173,7 +179,9 @@ class AppState:
         self.progress_version = 0
         self.search_error = None
         self.active_username = ""
-        self.is_online = True
+        # NOTE: is_online is owned solely by the connectivity handlers in
+        # main.py — resetting a search (e.g. cancel while offline) must not
+        # flip the device online and hide the offline banner.
         self.search_targets.clear()
         self.target_results.clear()
         self.email_results.clear()

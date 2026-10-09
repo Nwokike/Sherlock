@@ -6,7 +6,6 @@ feature cards, how it works, and trust banner.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import flet as ft
@@ -29,12 +28,15 @@ from core.constants import (
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_RECURSIVE_SEARCH,
+    STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_MODE,
     STORAGE_TIMEOUT,
     STORAGE_USE_CURL_CFFI,
+    test_id,
 )
 from core.notify import show_snack
+from core.tasks import spawn
 from core.theme import (
     AppColors,
     AppStyles,
@@ -155,7 +157,15 @@ def _category_chip(
     )
 
 
-@ft.memo
+def _is_email_like(query: str, mode: str) -> bool:
+    """Icon/mode helper for rows that may predate strict validation."""
+    if mode == MODE_EMAIL:
+        return True
+    from services.email_service import validate_email
+
+    return validate_email((query or "").strip())
+
+
 def _history_row(
     query: str,
     found: int,
@@ -164,8 +174,12 @@ def _history_row(
     mode: str = MODE_USERNAME,
     on_click=None,
 ) -> ft.Container:
-    """Compact recent search row with mode icon."""
-    is_email = mode == MODE_EMAIL or "@" in query
+    """Compact recent search row with mode icon.
+
+    NOTE: deliberately not @ft.memo — callers pass a fresh on_click
+    lambda per row, so memoization could never hit.
+    """
+    is_email = _is_email_like(query, mode)
     icon = (
         ft.Icons.ALTERNATE_EMAIL_ROUNDED if is_email else ft.Icons.PERSON_SEARCH_ROUNDED
     )
@@ -239,14 +253,14 @@ def _feature_card(
                             weight=ft.FontWeight.W_600,
                             font_family="Outfit",
                             max_lines=1,
-                            overflow="ellipsis",
+                            overflow=ft.TextOverflow.ELLIPSIS,
                         ),
                         ft.Text(
                             desc,
                             size=tokens.FONT_XS,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                             max_lines=2,
-                            overflow="ellipsis",
+                            overflow=ft.TextOverflow.ELLIPSIS,
                             font_family="Outfit",
                         ),
                     ],
@@ -255,13 +269,12 @@ def _feature_card(
                 ),
             ],
             spacing=tokens.SPACE_MD,
-            vertical_alignment="center",
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         padding=12,
         border_radius=12,
         bgcolor=adaptive_glass_bg(),
         border=ft.Border.all(1, adaptive_glass_border()),
-        ink=True,
     )
 
 
@@ -309,6 +322,31 @@ def _step_row(number: str, title: str, desc: str) -> ft.Row:
     )
 
 
+def _normalize_pasted_query(value: str) -> str:
+    """Extract the handle from a pasted profile URL.
+
+    "https://github.com/torvalds" -> "torvalds" (last non-empty path
+    segment, URL-decoded). Plain usernames pass through untouched; URLs
+    without a path come back as-is and fail the shape guard with the
+    normal message.
+    """
+    v = (value or "").strip().lstrip("@")
+    if not v:
+        return v
+    if "://" not in v and not v.lower().startswith("www."):
+        return v
+    try:
+        from urllib.parse import unquote, urlparse
+
+        parts = urlparse(v if "://" in v else f"https://{v}")
+        segments = [seg for seg in parts.path.split("/") if seg]
+        if segments:
+            return unquote(segments[-1])[:64]
+    except ValueError:
+        pass
+    return v
+
+
 # ── Main screen ───────────────────────────────────────────────────────
 
 
@@ -319,7 +357,6 @@ def HomeScreen(banner: Control | None = None) -> Control:
     controller = ft.use_context(ControllerMethodsCtx)
 
     search_query, set_search_query = ft.use_state("")
-    theme_version, set_theme_version = ft.use_state(0)
 
     # Mode is driven by observable state so it persists across screens
     is_email_mode = state.search_mode == MODE_EMAIL
@@ -337,8 +374,13 @@ def HomeScreen(banner: Control | None = None) -> Control:
 
     # ── Mode switcher ──
 
-    def _switch_mode(new_mode: str):
+    def _switch_mode(new_mode: str, keep_query: bool = False):
         state.search_mode = new_mode
+        # Manual chip taps clear a stale query (a username fails email
+        # validation and vice versa). Auto-switches keep it — the input
+        # is what triggered the switch, so it already matches.
+        if not keep_query:
+            set_search_query("")
 
         async def _save():
             try:
@@ -349,9 +391,25 @@ def HomeScreen(banner: Control | None = None) -> Control:
             except Exception:
                 pass
 
-        asyncio.create_task(_save())
+        spawn(_save())
 
     # ── Quick Setting Toggles ──
+
+    def _persist(key: str, value: str, after=None):
+        """Single persist helper for all home toggles (fire-and-forget)."""
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(key, value)
+                if after is not None:
+                    await after()
+            except Exception as exc:
+                logger.debug("Home persist failed for %s: %s", key, exc)
+
+        spawn(_save())
 
     def _cycle_scan_depth(e):
         depths = ["all", "1000", "500"]
@@ -361,19 +419,11 @@ def HomeScreen(banner: Control | None = None) -> Control:
         )
         state.scan_depth = next_val
         state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(STORAGE_SCAN_DEPTH, next_val)
-                if controller.refresh_sites:
-                    await controller.refresh_sites()
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
+        _persist(
+            STORAGE_SCAN_DEPTH,
+            next_val,
+            after=controller.refresh_sites if controller.refresh_sites else None,
+        )
 
     def _cycle_timeout(e):
         timeouts = [5, 10, 15, 30, 60]
@@ -385,72 +435,45 @@ def HomeScreen(banner: Control | None = None) -> Control:
         )
         state.timeout = next_val
         state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(STORAGE_TIMEOUT, str(next_val))
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
+        _persist(STORAGE_TIMEOUT, str(next_val))
 
     def _toggle_recursive_search(e):
         new_val = not getattr(state, "recursive_search", False)
         state.recursive_search = new_val
         state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(
-                    STORAGE_RECURSIVE_SEARCH, "true" if new_val else "false"
-                )
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
+        _persist(STORAGE_RECURSIVE_SEARCH, "true" if new_val else "false")
 
     def _toggle_nsfw(e):
         new_val = not state.nsfw_enabled
         state.nsfw_enabled = new_val
         state.safe_search = not new_val
         state.progress_version += 1
+        # Persist BOTH keys (single-writer contract with Settings:
+        # nsfw_enabled is engine truth, safe_search its mirror).
 
-        async def _save():
+        async def _save_both():
             try:
                 from services.storage_service import StorageService
 
                 storage = StorageService(_get_page())
                 await storage.set(STORAGE_NSFW, "true" if new_val else "false")
+                await storage.set(STORAGE_SAFE_SEARCH, "false" if new_val else "true")
                 if controller.refresh_sites:
                     await controller.refresh_sites()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Home persist failed: %s", exc)
 
-        asyncio.create_task(_save())
+        spawn(_save_both())
 
     def _toggle_exclusions(e):
         new_val = not state.ignore_exclusions
         state.ignore_exclusions = new_val
         state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(STORAGE_EXCLUSIONS, "true" if new_val else "false")
-                if controller.refresh_sites:
-                    await controller.refresh_sites()
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
+        _persist(
+            STORAGE_EXCLUSIONS,
+            "true" if new_val else "false",
+            after=controller.refresh_sites if controller.refresh_sites else None,
+        )
 
     def _cycle_email_timeout(e):
         timeouts = [5, 10, 15, 30]
@@ -462,78 +485,86 @@ def HomeScreen(banner: Control | None = None) -> Control:
         )
         state.email_timeout = next_val
         state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(STORAGE_EMAIL_TIMEOUT, str(next_val))
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
+        _persist(STORAGE_EMAIL_TIMEOUT, str(next_val))
 
     def _toggle_password_recovery(e):
         new_val = not state.no_password_recovery
         state.no_password_recovery = new_val
         state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(
-                    STORAGE_NO_PASSWORD_RECOVERY, "true" if new_val else "false"
-                )
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
+        _persist(STORAGE_NO_PASSWORD_RECOVERY, "true" if new_val else "false")
 
     def _toggle_use_curl_cffi(e):
         new_val = not getattr(state, "use_curl_cffi", True)
         state.use_curl_cffi = new_val
         state.progress_version += 1
-
-        async def _save():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService(_get_page())
-                await storage.set(STORAGE_USE_CURL_CFFI, "true" if new_val else "false")
-            except Exception:
-                pass
-
-        asyncio.create_task(_save())
+        _persist(STORAGE_USE_CURL_CFFI, "true" if new_val else "false")
 
     # ── Search logic ──
 
-    def _on_search(e=None):
-        query = search_query.strip() if search_query else ""
+    def _is_email_query(value: str) -> bool:
+        """Single email detector for icons, modes, suggestions, gates."""
+        from services.email_service import validate_email
+
+        return validate_email((value or "").strip())
+
+    def _check_username_shape(query: str) -> str | None:
+        """Error reason when a username can't start a scan, else None."""
+        import re
+
+        collapsed = re.sub(r"\s+", "", query)
+        if len(collapsed) > 64:
+            return "Usernames are capped at 64 characters"
+        if not re.fullmatch(r"[A-Za-z0-9_.\-]+", collapsed):
+            return "Usernames may only contain letters, numbers, _ . -"
+        return None
+
+    def _submit_guards(query: str, mode: str) -> bool:
+        """Shared offline/scan-busy/empty/email gates for all submit paths.
+
+        Returns True when the search may proceed.
+        """
+        page = _get_page()
         if not query:
+            if page:
+                show_snack(page, "Enter a username or email", bgcolor=AppColors.ERROR)
+            return False
+        # Offline gate on client submit
+        if not state.is_online:
+            if page:
+                show_snack(page, MSG_SEARCH_OFFLINE, bgcolor=AppColors.ERROR)
+            return False
+        # A scan is already running — starting another would launch a
+        # parallel engine pass that clobbers the live one.
+        if state.is_searching:
+            if page:
+                show_snack(page, "A scan is already running", bgcolor=AppColors.ERROR)
+            return False
+        if mode == MODE_EMAIL:
+            if not _is_email_query(query):
+                if page:
+                    show_snack(page, ERR_INVALID_EMAIL, bgcolor=AppColors.ERROR)
+                return False
+        else:
+            shape_err = _check_username_shape(query)
+            if shape_err is not None:
+                if page:
+                    show_snack(page, shape_err, bgcolor=AppColors.ERROR)
+                return False
+        return True
+
+    def _on_search(e=None):
+        query = _normalize_pasted_query(search_query.strip() if search_query else "")
+        if query != (search_query or "").strip():
+            set_search_query(query)  # show what is actually searched
+        if not _submit_guards(query, state.search_mode):
             return
 
         try:
-            asyncio.create_task(ft.HapticFeedback().medium_impact())
+            from core.shared_services import shared_haptics
+
+            spawn(shared_haptics().medium_impact())
         except Exception:
             pass
-
-        # Offline gate on client submit
-        if not state.is_online:
-            page = _get_page()
-            if page:
-                show_snack(page, MSG_SEARCH_OFFLINE, bgcolor=AppColors.ERROR)
-            return
-
-        from services.email_service import validate_email
-
-        if state.search_mode == MODE_EMAIL and not validate_email(query):
-            page = _get_page()
-            if page:
-                show_snack(page, ERR_INVALID_EMAIL, bgcolor=AppColors.ERROR)
-            return
 
         target_mode = state.search_mode
 
@@ -544,28 +575,31 @@ def HomeScreen(banner: Control | None = None) -> Control:
             else:
                 await controller.start_search(query)
 
-        asyncio.create_task(_run())
+        spawn(_run())
 
     def _on_input_change(e):
         value = e.control.value or ""
         set_search_query(value)
+        # Live auto-switch (not paste-only): typing an email in username
+        # mode flips immediately — the check is a cheap sync regex.
+        _maybe_switch_mode(value)
 
     def _maybe_switch_mode(value: str):
-        """Auto-switch mode on paste: email -> Email mode, plain username -> Username mode."""
-        from services.email_service import validate_email
-
+        """Auto-switch mode on paste or typing: email <-> username."""
         val = value.strip()
         if not val:
             return
-        if state.search_mode == MODE_USERNAME and validate_email(val):
-            _switch_mode(MODE_EMAIL)
+        if state.search_mode == MODE_USERNAME and _is_email_query(val):
+            _switch_mode(MODE_EMAIL, keep_query=True)
         elif state.search_mode == MODE_EMAIL and "@" not in val:
-            _switch_mode(MODE_USERNAME)
+            _switch_mode(MODE_USERNAME, keep_query=True)
 
     def _on_paste(e):
         async def _paste():
             try:
-                clipboard = ft.Clipboard()
+                from core.shared_services import shared_clipboard
+
+                clipboard = shared_clipboard()
                 text = await clipboard.get()
                 if text:
                     value = text.strip()
@@ -574,15 +608,17 @@ def HomeScreen(banner: Control | None = None) -> Control:
             except Exception:
                 pass
 
-        asyncio.create_task(_paste())
+        spawn(_paste())
 
     def _on_history_click(entry: dict):
         query = entry.get("query") or entry.get("username") or ""
-        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
-        if not query:
+        mode = entry.get("mode") or (
+            MODE_EMAIL if _is_email_query(query) else MODE_USERNAME
+        )
+        if not _submit_guards(query, mode):
             return
         if state.search_mode != mode:
-            _switch_mode(mode)
+            _switch_mode(mode, keep_query=True)
         set_search_query(query)
 
         # 1. Try instant load from cache
@@ -598,7 +634,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
             else:
                 await controller.start_search(query)
 
-        asyncio.create_task(_run_hist())
+        spawn(_run_hist())
 
     # ── Load history on mount ──
     def _load_history():
@@ -618,7 +654,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
             except Exception:
                 pass
 
-        asyncio.create_task(_fetch())
+        spawn(_fetch())
 
     ft.use_effect(_load_history, [])
 
@@ -873,6 +909,19 @@ def HomeScreen(banner: Control | None = None) -> Control:
                         color=AppColors.PRIMARY,
                     ),
                     bar_trailing=[
+                        *(
+                            [
+                                ft.IconButton(
+                                    icon=ft.Icons.CLEAR_ROUNDED,
+                                    icon_size=18,
+                                    icon_color=ft.Colors.ON_SURFACE_VARIANT,
+                                    tooltip="Clear",
+                                    on_click=lambda e: set_search_query(""),
+                                )
+                            ]
+                            if search_query
+                            else []
+                        ),
                         ft.IconButton(
                             icon=ft.Icons.PASTE_ROUNDED,
                             icon_size=18,
@@ -904,14 +953,15 @@ def HomeScreen(banner: Control | None = None) -> Control:
                             AppColors.DARK_TEXT if is_dark else AppColors.LIGHT_TEXT,
                         ),
                     ),
-                    full_screen=True,
+                    full_screen=False,
+                    key=test_id("home-search-bar"),
                     on_submit=lambda e: _on_search(),
                     on_change=_on_input_change,
                     autofocus=False,
                     controls=[
                         ft.ListTile(
                             title=ft.Text(
-                                e.get("query", ""),
+                                item.get("query", ""),
                                 size=tokens.FONT_SM,
                                 font_family="Outfit",
                             ),
@@ -922,21 +972,26 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                 size=16,
                                 color=AppColors.PRIMARY,
                             ),
-                            on_click=lambda _, entry=e: _on_history_click(entry),
+                            on_click=lambda _, entry=item: _on_history_click(entry),
                         )
-                        for e in (
+                        for item in (
                             [
-                                item
-                                for item in (state.history or [])
+                                h
+                                for h in (state.history or [])
                                 if (
-                                    item.get("mode")
+                                    h.get("mode")
                                     or (
                                         MODE_EMAIL
-                                        if "@" in item.get("query", "")
+                                        if _is_email_query(h.get("query", ""))
                                         else MODE_USERNAME
                                     )
                                 )
                                 == state.search_mode
+                                and (
+                                    not search_query.strip()
+                                    or search_query.strip().lower()
+                                    in (h.get("query", "") or "").lower()
+                                )
                             ][:5]
                         )
                     ],
@@ -965,7 +1020,9 @@ def HomeScreen(banner: Control | None = None) -> Control:
                     wrap=False,
                     scroll=ft.ScrollMode.AUTO,
                     spacing=tokens.SPACE_SM,
-                    alignment=ft.MainAxisAlignment.CENTER,
+                    # START, not CENTER: a centered scrollable row clips
+                    # the leading chips on narrow screens.
+                    alignment=ft.MainAxisAlignment.START,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
@@ -998,7 +1055,9 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                 spacing=8,
                                 tight=True,
                             ),
+                            key=test_id("home-search-button"),
                             on_click=lambda _: _on_search(),
+                            disabled=state.is_searching,
                             style=ft.ButtonStyle(
                                 shape=ft.RoundedRectangleBorder(
                                     radius=tokens.RADIUS_FULL,

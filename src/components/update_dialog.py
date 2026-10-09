@@ -34,7 +34,9 @@ logger = logging.getLogger("UpdateDialog")
 def _launch(page: ft.Page, url: str):
     async def _run():
         try:
-            await ft.UrlLauncher().launch_url(url)
+            from core.shared_services import shared_url_launcher
+
+            await shared_url_launcher(page).launch_url(url)
         except Exception as ex:
             logger.debug("Update URL launch failed: %s", ex)
             from core.notify import show_snack
@@ -50,8 +52,8 @@ def _pop_and_launch(page: ft.Page, url: str):
     (no live page context — see core.actions.open_url_action)."""
     try:
         page.pop_dialog()
-    except Exception:
-        logger.exception("Failed to close update dialog")
+    except Exception as exc:
+        logger.debug("Update dialog already closed: %s", exc)
     _launch(page, url)
 
 
@@ -62,8 +64,8 @@ async def check_from_dialog(page: ft.Page):
 
     try:
         page.pop_dialog()
-    except Exception:
-        logger.exception("Suppressed exception")
+    except Exception as exc:
+        logger.debug("Re-check with no dialog open: %s", exc)
     result = await UpdateService().check_for_update()
     if result:
         state.update_available = True

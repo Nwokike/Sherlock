@@ -9,7 +9,7 @@ from flet import Control
 from core import tokens
 
 
-def StatCard(label: str, value: str, color) -> Control:
+def StatCard(label: str, value: str | int | float, color: str) -> Control:
     val_str = str(value)
     # Scale font so 3- and 4-digit numbers (e.g. 509, 5203) fit without wrapping on small phones
     num_size = (

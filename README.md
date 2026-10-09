@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="src/assets/icon.png" alt="Sherlock" width="320" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="src/assets/icon_white.png">
+    <source media="(prefers-color-scheme: light)" srcset="src/assets/icon.png">
+    <img src="src/assets/icon.png" alt="Sherlock" width="320" />
+  </picture>
 </p>
 
 <p align="center">

@@ -32,6 +32,14 @@ name = "flet"
 [tool.flet.boot_screen.flet]
 startup_message = "Initializing Sherlock..."
 
+# Merged into the generated Flutter pubspec by flet build (upstream drift
+# guard): jni_flutter 1.0.3+ asserts package:jni ^1.1.0 at compile time, but
+# an older transitive pin keeps 1.0.0 on the resolve path — which broke every
+# platform build with "Constant evaluation error" (jni_flutter-1.0.4+1
+# vs jni-1.0.0). Pin jni here; nothing in the app depends on the old ABI.
+[tool.flet.flutter.pubspec.dependency_overrides]
+jni = "1.1.0"
+
 [tool.flet.android]
 bundle_id = "ng.kiri.sherlock"
 target_arch = ["arm64-v8a", "x86_64"]

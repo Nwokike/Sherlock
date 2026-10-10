@@ -1,9 +1,9 @@
 {
-  "build_number": 13,
-  "version": "2.3.0",
+  "build_number": 12,
+  "version": "2.2.0",
   "type": "update",
-  "title": "Sherlock 2.3 is here!",
-  "release_notes": "### 🔄 Username Permutations & Smart Input\n• One toggle scans separator variants: john.doe → john_doe, john-doe, johndoe\n• Paste any profile URL into the search bar — the handle is extracted for you\n• Pasted values auto-extract into the engine's multi-target list\n\n### 🗓 Profile Dates Humanized\n• Join/created dates render as 'Apr 2019' on cards, dossiers, and reports\n• ISO, unix, and platform-specific formats parsed; unreadable values stay raw\n• HTML dossier gains a custom Jinja date filter alongside the core CSS base\n\n### 📧 Email Scans, More Honest\n• Single backoff retry through rate limits — landed results are barely slower\n• Cancels now always mark the scan: fixed a wakeup-window race that lost 5 of 6\n• Gravatar fallback avatars for every email address in the dossier\n\n### ⚙ Settings & Build\n• New permutations toggle under Scan Parameters\n• Database stats header: networks and tag counts at a glance on the sites screen\n• Full ruff rule suite (S/TRY/BLE/EM/A/SIM/RET/RSE) with documented exceptions\n• Ad subsystem, banners, and consent flow completely untouched per owner rule",
+  "title": "Sherlock 2.2 is here!",
+  "release_notes": "### 🌐 5,200+ Platforms OSINT (Maigret 0.6.6)\n• Engine database doubled: 5,200+ enabled networks, 5,897 total\n• Recursive search on by default: expands from discovered IDs and profile links\n• Category presets: Social, Coding, Gaming, Forums, Crypto, Dating + country chips\n• Scope to Filter: one tap scans exactly what the category chip shows\n\n### 📧 Email OSINT Rebuilt (holehe-v2)\n• 181 validators with modern fingerprints and per-platform timeouts\n• Honest results: rate limits separated from dead endpoints and rotted parsers\n• Rich cards: avatars, bios, logins, and SSO types from every check\n• New exports: CSV, JSON, TXT, Markdown, HTML\n\n### 🛡 Results You Can Trust\n• Bot-protection badges with the exact cause and a fix suggestion\n• Typed failures: bot wall, rate limit, connection failure shown apart\n• Keyword badges on claimed accounts matching your terms\n• Evidence Communities in Identity Network Analysis\n\n### 📄 Dossiers, Graph & Safety\n• PDF with tappable links, page numbers, avatar cards; XMind evidence links\n• Interactive graph viewer + Neo4j Cypher export\n• Biometric History lock, in-app back button, offline startup font\n• ~21MB smaller install, 229 tests, CI gates on every build",
   "mandatory": false,
   "github_url": "https://github.com/Nwokike/Sherlock/releases/latest",
   "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.sherlock"

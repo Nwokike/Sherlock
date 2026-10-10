@@ -26,6 +26,30 @@ I verified this two ways, not from memory:
 So the answer to "what is the best way to do notifications in Flet" is:
 **there isn't one in core, and every third-party route adds a dependency.**
 
+### Correction (owner's finding): `Permission.NOTIFICATION` does exist
+
+The docs sidebar lists `PermissionHandler` / `Permission` / `PermissionStatus`
+with `NOTIFICATION` — "Permission for pushing notifications". Two things to
+know before treating that as a notification API:
+
+1. **It is not in core flet.** `hasattr(flet, "PermissionHandler")` is `False`
+   on the installed 1.0.4. It ships as the separate `flet-permission-handler`
+   package (also 1.0.4), which is why the docs sidebar shows it alongside
+   `Geolocator`, `SecureStorage`, `Map`, `Charts`, `Audio`, `Camera`, `Video`,
+   `WebView`, `CodeEditor` — those are all extension packages documented with
+   core, not core itself.
+2. **It only requests, it does not post.** The package's full public surface
+   is `get_status(permission)`, `request(permission)`,
+   `open_app_settings()` — there is no `notify()`/`post()`/`schedule()`
+   anywhere in it. Asking for `Permission.NOTIFICATION` buys you the
+   Android 13+ `POST_NOTIFICATIONS` grant and nothing to spend it on.
+
+So it moves the needle only in combination with something that can actually
+post: `flet-android-notifications`, or `flet-geolocator`'s
+`ForegroundNotificationConfiguration` (which is the one official object that
+renders a real notification — but only as the foreground-service notice for
+background location tracking).
+
 ---
 
 ## What you CAN do today — zero new dependencies

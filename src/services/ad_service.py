@@ -66,7 +66,10 @@ class AdService:
         self._consent_manager = None
         self._privacy_options_required: bool | None = None
         self._is_shutting_down: bool = False
-        self._last_interstitial_at: float = 0.0
+        # None = never shown this session. NOT 0.0: time.monotonic() can be
+        # small right after boot (container runners), and a 0.0 sentinel would
+        # then read as "shown 0.7s ago" and block every show.
+        self._last_interstitial_at: float | None = None
 
     @property
     def interstitial_id(self) -> str:
@@ -217,16 +220,17 @@ class AdService:
             return False
         # Interval guard: record the intent even when we skip, so a burst of
         # triggers cannot queue a show the instant the window opens.
-        now = time.monotonic()
-        if now - self._last_interstitial_at < self.INTERSTITIAL_MIN_INTERVAL_SEC:
-            logger.info(
-                "AdService: interstitial skipped — %.0fs since the last one "
-                "(min interval %.0fs)",
-                now - self._last_interstitial_at,
-                self.INTERSTITIAL_MIN_INTERVAL_SEC,
-            )
-            return False
-        self._last_interstitial_at = now
+        if self._last_interstitial_at is not None:
+            elapsed = time.monotonic() - self._last_interstitial_at
+            if elapsed < self.INTERSTITIAL_MIN_INTERVAL_SEC:
+                logger.info(
+                    "AdService: interstitial skipped — %.0fs since the last one "
+                    "(min interval %.0fs)",
+                    elapsed,
+                    self.INTERSTITIAL_MIN_INTERVAL_SEC,
+                )
+                return False
+        self._last_interstitial_at = time.monotonic()
         if self.interstitial is not None:
             ad_to_show = self.interstitial
             self.interstitial = None

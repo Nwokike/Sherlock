@@ -435,7 +435,7 @@ async = [
 
 [[package]]
 name = "flet"
-version = "1.0.1"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx", marker = "sys_platform != 'emscripten'" },
@@ -443,33 +443,33 @@ dependencies = [
     { name = "oauthlib", marker = "sys_platform != 'emscripten'" },
     { name = "repath" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5e/0f/ac7e2af03fd49dd28477a062f8022a362155a2608857c79d6a4272e4f4a3/flet-1.0.1.tar.gz", hash = "sha256:0c11ea010efbae34600556d964613324ea0ddc711bdac94d6592699b28dc0ba4", size = 571070, upload-time = "2026-09-22T20:24:47.549Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/cd/a637c81554ee9c18372312cf4d65808d1dfe0820b519f3d864b0f3e44c4a/flet-1.0.4.tar.gz", hash = "sha256:cab546db476e6c34abe3f97e2ebc88b8e6692656a94e7821af2d354012fcff2c", size = 574268, upload-time = "2026-10-08T22:25:02.511Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/86/6eaa2f957931ee03f9814838259d5df395295c7807673b9ea2a30f75f4c5/flet-1.0.1-py3-none-any.whl", hash = "sha256:94a15d75f587dc0b6a2479348f2e4b2bf40606469eb5a18dc62ab12a790f1ae2", size = 633955, upload-time = "2026-09-22T20:24:46.225Z" },
+    { url = "https://files.pythonhosted.org/packages/60/44/bfb1cbfd2b4ef3e12e2ae4f0bc76ff0eb56175fb6c90c35d1d8b40bf507e/flet-1.0.4-py3-none-any.whl", hash = "sha256:5e6ea0a75e10ff7143ca32dc2b84117fe7c964b4ec2270cb9910598acd9ffe67", size = 635815, upload-time = "2026-10-08T22:25:01.048Z" },
 ]
 
 [[package]]
 name = "flet-ads"
-version = "1.0.1"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flet" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/24/ff/1e169325b0bb0226ffac70a68689d59e75ec917501c004139df3ce53c8b5/flet_ads-1.0.1.tar.gz", hash = "sha256:627a607cf0e0145028e168d2413768729e08be011e2724dff078933e768302cb", size = 16566, upload-time = "2026-09-22T20:25:07.572Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/31/16/54cdbddfcbdc1c6831ef2c08823f1c848b97f474685984b0750dcc8fb847/flet_ads-1.0.4.tar.gz", hash = "sha256:d65693031d50fe8eb83b4017849b2e1a94cba057c6d5bfa86092a43b1d412a29", size = 16567, upload-time = "2026-10-08T22:25:18.835Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/09/57d7469acb2da107a376f18c1196ea44aa6c0028a9b1a147a4f356b69425/flet_ads-1.0.1-py3-none-any.whl", hash = "sha256:78e87e24285063a14c71948fe6829ab6e04d8aae69fea1a0f362fe6bb42168a4", size = 21491, upload-time = "2026-09-22T20:25:06.54Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/c6/c8db01557809f3e7d035e385514b03f4d6c29cef74d9a6d23d8a6c5b40b1/flet_ads-1.0.4-py3-none-any.whl", hash = "sha256:a9650ba0b9d27b341b3f9e2fd43ba2343e0fb748be832de380569d9850b85d6e", size = 21488, upload-time = "2026-10-08T22:25:17.863Z" },
 ]
 
 [[package]]
 name = "flet-local-auth"
-version = "1.0.1"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flet" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/ce/d043a7ed1f0762620e72a73aa50f4fc8838225bad5515ab705dbb030b96c/flet_local_auth-1.0.1.tar.gz", hash = "sha256:66eb8c729af3bec728da69a575b126401b46f54689541ad10f112d72dd261b48", size = 5534, upload-time = "2026-09-22T20:25:39.224Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/f2/7d42f71e84fd61fc1749ff36dedfb5f5a7a89b44812d5a125732363011d1/flet_local_auth-1.0.4.tar.gz", hash = "sha256:39026dcd3efc525c2496733c0624debdf716523744dba2e8a992af559848074c", size = 5551, upload-time = "2026-10-08T22:25:43.956Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/2d/71d4da5bc8b4d6f30c5aee461a2cfad9c150b6a59af3f352e82d6b7f7449/flet_local_auth-1.0.1-py3-none-any.whl", hash = "sha256:e3ea0432379f517ef9ee6f14bdbc52106b5d5a7460fa4e0ca050dabdc32ed339", size = 7553, upload-time = "2026-09-22T20:25:38.381Z" },
+    { url = "https://files.pythonhosted.org/packages/69/4f/5519f46f08819db5709a4eb7b0a0fb9f53fbc600dfba440c9b4d1f24883a/flet_local_auth-1.0.4-py3-none-any.whl", hash = "sha256:4c694e3c2af6771032ff32499a9d1bc4103e348a26cec4bce841df7a27d30526", size = 7552, upload-time = "2026-10-08T22:25:43.032Z" },
 ]
 
 [[package]]
@@ -1462,7 +1462,7 @@ wheels = [
 
 [[package]]
 name = "sherlock"
-version = "2.2.0"
+version = "2.3.0"
 source = { virtual = "." }
 dependencies = [
     { name = "flet" },
@@ -1483,9 +1483,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flet", specifier = ">=1.0.1" },
-    { name = "flet-ads", specifier = ">=1.0.1" },
-    { name = "flet-local-auth", specifier = ">=1.0.1" },
+    { name = "flet", specifier = ">=1.0.4" },
+    { name = "flet-ads", specifier = ">=1.0.4" },
+    { name = "flet-local-auth", specifier = ">=1.0.4" },
     { name = "holehe-v2", specifier = ">=1.0.3" },
     { name = "httpx", extras = ["http2", "socks"], specifier = ">=0.28.1" },
     { name = "maigret", specifier = ">=0.6.6" },

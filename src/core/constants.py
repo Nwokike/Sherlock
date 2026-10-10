@@ -15,7 +15,7 @@ def test_id(name: str) -> str | None:
 
 APP_NAME = "Sherlock"
 APP_VERSION = "2.3.0"
-APP_BUILD_NUMBER = 13
+APP_BUILD_NUMBER = 14
 
 # Fallback site count shown before the database load lands.
 SITES_TOTAL_FALLBACK = 5203

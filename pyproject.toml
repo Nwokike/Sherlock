@@ -19,7 +19,7 @@ product = "Sherlock"
 description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
 company = "Kiri"
 copyright = "Copyright © 2026 Kiri. All rights reserved."
-build_number = 13
+build_number = 14
 icon = "src/assets/icon.png"
 
 [tool.flet.app]

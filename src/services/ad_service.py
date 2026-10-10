@@ -55,7 +55,7 @@ class AdService:
     # volume): a search immediately followed by an export would otherwise
     # stack two ads back to back, which AdMob treats as a violation risk.
     # The preloaded ad simply waits; nothing is discarded.
-    INTERSTITIAL_MIN_INTERVAL_SEC = 45.0
+    INTERSTITIAL_MIN_INTERVAL_SEC = 30.0
 
     def __init__(self, page: ft.Page):
         self.page = page

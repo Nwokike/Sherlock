@@ -168,7 +168,7 @@ def _enrichment_fingerprint(enrichments) -> tuple:
 _BANNER_SPACING = 10
 _BANNER_SPACING_SHORT = 5
 _BANNER_SHORT_THRESHOLD = 10
-_BANNER_MAX_PER_LIST = 8
+_BANNER_MAX_PER_LIST = 15
 
 
 def _banner_slots(count: int) -> list[int]:

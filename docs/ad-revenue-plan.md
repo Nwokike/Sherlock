@@ -50,7 +50,7 @@ policy violation risk, and a policy strike on your top-earning app costs far
 more than the marginal impression.
 
 - **Impact**: protective rather than additive — keeps the account healthy.
-- **Risk**: very low. Suggested: 45 s minimum between interstitials; the
+- **Risk**: very low. Suggested: 30 s minimum between interstitials; the
   preloaded ad stays preloaded and simply waits.
 
 ### 4. Stabilise the banner on Home/History/Networks

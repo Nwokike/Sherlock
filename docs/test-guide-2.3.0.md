@@ -202,7 +202,7 @@ Mobile only — desktop/web renders zero-size placeholders, so skip on PC.
 On the **Results** screen, banners now appear *inside* the list, interleaved:
 - A list with **more than 10** results: one banner after every 10th card.
 - A list with **10 or fewer**: one banner after every 5th card.
-- Capped at 8 banners per list no matter how long the list is.
+- Capped at 15 banners per list no matter how long the list is.
 
 1. Run a username scan. Open the **Found** tab. Count the cards between
    banners — 10.
@@ -218,15 +218,15 @@ On the **Results** screen, banners now appear *inside* the list, interleaved:
 ### 10b — Interstitial on export (new)
 1. After a scan, export a report (PDF / CSV / HTML / any).
 2. After the save succeeds, an interstitial should appear — **unless** you
-   searched less than 45 seconds ago (see 10c).
+   searched less than 30 seconds ago (see 10c).
 3. Export twice in a row quickly: only the first should show an ad.
 
-### 10c — Minimum 45s between interstitials (new)
+### 10c — Minimum 30s between interstitials (new)
 1. Run a search (interstitial #1 shows).
 2. Immediately export a report (no interstitial — the interval guard held).
-3. Wait 45+ seconds, export again (interstitial shows).
+3. Wait 30+ seconds, export again (interstitial shows).
 4. You can verify the skip in the log: `interstitial skipped — Ns since the
-   last one (min interval 45s)`.
+   last one (min interval 30s)`.
 
 ### 10d — Banners no longer reload (fixed flash)
 On Home / Networks / History, the banner is now the same instance across

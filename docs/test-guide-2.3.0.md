@@ -5,7 +5,8 @@ covers **everything since v2.2.0**, ordered so you can test in one pass on a
 real device. Anything marked **[regression probe]** is something that already
 broke once — check it first.
 
-Time: ~35 minutes for the core pass, ~15 more for the full pass.
+Time: ~40 minutes for the core pass, ~15 more for the full pass.
+Parts 10 and 14 are new since the first draft of this guide.
 
 ---
 
@@ -192,14 +193,55 @@ cards show real fields with an honest overflow hint; dates are humanized.
 
 ---
 
-## Part 10 — Ads (frozen — verify only, do not change)
+## Part 10 — Ads (new: revenue features added)
 
-Per your freeze, ads were not touched. Just confirm they still behave:
-1. Banner visible on Home / History / Results.
-2. An interstitial appears on search.
-3. No consent dialog regression.
+You approved revenue-positive ad work, so this release adds four things.
+Mobile only — desktop/web renders zero-size placeholders, so skip on PC.
 
-If any ad behaviour changed, report it — none was touched intentionally.
+### 10a — Banners inside the results list (new)
+On the **Results** screen, banners now appear *inside* the list, interleaved:
+- A list with **more than 10** results: one banner after every 10th card.
+- A list with **10 or fewer**: one banner after every 5th card.
+- Capped at 8 banners per list no matter how long the list is.
+
+1. Run a username scan. Open the **Found** tab. Count the cards between
+   banners — 10.
+2. Switch to **Not Found** and **Errors**. The same spacing applies (these
+   tabs are often longer than Found).
+3. Run an email scan. Same spacing on all four tabs.
+4. Scroll a long list (100+ results). Banners should not stack and should
+   stop at 8.
+5. **Stability check (important):** leave the scan running and watch the
+   banner slots. They must NOT flicker or reload while progress ticks —
+   the ad instances are pooled and reused.
+
+### 10b — Interstitial on export (new)
+1. After a scan, export a report (PDF / CSV / HTML / any).
+2. After the save succeeds, an interstitial should appear — **unless** you
+   searched less than 45 seconds ago (see 10c).
+3. Export twice in a row quickly: only the first should show an ad.
+
+### 10c — Minimum 45s between interstitials (new)
+1. Run a search (interstitial #1 shows).
+2. Immediately export a report (no interstitial — the interval guard held).
+3. Wait 45+ seconds, export again (interstitial shows).
+4. You can verify the skip in the log: `interstitial skipped — Ns since the
+   last one (min interval 45s)`.
+
+### 10d — Banners no longer reload (fixed flash)
+On Home / Networks / History, the banner is now the same instance across
+re-renders. Previously every search or mode switch discarded the live ad and
+requested a new one (visible flash, wasted request).
+
+1. On Home, run a search, then come back. The banner should hold its
+   position without a reload flash.
+2. Switch Home between username/email mode repeatedly — no flash.
+
+### Consent
+Consent dialog behaviour must be unchanged (EEA/UK only).
+
+**Report if:** banners overlap cards, spacing is wrong, a slot flickers
+during a scan, or two interstitials appear back to back.
 
 ---
 
@@ -233,6 +275,34 @@ Walk every settings screen once and toggle each control:
 Repeat Parts 3–6 for 3 different targets: a handle that exists widely
 (`torvalds`), one that exists nowhere, and one with a dot/underscore
 (`john.doe`). Then an email scan for an address you own.
+
+---
+
+## Part 14 — Notifications (the zero-dependency set)
+
+Flet has no OS notification API, so these are in-app equivalents.
+
+### 14a — History badge (new)
+1. Note the History tab has no badge.
+2. Run a scan that finds something, then go to **Home** (or Results).
+3. The **History** tab should now show a small badge with a count (1, 2, …)
+   — the number of scans recorded since you last opened History.
+4. Tap **History**. The badge must clear immediately.
+5. Run two more scans without opening History — the badge should read 2.
+
+### 14b — "Scan finished" on resume (new)
+1. Start a scan.
+2. While it runs, background the app (home button) for a few seconds.
+3. Return to the app. A snackbar should appear: "Scan finished — N accounts
+   for <target>" with a **View** action that jumps to Results.
+4. Background and resume again — the snack must NOT repeat (it shows once).
+5. If you resume while the scan is still running, no snack (nothing finished).
+
+### 14c — History relock on resume (existing, verify)
+Returning from background must lock History again (biometric lock on).
+
+**Report if:** the badge never appears, never clears, counts wrong, or the
+resume snack repeats.
 
 ---
 

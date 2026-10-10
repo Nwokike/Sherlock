@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 
 import flet as ft
@@ -50,6 +51,12 @@ class AdService:
     INTERSTITIAL_ID_ANDROID_TEST = "ca-app-pub-3940256099942544/1033173712"
     INTERSTITIAL_ID_ANDROID_PROD = "ca-app-pub-5679949845754640/2758003779"
 
+    # Minimum seconds between interstitials (policy guard, not a cap on
+    # volume): a search immediately followed by an export would otherwise
+    # stack two ads back to back, which AdMob treats as a violation risk.
+    # The preloaded ad simply waits; nothing is discarded.
+    INTERSTITIAL_MIN_INTERVAL_SEC = 45.0
+
     def __init__(self, page: ft.Page):
         self.page = page
         self.interstitial = None
@@ -59,6 +66,7 @@ class AdService:
         self._consent_manager = None
         self._privacy_options_required: bool | None = None
         self._is_shutting_down: bool = False
+        self._last_interstitial_at: float = 0.0
 
     @property
     def interstitial_id(self) -> str:
@@ -207,6 +215,18 @@ class AdService:
                 "AdService: interstitial skipped — ads unavailable or consent gate closed"
             )
             return False
+        # Interval guard: record the intent even when we skip, so a burst of
+        # triggers cannot queue a show the instant the window opens.
+        now = time.monotonic()
+        if now - self._last_interstitial_at < self.INTERSTITIAL_MIN_INTERVAL_SEC:
+            logger.info(
+                "AdService: interstitial skipped — %.0fs since the last one "
+                "(min interval %.0fs)",
+                now - self._last_interstitial_at,
+                self.INTERSTITIAL_MIN_INTERVAL_SEC,
+            )
+            return False
+        self._last_interstitial_at = now
         if self.interstitial is not None:
             ad_to_show = self.interstitial
             self.interstitial = None

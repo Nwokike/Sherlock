@@ -161,12 +161,40 @@ def _enrichment_fingerprint(enrichments) -> tuple:
         return (len(enrichments or {}),)
 
 
+# Banner spacing inside a results list: >10 results -> one banner every 10,
+# <=10 -> one every 5. Keeps density sane on short lists and prevents a
+# 5,200-hit list from becoming an ad wall. The per-list banner count is also
+# capped, since a ListView this long can hit either cap first.
+_BANNER_SPACING = 10
+_BANNER_SPACING_SHORT = 5
+_BANNER_SHORT_THRESHOLD = 10
+_BANNER_MAX_PER_LIST = 8
+
+
+def _banner_slots(count: int) -> list[int]:
+    """0-based card indices after which a banner is placed (owner rule:
+    every 10 results, or every 5 when the list is shorter than 10)."""
+    if count <= 0:
+        return []
+    # <=10 (not just <) takes the tighter spacing so a 10-result list is not
+    # an uncovered edge case.
+    spacing = (
+        _BANNER_SPACING_SHORT if count <= _BANNER_SHORT_THRESHOLD else _BANNER_SPACING
+    )
+    slots = list(range(spacing - 1, count - 1, spacing))
+    if len(slots) > _BANNER_MAX_PER_LIST:
+        step = len(slots) / _BANNER_MAX_PER_LIST
+        slots = [slots[int(i * step)] for i in range(_BANNER_MAX_PER_LIST)]
+    return slots
+
+
 def _build_result_list(
     items,
     empty_title: str,
     empty_msg: str,
     build_card,
     debounced_filter: str = "",
+    banner_at=None,
 ) -> Control:
     """Shared list builder with virtualization for large result sets.
 
@@ -174,6 +202,10 @@ def _build_result_list(
     Performance is handled by ListView virtualization (build_controls_on_demand,
     only visible cards are materialized) and the worker-thread engine isolation;
     hiding a user's results was never an acceptable trade-off.
+
+    `banner_at(i)` returns a banner control for the i-th banner slot; banners
+    come from a stable ref-backed pool so the 2Hz progress ticks never
+    re-request them. On desktop/web the pool entries are zero-size containers.
     """
     if not items:
         from components.empty_state import EmptyState
@@ -185,10 +217,18 @@ def _build_result_list(
             else empty_msg,
             icon=ft.Icons.SEARCH_OFF_ROUNDED,
         )
+    slots = _banner_slots(len(items))
+    controls = []
+    cursor = 0
+    for ordinal, slot in enumerate(slots):
+        controls.extend(build_card(r) for r in items[cursor : slot + 1])
+        controls.append(banner_at(ordinal))
+        cursor = slot + 1
+    controls.extend(build_card(r) for r in items[cursor:])
     # ListView with build_controls_on_demand: cards materialize lazily as the
     # user scrolls, so even 5,200 entries stay smooth.
     return ft.ListView(
-        controls=[build_card(r) for r in items],
+        controls=controls,
         spacing=0,
         expand=True,
         build_controls_on_demand=True,
@@ -230,6 +270,14 @@ def ResultsScreen() -> Control:
     # at most one child changes per tick.
     _email_ph = ft.use_ref(lambda: [ft.Container() for _ in range(4)])
     _username_ph = ft.use_ref(lambda: [ft.Container() for _ in range(3)])
+
+    # Interleaved in-list banners come from the shared screen-level pool, so
+    # the 2Hz progress ticks never re-request an ad (a fresh BannerAd per
+    # tick would burn requests and flash the slot).
+    def _banner_at(ordinal: int):
+        from components.banner_ad import pooled_banner_ad
+
+        return pooled_banner_ad(f"results-{ordinal}")
 
     def _open_url(url: str):
         async def _launch():
@@ -471,6 +519,7 @@ def ResultsScreen() -> Control:
                 email_specs[min(tab_index, len(email_specs) - 1)][2],
                 _make_email_card,
                 debounced_filter,
+                banner_at=_banner_at,
             ),
             [
                 tab_index,
@@ -674,6 +723,7 @@ def ResultsScreen() -> Control:
                 username_specs[min(tab_index, len(username_specs) - 1)][2],
                 _make_username_card,
                 debounced_filter,
+                banner_at=_banner_at,
             ),
             [
                 tab_index,

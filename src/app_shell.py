@@ -439,6 +439,20 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     from core.notify import show_snack
 
                     show_snack(page, "Saved successfully!", bgcolor=AppColors.SUCCESS)
+
+                    # Ad item: an interstitial at the "I got what I came for"
+                    # moment. share_account('Anda') — the report just landed on
+                    # disk, so a pause here is expected rather than intrusive.
+                    # The service's own interval guard prevents stacking with
+                    # the search interstitial.
+                    try:
+                        from main import _AD_SERVICE_REF
+
+                        ad_service = _AD_SERVICE_REF.get("service")
+                        if ad_service is not None:
+                            await ad_service.show_interstitial()
+                    except Exception as exc:
+                        logger.warning("Export interstitial failed: %s", exc)
                 except Exception as ex:
                     logger.exception("Export failed")
                     from core.notify import show_snack
@@ -1089,8 +1103,25 @@ def AppShell() -> Control:
         if isinstance(current_nav, ft.NavigationBar):
             current_nav.selected_index = active_tab
         else:
+            # The History destination carries a badge with the number of
+            # history entries added since you last opened the tab (the
+            # zero-dependency stand-in for an OS notification). Cleared by
+            # HistoryScreen on mount.
+            unseen = getattr(state, "history_unseen", 0) or 0
             destinations = [
-                ft.NavigationBarDestination(icon=icon, label=label)
+                ft.NavigationBarDestination(
+                    icon=icon,
+                    label=label,
+                    badge=ft.Badge(
+                        label=str(unseen) if unseen else None,
+                        bgcolor=ft.Colors.PRIMARY,
+                        text_color=ft.Colors.WHITE,
+                        small_size=10,
+                        large_size=16,
+                    ),
+                )
+                if label == "History"
+                else ft.NavigationBarDestination(icon=icon, label=label)
                 for icon, label in zip(_TAB_ICONS, _TAB_NAMES, strict=True)
             ]
 

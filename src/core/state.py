@@ -61,6 +61,10 @@ class AppState:
     enrichments: dict | None = None
 
     # --- History & Result Cache ---
+    # Entries added to history since the user last opened the History tab.
+    # Drives the nav badge (zero-dep alternative to OS notifications);
+    # cleared on mount and on open.
+    history_unseen: int = 0
     history: list | None = None
     # {f"{mode}:{query.lower()}": {found: [...], not_found: [...], errors: [...], ...}}
     results_cache: dict | None = None
@@ -179,6 +183,7 @@ class AppState:
         self.progress_version = 0
         self.search_error = None
         self.active_username = ""
+        self.history_unseen = 0
         # NOTE: is_online is owned solely by the connectivity handlers in
         # main.py — resetting a search (e.g. cancel while offline) must not
         # flip the device online and hide the offline banner.

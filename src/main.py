@@ -89,6 +89,12 @@ from state.controller_ctx import (
 logger = logging.getLogger("sherlock")
 
 
+# The one AdService instance for this session. app_shell's export flow needs
+# it for the export interstitial and has no controller reference of its own,
+# so AppController.init() publishes it here. .get("service") -> AdService|None.
+_AD_SERVICE_REF: dict = {}
+
+
 class AppController:
     """Top-level controller owning services and reactive state."""
 
@@ -302,6 +308,7 @@ class AppController:
         # Init services
         self.storage = StorageService(self.page)
         self.ad_service = AdService(self.page)
+        _AD_SERVICE_REF["service"] = self.ad_service
         self.sherlock_service = SherlockService()
         self.email_service = EmailService()
         self.enrich_service = EnrichService()
@@ -740,6 +747,11 @@ class AppController:
             await self._apply_progress(result)
             state.progress_version += 1
             self._stop_render_flusher()
+            self._last_scan_summary = (
+                "username",
+                target_clean,
+                len(result.found),
+            )
         except asyncio.CancelledError:
             # BaseException in 3.8+ — `except Exception` does NOT catch
             # this. Without clearing the flag here, a cancelled scan left
@@ -1106,6 +1118,7 @@ class AppController:
                 result.total_modules,
                 len(result.found),
             )
+            self._last_scan_summary = ("email", email_clean, len(result.found))
 
             # Convert to result list for state
             all_results = [
@@ -1557,6 +1570,9 @@ class AppController:
                 state.history[0] = entry
             else:
                 state.history.insert(0, entry)
+            # "New history while you were elsewhere" indicator for the nav
+            # badge. Counted, not flagged, so consecutive scans stack.
+            state.history_unseen = (state.history_unseen or 0) + 1
             if len(state.history) > 50:
                 state.history[:] = state.history[:50]
         except Exception as e:
@@ -1667,6 +1683,31 @@ class AppController:
         # Re-lock history on resume from background — a real app-lock,
         # not a one-time session gate.
         state.history_unlocked = False
+
+        # "Your scan finished while you were away" — the in-app stand-in for
+        # an OS notification (flet has none; see docs/notification-research.md).
+        summary = getattr(self, "_last_scan_summary", None)
+        if summary:
+            self._last_scan_summary = None
+            mode, target, found = summary
+            noun = "accounts" if mode == "username" else "results"
+            try:
+                from core.notify import show_snack
+
+                show_snack(
+                    self.page,
+                    f"Scan finished — {found} {noun} for {target}",
+                    duration=8000,
+                    action_label="View",
+                    on_action=lambda: (
+                        self._controller_methods.show_results()
+                        if self._controller_methods
+                        and self._controller_methods.show_results
+                        else None
+                    ),
+                )
+            except Exception as exc:
+                logger.warning("Resume snack failed: %s", exc)
         if not self.connectivity:
             return
         try:

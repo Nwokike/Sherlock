@@ -33,6 +33,27 @@ from core.theme import adaptive_glass_bg, adaptive_glass_border
 logger = logging.getLogger(__name__)
 
 
+# Screen-level banners are constructed once and reused across re-renders.
+# A fresh BannerAd per render throws away a live ad (resetting AdMob's own
+# refresh cycle) and flashes the slot, so callers request from this pool by
+# slot key instead of building new controls. Desktop/web entries are the
+# cheap zero-size containers the function returns there.
+_BANNER_POOL: dict[str, Control] = {}
+
+
+def pooled_banner_ad(slot: str, page: ft.Page | None = None) -> Control:
+    """Return the banner for `slot`, building it once and reusing it after.
+
+    Safe to call from any render path: the same control object comes back
+    every time, so the ad is never re-requested by a re-render.
+    """
+    ad = _BANNER_POOL.get(slot)
+    if ad is None:
+        ad = build_banner_ad(page)
+        _BANNER_POOL[slot] = ad
+    return ad
+
+
 def build_banner_ad(page: ft.Page | None = None) -> Control:
     """Glass-container-wrapped banner ad (mobile only).
 

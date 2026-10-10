@@ -12,7 +12,7 @@ import flet as ft
 from flet import Control
 
 from components.app_header import AppHeader
-from components.banner_ad import build_banner_ad
+from components.banner_ad import pooled_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
 from core.constants import (
@@ -157,7 +157,13 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
         spawn(_fetch())
 
+    def _clear_unseen():
+        # Opening History consumes the badge (the entries are now visible).
+        if getattr(state, "history_unseen", 0):
+            state.history_unseen = 0
+
     ft.use_effect(_hydrate, [])
+    ft.use_effect(_clear_unseen, [])
 
     def _cancel_prompt():
         """Stop a pending OS prompt when leaving History (tab switch/back)."""
@@ -548,7 +554,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         controls=[
             *header_controls,
             ft.Container(content=body, expand=True),
-            build_banner_ad(),
+            pooled_banner_ad("history-1"),
         ],
         expand=True,
         spacing=0,

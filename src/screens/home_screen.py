@@ -12,7 +12,7 @@ import flet as ft
 from flet import Control
 
 from components.app_header import AppHeader
-from components.banner_ad import build_banner_ad
+from components.banner_ad import pooled_banner_ad
 from components.targets_card import TargetsCard
 from core import tokens
 from core.constants import (
@@ -1119,7 +1119,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                 else []
             ),
             # Banner ad (after recent searches) — DDGS placement
-            build_banner_ad(),
+            pooled_banner_ad("home-1"),
             # What Sherlock Can Do / Email Intelligence
             ft.Container(
                 content=ft.Column(
@@ -1152,7 +1152,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                 ),
             ),
             # Banner ad (after features) — DDGS placement
-            build_banner_ad(),
+            pooled_banner_ad("home-2"),
             # How It Works
             ft.Container(
                 content=ft.Column(

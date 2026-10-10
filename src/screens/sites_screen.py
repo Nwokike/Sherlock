@@ -15,7 +15,7 @@ import logging
 import flet as ft
 from flet import Control
 
-from components.banner_ad import build_banner_ad
+from components.banner_ad import pooled_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
 from core.constants import test_id
@@ -563,7 +563,7 @@ def SitesScreen() -> Control:
             bulk_actions,
             stats_header,
             body,
-            build_banner_ad(),
+            pooled_banner_ad("sites-1"),
         ],
         expand=True,
         spacing=0,

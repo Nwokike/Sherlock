@@ -74,6 +74,10 @@ PINNED_LABELS = {
 # Fixed row height so ListView virtualization can skip off-screen rows.
 _ROW_HEIGHT = 56.0
 
+# Banner density inside the network list (owner: every 10, same as results).
+_BANNER_EVERY = 10
+_BANNER_MAX = 15
+
 
 @ft.component
 def SitesSearchBar(initial: str, on_debounced):
@@ -514,57 +518,80 @@ def SitesScreen() -> Control:
         padding=ft.Padding(0, tokens.SPACE_XS, 0, tokens.SPACE_SM),
     )
 
+    # The ListView IS the screen root and owns the only scroll. A Column here
+    # would give it unbounded height (flet 1.0.4 ignores `expand` on column
+    # children — no control sets `host_expanded`), the list would shrink-wrap
+    # to all 5,200 rows, and a Column without `scroll=` never scrolls, so the
+    # screen clipped and could not be scrolled at all. Header controls ride
+    # inside the list instead.
+    header_block = [search_bar, category_chips, bulk_actions, stats_header]
+
     if state.sites_version == 0 and not checked_states:
-        body = ft.Container(
-            content=EmptyState(
-                title="Loading networks...",
-                message="Fetching the social network database.",
-                icon=ft.Icons.HUB_ROUNDED,
-            ),
+        return ft.ListView(
+            controls=[
+                *header_block,
+                EmptyState(
+                    title="Loading networks...",
+                    message="Fetching the social network database.",
+                    icon=ft.Icons.HUB_ROUNDED,
+                ),
+            ],
+            spacing=0,
             expand=True,
         )
-    elif not canonical_names:
-        body = ft.Container(
-            content=EmptyState(
-                title="No networks in database",
-                message="The site database loaded empty — check exclusions or reload.",
-                icon=ft.Icons.HUB_ROUNDED,
-            ),
+    if not canonical_names:
+        return ft.ListView(
+            controls=[
+                *header_block,
+                EmptyState(
+                    title="No networks in database",
+                    message="The site database loaded empty — check exclusions or reload.",
+                    icon=ft.Icons.HUB_ROUNDED,
+                ),
+            ],
+            spacing=0,
             expand=True,
         )
-    elif not items:
+    if not items:
         filter_msg = (
             f'No networks match "{debounced_query}"'
             if debounced_query
             else f"No networks in category '{selected_tag}'"
         )
-        body = ft.Container(
-            content=EmptyState(
-                title="No networks found",
-                message=filter_msg,
-                icon=ft.Icons.SEARCH_OFF_ROUNDED,
-            ),
-            expand=True,
-        )
-    else:
-        body = ft.ListView(
-            controls=items,
+        return ft.ListView(
+            controls=[
+                *header_block,
+                EmptyState(
+                    title="No networks found",
+                    message=filter_msg,
+                    icon=ft.Icons.SEARCH_OFF_ROUNDED,
+                ),
+            ],
             spacing=0,
             expand=True,
-            build_controls_on_demand=True,
-            item_extent=_ROW_HEIGHT,
-            cache_extent=500,
         )
 
-    return ft.Column(
-        controls=[
-            search_bar,
-            category_chips,
-            bulk_actions,
-            stats_header,
-            body,
-            pooled_banner_ad("sites-1"),
-        ],
-        expand=True,
+    # Banner every _BANNER_EVERY rows (cap _BANNER_MAX), drawn from the shared
+    # pool so no render ever re-requests an ad. Slot keys are per-ad so each
+    # position keeps its own instance.
+    controls: list = list(header_block)
+    placed = 0
+    for i, row in enumerate(items):
+        controls.append(row)
+        placed += 1
+        if placed >= _BANNER_EVERY:
+            slot = i // _BANNER_EVERY
+            if slot < _BANNER_MAX:
+                controls.append(pooled_banner_ad(f"sites-list-{slot}"))
+                placed = 0
+            else:
+                placed = _BANNER_EVERY - 1  # keep spacing, stop adding banners
+
+    return ft.ListView(
+        controls=controls,
         spacing=0,
+        expand=True,
+        build_controls_on_demand=True,
+        item_extent=_ROW_HEIGHT,
+        cache_extent=500,
     )

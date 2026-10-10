@@ -15,12 +15,7 @@ from components.app_header import AppHeader
 from components.banner_ad import pooled_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
-from core.constants import (
-    MODE_EMAIL,
-    MODE_USERNAME,
-    STORAGE_HISTORY,
-    test_id,
-)
+from core.constants import MODE_EMAIL, MODE_USERNAME, STORAGE_HISTORY
 from core.notify import show_snack
 from core.tasks import spawn
 from core.theme import AppColors
@@ -84,46 +79,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         page = context.page
     except Exception:
         page = None
-    locked = (
-        bool(getattr(state, "biometric_lock", False)) and not state.history_unlocked
-    )
-    history = [] if locked else (state.history if state.history else [])
-
-    async def _unlock_history():
-        from services.biometric_service import AuthStatus, authenticate_detailed
-
-        # History read is low-friction: no sensitive-transaction elevation.
-        try:
-            result = await authenticate_detailed(
-                "Unlock your search history", sensitive=False
-            )
-        except Exception as exc:
-            # Never let a platform quirk wedge the screen: surface it.
-            logger.warning("History unlock failed: %s", exc)
-            if page:
-                show_snack(page, "Unlock failed — try again", bgcolor=AppColors.ERROR)
-            return
-        if result.ok:
-            state.history_unlocked = True
-            state.progress_version += 1
-            if page:
-                show_snack(page, "History unlocked", bgcolor=AppColors.SUCCESS)
-        elif page:
-            if result.status == AuthStatus.LOCKOUT:
-                show_snack(page, result.message, bgcolor=AppColors.ERROR)
-            elif result.status == AuthStatus.CANCELLED:
-                show_snack(page, "Unlock cancelled", bgcolor=AppColors.WARNING)
-            elif result.message:
-                # ERROR / UNAVAILABLE carry the concrete reason (timeout,
-                # device unsupported, platform code) — show it, not a
-                # generic string that hides the cause.
-                show_snack(page, result.message, bgcolor=AppColors.ERROR)
-            else:
-                show_snack(
-                    page,
-                    "Biometric unlock failed",
-                    bgcolor=AppColors.ERROR,
-                )
+    history = state.history if state.history else []
 
     def _infer_mode(entry: dict, query: str) -> str:
         if entry.get("mode"):
@@ -135,9 +91,6 @@ def HistoryScreen(banner: Control | None = None) -> Control:
     # Hydrate history on mount if empty
     def _hydrate():
         async def _fetch():
-            # Don't load sensitive entries into memory while locked.
-            if locked:
-                return
             if not state.history and page:
                 try:
                     from services.storage_service import (
@@ -164,21 +117,6 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
     ft.use_effect(_hydrate, [])
     ft.use_effect(_clear_unseen, [])
-
-    def _cancel_prompt():
-        """Stop a pending OS prompt when leaving History (tab switch/back)."""
-
-        async def _stop():
-            try:
-                from services.biometric_service import stop_prompt
-
-                await stop_prompt()
-            except Exception:
-                pass
-
-        spawn(_stop())
-
-    ft.use_effect(lambda: None, [], cleanup=lambda: _cancel_prompt())
 
     # Portal-managed clear-confirm dialog (flet 1.0 use_dialog, P1-2).
     pending_dialog, set_pending_dialog = ft.use_state(None)
@@ -279,18 +217,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
         spawn(_search())
 
-    if locked:
-        body = ft.Container(
-            key=test_id("history-unlock"),
-            content=EmptyState(
-                title="History locked",
-                message="Biometric unlock is required to view past searches.",
-                icon=ft.Icons.LOCK_ROUNDED,
-                action_label="Unlock",
-                on_action=lambda e: spawn(_unlock_history()),
-            ),
-        )
-    elif not history:
+    if not history:
         body = EmptyState(
             title="No search history",
             message="Your search history will appear here.",
@@ -518,15 +445,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         )
 
     header_actions = []
-    if locked:
-        header_actions.append(
-            ft.FilledButton(
-                "Unlock",
-                icon=ft.Icons.LOCK_OPEN_ROUNDED,
-                on_click=lambda e: spawn(_unlock_history()),
-            )
-        )
-    elif history:
+    if history:
         header_actions.append(
             ft.IconButton(
                 icon=ft.Icons.DELETE_SWEEP_OUTLINED,

@@ -23,8 +23,6 @@ from core.constants import (
     APP_BUILD_NUMBER,
     APP_NAME,
     APP_VERSION,
-    STORAGE_BIOMETRIC_LOCK,
-    STORAGE_BIOMETRIC_STRICT,
     STORAGE_CHECK_DOMAINS,
     STORAGE_COOKIES_PATH,
     STORAGE_DEEP_ENRICH,
@@ -455,31 +453,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     def _on_check_domains_change(val: bool):
         state.check_domains = bool(val)
         spawn(_persist(STORAGE_CHECK_DOMAINS, "true" if val else "false"))
-
-    def _toggle_biometric_lock(val: bool):
-        state.biometric_lock = bool(val)
-        if not val:
-            state.history_unlocked = False
-        spawn(_persist(STORAGE_BIOMETRIC_LOCK, "true" if val else "false"))
-
-    _capability_text, _set_capability_text = ft.use_state("checking…")
-
-    def _load_capability():
-        async def _fetch():
-            try:
-                from services.biometric_service import capability_label
-
-                _set_capability_text(await capability_label())
-            except Exception:
-                pass
-
-        spawn(_fetch())
-
-    ft.use_effect(_load_capability, [])
-
-    def _toggle_biometric_strict(val: bool):
-        state.biometric_strict = bool(val)
-        spawn(_persist(STORAGE_BIOMETRIC_STRICT, "true" if val else "false"))
 
     _health_running = False
 
@@ -1491,36 +1464,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     "Check for Update",
                     icon=ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
                     on_click=lambda e: spawn(_run_db_update_check(e)),
-                ),
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.FINGERPRINT_ROUNDED,
-                "Biometric App Lock",
-                f"Require unlock to open History ({_capability_text})",
-                ft.Switch(
-                    value=state.biometric_lock,
-                    on_change=lambda e: _toggle_biometric_lock(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
-                ),
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.SECURITY_ROUNDED,
-                "Biometrics Only",
-                "Disallow device-PIN fallback (stricter, needs enrolled biometrics)",
-                ft.Switch(
-                    value=state.biometric_strict,
-                    on_change=lambda e: _toggle_biometric_strict(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
                 ),
                 stacked=narrow,
             ),

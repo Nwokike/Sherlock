@@ -29,7 +29,6 @@ def _restore_global_state():
     them into ObservableList/ObservableDict like __init__ does.
     """
     saved = {
-        "biometric_lock": state.biometric_lock,
         "current_username": state.current_username,
         "email_results": list(state.email_results) if state.email_results else [],
         "enrichment_mode": state.enrichment_mode,
@@ -262,8 +261,6 @@ def test_sites_screen_category_chips_and_empty_state():
 
 def test_history_screen_render():
     # This test exercises the unlocked list; the lock itself is covered by
-    # the biometric tests (default ON per owner).
-    state.biometric_lock = False
     state.history = [
         {
             "query": "torvalds",
@@ -287,5 +284,3 @@ def test_history_screen_render():
     assert any("torvalds" in t for t in texts)
     assert any("user@example.com" in t for t in texts)
     assert any("42/5203 matches" in t for t in texts)
-
-    state.biometric_lock = True

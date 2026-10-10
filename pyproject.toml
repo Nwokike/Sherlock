@@ -7,7 +7,6 @@ requires-python = ">=3.14"
 dependencies = [
     "flet>=1.0.4",
     "flet-ads>=1.0.4",
-    "flet-local-auth>=1.0.4",
     "holehe-v2>=1.0.3",
     "httpx[http2,socks]>=0.28.1",
     "maigret>=0.6.6",

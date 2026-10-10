@@ -924,16 +924,18 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             if is_email:
                 target = app_state.email_results_address or getattr(prog, "email", None)
                 if target:
-                    # Set searching state synchronously so ResultsScreen never
-                    # renders an empty frame before the engine's first tick.
-                    app_state.current_username = target.strip()
-                    app_state.is_searching = True
+                    # NOTE: is_searching is deliberately NOT set here. Setting
+                    # it optimistically made start_*_search take the
+                    # re-attach path (is_searching + same target) and return
+                    # without scanning — leaving the flag stuck True so every
+                    # later search also just re-attached to a dead scan. The
+                    # empty-frame concern is covered by the results screen
+                    # rendering the cached rows first, then the scan view the
+                    # moment start_search sets the flag itself.
                     app_state.search_mode = _MODE_EMAIL
                     spawn(controller.start_email_search(target))
                     controller.show_results()
             elif app_state.last_results_username:
-                app_state.current_username = app_state.last_results_username.strip()
-                app_state.is_searching = True
                 app_state.search_mode = _MODE_USERNAME
                 spawn(controller.start_search(app_state.last_results_username))
                 controller.show_results()

@@ -6,8 +6,6 @@ Covers:
 - card overflow hint when the 6-row generic cap hides the rest.
 - sites country chips carry flag emoji.
 - email scan cancel clears is_searching (the stuck-button bug).
-- biometric prompt: WindowsAuthMessages takes no arguments (a TypeError
-  there crashed the unlock flow on Windows).
 """
 
 from __future__ import annotations
@@ -190,14 +188,6 @@ def test_country_chips_carry_flags():
     assert "\U0001f1ec\U0001f1e7" in joined  # GB flag
     assert "\U0001f1f7\U0001f1fa" in joined  # RU flag
     assert "\U0001f1fa\U0001f1f8" in joined  # US flag
-
-
-def test_windows_auth_messages_takes_no_args():
-    """WindowsAuthMessages is a placeholder with no fields — passing any
-    kwarg raised TypeError and crashed the unlock flow on Windows."""
-    import flet_local_auth as fla
-
-    assert fla.WindowsAuthMessages() is not None
 
 
 def test_email_scan_cancel_clears_is_searching():

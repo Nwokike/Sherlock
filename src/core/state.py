@@ -88,14 +88,6 @@ class AppState:
     check_domains: bool = False
     # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
     unhealthy_sites: list[str] | None = None
-    # Owner tested the biometric History lock and chose it as the default:
-    # ON (stored user choices still honored; devices without biometrics
-    # bypass via biometric_service, so nobody gets stranded).
-    biometric_lock: bool = True
-    history_unlocked: bool = False
-    # Strict biometrics: no device-PIN fallback (opt-in; default allows it
-    # so users without enrolled biometrics aren't stranded).
-    biometric_strict: bool = False
     selected_sites: list[str] | None = None
     use_local_db: bool = True
     custom_manifest: str = ""

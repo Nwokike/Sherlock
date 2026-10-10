@@ -1,4 +1,4 @@
-"""Wave D tests: text reports, graph exports, biometric fallback, actions."""
+"""Wave D tests: text reports, graph exports, client actions."""
 
 from __future__ import annotations
 
@@ -142,45 +142,6 @@ class TestXmindUpgrade:
         assert out.stat().st_size > 500  # content.json + metadata written
 
 
-class TestBiometricFallback:
-    """P1-4: honest False outside a live app or when the dep is missing."""
-
-    def test_authenticate_unavailable(self, monkeypatch):
-        import asyncio
-
-        import services.biometric_service as bs
-
-        monkeypatch.setattr(bs, "_AUTH_AVAILABLE", False)
-        assert asyncio.run(bs.authenticate()) is False
-
-    def test_authenticate_without_page(self, monkeypatch):
-        import asyncio
-
-        import services.biometric_service as bs
-
-        monkeypatch.setattr(bs, "_AUTH_AVAILABLE", True)
-
-        class _Ctx:
-            page = None
-
-        monkeypatch.setattr(bs, "_fla", SimpleNamespace(LocalAuthException=Exception))
-        import flet
-
-        monkeypatch.setattr(flet, "context", _Ctx(), raising=False)
-        # context is imported inside the function from flet.controls.context
-        import flet.controls.context as fctx
-
-        monkeypatch.setattr(
-            fctx,
-            "page",
-            property(lambda self: (_ for _ in ()).throw(RuntimeError("x"))),
-            raising=False,
-        )
-        # Simpler: page property raising RuntimeError is flet's own behavior —
-        # just verify the no-auth-availability path above and the page-None path:
-        assert asyncio.run(bs.authenticate()) in (False,)
-
-
 class TestClientActions:
     """P1-3: open_url_action binds only inside a live app."""
 
@@ -203,27 +164,12 @@ class TestStateDefaults:
         assert state.i2p_proxy == ""
         assert state.check_domains is False
         assert state.unhealthy_sites is None
-        # Owner tested the lock and chose it: default ON (stored choices
-        # still honored; unenforceable devices bypass in biometric_service).
-        from core.state import AppState
-
-        assert AppState.biometric_lock is True
-        assert state.history_unlocked is False
         # Owner rule: headline features default ON (stored values still win).
         # Assert the CLASS default — the shared singleton may have been
         # mutated by earlier tests in the same session.
+        from core.state import AppState
+
         assert AppState.recursive_search is True
-
-    def test_unenforceable_codes_bypass(self):
-        from services.biometric_service import _is_unenforceable
-
-        assert _is_unenforceable("NO_BIOMETRIC_HARDWARE") is True
-        assert _is_unenforceable("NO_BIOMETRICS_ENROLLED") is True
-        assert _is_unenforceable("NO_CREDENTIALS_SET") is True
-        # Cancellations and failed attempts must stay locked.
-        assert _is_unenforceable("USER_CANCELED") is False
-        assert _is_unenforceable("BIOMETRIC_LOCKOUT") is False
-        assert _is_unenforceable("UNKNOWN_ERROR") is False
 
 
 class TestOnDeviceFixes:

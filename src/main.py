@@ -35,7 +35,6 @@ from core.constants import (
     MSG_OFFLINE,
     MSG_ONLINE,
     MSG_SEARCH_OFFLINE,
-    STORAGE_BIOMETRIC_LOCK,
     STORAGE_CACHED_RESULTS,
     STORAGE_CACHED_SITES,
     STORAGE_CHECK_DOMAINS,
@@ -199,6 +198,19 @@ class AppController:
             killed.append("search-task")
         state.is_searching = False
         logger.info("KILL %s → cancelled: %s", reason, ", ".join(killed) or "nothing")
+
+    def _live_username_progress(self) -> bool:
+        """True when a username scan is genuinely mid-flight.
+
+        Authoritative source is the progress object, not `is_searching`:
+        the flag is set optimistically by the Results retry button and
+        cleared by cancel/kill, so on its own it can disagree with reality
+        in both directions.
+        """
+        prog = state.search_progress
+        if prog is None or hasattr(prog, "checked_modules"):
+            return False  # email progress or nothing at all
+        return bool(getattr(prog, "is_running", False))
 
     def _register_search_task(self) -> None:
         """Register the calling task as the active search (killable)."""
@@ -380,8 +392,35 @@ class AppController:
                 pass
 
         self.page.on_view_pop = _on_system_back
+        self._install_back_underlay()
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
         logger.info("AppShell mounted successfully")
+
+    def _install_back_underlay(self) -> None:
+        """Put a blank view beneath the shell so Android back reaches Python.
+
+        Without it the app has exactly ONE view, and Flet's Dart system-back
+        handler bails out when the top view is the only one
+        (`_handleSystemPopRoute` guards on `views.length <= 1`): the framework
+        pops the route itself, the activity finishes, and `on_view_pop` never
+        fires — so back closes the app from ANY screen, including Results.
+
+        This is the same underlay KTV-Player installs (see its
+        `_ensure_back_underlay`). With two views, the pop is delivered to
+        `_on_system_back` instead, which routes it into in-app navigation.
+        Idempotent: safe to call on every init.
+        """
+        try:
+            views = self.page.views
+            if not views:
+                return
+            if any(getattr(v, "route", "") == "/blank" for v in views):
+                return
+            views.insert(0, ft.View(route="/blank", padding=0))
+            self.page.update()
+            logger.info("Back underlay installed beneath the shell")
+        except Exception as exc:
+            logger.warning("Could not install the back underlay: %s", exc)
 
     async def _load_saved_state(self) -> None:
         """Load saved settings from storage into observable state."""
@@ -523,15 +562,6 @@ class AppController:
             cd_raw = await self.storage.get(STORAGE_CHECK_DOMAINS)
             if cd_raw is not None:
                 state.check_domains = cd_raw == "true"
-            bio_raw = await self.storage.get(STORAGE_BIOMETRIC_LOCK)
-            if bio_raw is not None:
-                state.biometric_lock = bio_raw == "true"
-            from core.constants import STORAGE_BIOMETRIC_STRICT
-
-            strict_raw = await self.storage.get(STORAGE_BIOMETRIC_STRICT)
-            if strict_raw is not None:
-                state.biometric_strict = strict_raw == "true"
-
             rec_raw = await self.storage.get(STORAGE_RECURSIVE_SEARCH)
             if rec_raw is not None:
                 state.recursive_search = rec_raw == "true"
@@ -613,9 +643,15 @@ class AppController:
         if not target_clean:
             return
 
-        # SMART RE-ATTACH: If already searching this exact username, attach to live progress
+        # SMART RE-ATTACH: attach only to a scan that is genuinely live.
+        # The progress object must exist and still be running — otherwise a
+        # stuck is_searching (the retry button sets it optimistically) or a
+        # just-killed scan whose worker thread has not stopped ticking yet
+        # would swallow every later search into a no-op re-attach, leaving
+        # the app permanently "searching" with no scan behind it.
         if (
             state.is_searching
+            and self._live_username_progress()
             and state.current_username.strip().lower() == target_clean.lower()
             and state.search_mode == MODE_USERNAME
         ):
@@ -1036,9 +1072,11 @@ class AppController:
         if not email_clean:
             return
 
-        # SMART RE-ATTACH: If already searching this exact email, attach to live progress
+        # SMART RE-ATTACH: live progress only (see the username gate — a
+        # stuck is_searching must not swallow the search).
         if (
             state.is_searching
+            and getattr(state.search_progress, "is_running", False)
             and state.current_username.strip().lower() == email_clean.lower()
             and state.search_mode == MODE_EMAIL
         ):
@@ -1680,10 +1718,6 @@ class AppController:
         backgrounded and the connectivity listener may not fire for it."""
         if e.state not in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):
             return
-        # Re-lock history on resume from background — a real app-lock,
-        # not a one-time session gate.
-        state.history_unlocked = False
-
         # "Your scan finished while you were away" — the in-app stand-in for
         # an OS notification (flet has none; see docs/notification-research.md).
         summary = getattr(self, "_last_scan_summary", None)

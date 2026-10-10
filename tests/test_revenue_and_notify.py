@@ -177,14 +177,11 @@ def test_resume_summary_surfaces_once():
     the summary is consumed (no repeat snack on the next resume)."""
     import asyncio
 
-    from core.state import state
     from main import AppController
 
     controller = AppController(MagicMock())
     controller.connectivity = None
     controller._last_scan_summary = ("username", "torvalds", 14)
-
-    state.history_unlocked = True
 
     async def run():
         await controller._on_lifecycle_change(
@@ -195,29 +192,36 @@ def test_resume_summary_surfaces_once():
     assert controller._last_scan_summary is None
 
 
-def test_resume_relocks_history_and_probes_connectivity():
+def test_resume_reprobes_connectivity():
+    """Resume re-probes: the OS can drop the link while backgrounded and the
+    listener may not fire for it. (The old history re-lock test went away
+    with the biometric lock.)"""
     import asyncio
 
     import flet as ft
 
-    from core.state import state
     from main import AppController
 
     controller = AppController(MagicMock())
     probe = MagicMock()
     probe.get_connectivity = AsyncMock(return_value=[])
     controller.connectivity = probe
-    state.history_unlocked = True
 
     async def run():
         await controller._on_lifecycle_change(
-            type(
-                "E",
-                (),
-                {"state": ft.AppLifecycleState.RESUME},
-            )()
+            type("E", (), {"state": ft.AppLifecycleState.RESUME})()
         )
 
     asyncio.run(run())
-    assert state.history_unlocked is False
     assert probe.get_connectivity.await_count == 1
+
+    # A non-RESUME state (PAUSE/HIDE) must not probe at all.
+    probe.get_connectivity.reset_mock()
+
+    async def run_pause():
+        await controller._on_lifecycle_change(
+            type("E", (), {"state": ft.AppLifecycleState.PAUSE})()
+        )
+
+    asyncio.run(run_pause())
+    assert probe.get_connectivity.await_count == 0

@@ -93,9 +93,16 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         from services.biometric_service import AuthStatus, authenticate_detailed
 
         # History read is low-friction: no sensitive-transaction elevation.
-        result = await authenticate_detailed(
-            "Unlock your search history", sensitive=False
-        )
+        try:
+            result = await authenticate_detailed(
+                "Unlock your search history", sensitive=False
+            )
+        except Exception as exc:
+            # Never let a platform quirk wedge the screen: surface it.
+            logger.warning("History unlock failed: %s", exc)
+            if page:
+                show_snack(page, "Unlock failed — try again", bgcolor=AppColors.ERROR)
+            return
         if result.ok:
             state.history_unlocked = True
             state.progress_version += 1

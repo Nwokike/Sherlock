@@ -158,6 +158,9 @@ async def authenticate_detailed(
                                     cancel_button="Cancel",
                                     localized_fallback_title="Enter passcode",
                                 ),
+                                # local_auth 3.x exposes no customizable
+                                # Windows strings — the class takes no args.
+                                windows_messages=_fla.WindowsAuthMessages(),
                             ),
                             60,
                         )

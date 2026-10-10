@@ -224,6 +224,12 @@ def ResultsScreen() -> Control:
     filter_query, set_filter_query = ft.use_state("")
     debounced_filter = use_debounce(filter_query, 250)
     tab_index, set_tab_index = ft.use_state(0)
+    # Stable inactive-tab placeholders: creating fresh Containers on every
+    # progress tick churned TabBarView child identity ~2x/sec and surfaced
+    # as a RangeError storm in the page-error log. Refs keep them stable so
+    # at most one child changes per tick.
+    _email_ph = ft.use_ref(lambda: [ft.Container() for _ in range(4)])
+    _username_ph = ft.use_ref(lambda: [ft.Container() for _ in range(3)])
 
     def _open_url(url: str):
         async def _launch():
@@ -509,10 +515,10 @@ def ResultsScreen() -> Control:
                     ),
                     ft.TabBarView(
                         controls=[
-                            email_slot if tab_index == 0 else ft.Container(),
-                            email_slot if tab_index == 1 else ft.Container(),
-                            email_slot if tab_index == 2 else ft.Container(),
-                            email_slot if tab_index == 3 else ft.Container(),
+                            email_slot if tab_index == 0 else _email_ph.current[0],
+                            email_slot if tab_index == 1 else _email_ph.current[1],
+                            email_slot if tab_index == 2 else _email_ph.current[2],
+                            email_slot if tab_index == 3 else _email_ph.current[3],
                         ],
                         expand=True,
                     ),
@@ -522,16 +528,40 @@ def ResultsScreen() -> Control:
             ),
             expand=True,
         )
+
+        # Stat cards double as tab selectors; every card uses the same
+        # neutral treatment so none reads as "the selected one" (the old
+        # dim Not-Found looked permanently highlighted).
+        def _goto_tab(idx):
+            set_tab_index(idx)
+
+        _neutral = ft.Colors.ON_SURFACE
         stats_row = ft.Row(
             controls=[
-                StatCard("Found", str(len(raw_found)), AppColors.SUCCESS),
+                StatCard(
+                    "Found",
+                    str(len(raw_found)),
+                    AppColors.SUCCESS,
+                    on_click=lambda e: _goto_tab(0),
+                ),
                 StatCard(
                     "Not Found",
                     str(len(raw_not_found)),
-                    ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                    _neutral,
+                    on_click=lambda e: _goto_tab(1),
                 ),
-                StatCard("Rate Ltd", str(len(raw_rate_limited)), AppColors.WARNING),
-                StatCard("Unavail", str(len(raw_unavailable)), AppColors.ERROR),
+                StatCard(
+                    "Rate Ltd",
+                    str(len(raw_rate_limited)),
+                    AppColors.WARNING,
+                    on_click=lambda e: _goto_tab(2),
+                ),
+                StatCard(
+                    "Unavail",
+                    str(len(raw_unavailable)),
+                    AppColors.ERROR,
+                    on_click=lambda e: _goto_tab(3),
+                ),
             ],
             spacing=tokens.SPACE_SM,
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
@@ -688,13 +718,13 @@ def ResultsScreen() -> Control:
                         controls=[
                             username_slot
                             if username_tab_index == 0
-                            else ft.Container(),
+                            else _username_ph.current[0],
                             username_slot
                             if username_tab_index == 1
-                            else ft.Container(),
+                            else _username_ph.current[1],
                             username_slot
                             if username_tab_index == 2
-                            else ft.Container(),
+                            else _username_ph.current[2],
                         ],
                         expand=True,
                     ),
@@ -704,15 +734,28 @@ def ResultsScreen() -> Control:
             ),
             expand=True,
         )
+        _neutral = ft.Colors.ON_SURFACE
         stats_row = ft.Row(
             controls=[
-                StatCard("Found", str(len(username_view.found)), AppColors.SUCCESS),
+                StatCard(
+                    "Found",
+                    str(len(username_view.found)),
+                    AppColors.SUCCESS,
+                    on_click=lambda e: set_tab_index(0),
+                ),
                 StatCard(
                     "Not Found",
                     str(len(username_view.not_found)),
-                    ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                    _neutral,
+                    on_click=lambda e: set_tab_index(1),
                 ),
-                StatCard("Errors", str(len(username_view.errors)), AppColors.WARNING),
+                StatCard(
+                    "Errors",
+                    str(len(username_view.errors)),
+                    AppColors.WARNING,
+                    on_click=lambda e: set_tab_index(2),
+                ),
+                # Total is a summary, not a tab — stays a plain card.
                 StatCard("Total", str(total), ft.Colors.PRIMARY),
             ],
             spacing=tokens.SPACE_SM,

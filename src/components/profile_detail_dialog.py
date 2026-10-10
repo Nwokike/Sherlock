@@ -786,6 +786,64 @@ def _username_dossier(
             )
         )
 
+    # Dynamic catch-all: every remaining field the extractor returned,
+    # rendered without a hardcoded key list — that is how platform-specific
+    # facts (payerId, locale, ambassador, follower counts…) reach the user
+    # instead of being dropped on the floor.
+    from core.enrich_view import enrichment_rows
+
+    specially_rendered = {
+        "location",
+        "uid",
+        "id",
+        "joined",
+        "created_at",
+        "links",
+        "url",
+        "bio",
+        "name",
+        "fullname",
+        "username",
+        "image",
+        "avatar",
+        "photo",
+    }
+    extra_rows = [
+        (label, value)
+        for _key, label, value in enrichment_rows(
+            enrich,
+            others.get("extra") if isinstance(others, dict) else None,
+            skip=specially_rendered,
+        )
+    ]
+    if extra_rows:
+        items.append(
+            ft.Container(
+                content=ft.Text(
+                    "All Profile Fields",
+                    size=tokens.FONT_SM,
+                    weight=ft.FontWeight.W_700,
+                    color=AppColors.PRIMARY,
+                ),
+                padding=ft.Padding(
+                    left=tokens.SPACE_MD,
+                    right=tokens.SPACE_MD,
+                    top=tokens.SPACE_MD,
+                    bottom=tokens.SPACE_XS,
+                ),
+            )
+        )
+        for label, value in extra_rows:
+            items.append(
+                _dossier_row(
+                    page,
+                    ft.Icons.LABEL_OUTLINE,
+                    label,
+                    value,
+                    can_copy=bool(value) and value != "\u2014",
+                )
+            )
+
     # Raw OSINT metadata payload preview
     raw_payload = {}
     if enrich:

@@ -401,6 +401,15 @@ def SitesScreen() -> Control:
             )
         )
 
+    def _country_chip_label(code: str) -> str:
+        """'gb' -> '🇬🇧 GB'; falls back to the bare code."""
+        from core.geo_utils import get_country_by_tag
+
+        geo = get_country_by_tag(code)
+        flag = getattr(geo, "flag", "") if geo else ""
+        upper = code.upper()
+        return f"{flag} {upper}" if flag else upper
+
     # Category filter chips — live from the tag index (pinned first with
     # counts), plus a scrollable country row from 2-letter tags.
     def _chip_row(pairs):
@@ -420,7 +429,11 @@ def SitesScreen() -> Control:
 
     chip_rows = [_chip_row(live_cats)]
     if live_countries:
-        chip_rows.append(_chip_row([(c, c.upper()) for c in live_countries]))
+        # Country chips carry their flag emoji alongside the code — the
+        # codes alone ("GB", "RU") read as raw tags, not countries.
+        chip_rows.append(
+            _chip_row([(c, _country_chip_label(c)) for c in live_countries])
+        )
     category_chips = ft.Container(
         content=ft.Column(chip_rows, spacing=0),
         padding=ft.Padding(

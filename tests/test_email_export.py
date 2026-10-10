@@ -111,6 +111,11 @@ class TestV2ExtrasRendering:
         ]
 
     def test_extra_lines_and_avatar(self):
+        """Everything the platform returned renders — no drop list.
+
+        The old contract hid timezone and contact_info and reduced lists to
+        "N linked"; the dynamic renderer shows every field (user requirement:
+        expose everything, most users never open the JSON)."""
         from components.result_card import ResultCard
 
         card = ResultCard(
@@ -121,8 +126,8 @@ class TestV2ExtrasRendering:
                     "display_name": "Gravatar User",
                     "bio": "hello world",
                     "verified_accounts": ["a", "b"],
-                    "contact_info": {"emails": ["x@y.z"]},  # skipped (dict)
-                    "timezone": "UTC",  # skipped (noise)
+                    "contact_info": {"emails": ["x@y.z"]},
+                    "timezone": "UTC",
                 },
                 "media": {"avatar": "https://example.com/a.png"},
             },
@@ -130,17 +135,22 @@ class TestV2ExtrasRendering:
         texts = self._texts(card)
         assert any("Display Name: Gravatar User" in t for t in texts)
         assert any("Bio: hello world" in t for t in texts)
-        assert any("Verified Accounts: 2 linked" in t for t in texts)
-        assert not any("Timezone" in t for t in texts)
-        assert not any("Contact Info" in t for t in texts)
+        # list values show their contents, not just a count
+        assert any("Verified Accounts: a, b" in t for t in texts)
+        # previously-dropped fields are now visible
+        assert any("Timezone: UTC" in t for t in texts)
+        assert any("Contact Info Emails: x@y.z" in t for t in texts)
         from tests.flet_tree import walk
 
         assert any(c.__class__.__name__ == "Image" for c in walk(card))
 
     def test_extra_cap_six_lines(self):
+        """The card caps its generic rows and TELLS the user what is left —
+        the dialog is where every field shows."""
         from components.result_card import ResultCard
 
         extras = {f"field_{i}": f"value{i}" for i in range(10)}
         card = ResultCard(site_name="X", status="Available", others={"extra": extras})
         rendered = [t for t in self._texts(card) if t.startswith("Field ")]
         assert len(rendered) == 6
+        assert any("+4 more fields" in t for t in self._texts(card))

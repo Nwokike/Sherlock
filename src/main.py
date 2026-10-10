@@ -741,7 +741,17 @@ class AppController:
             state.progress_version += 1
             self._stop_render_flusher()
         except asyncio.CancelledError:
+            # BaseException in 3.8+ — `except Exception` does NOT catch
+            # this. Without clearing the flag here, a cancelled scan left
+            # is_searching stuck True and the Search button disabled
+            # forever ("the scan is not starting").
             logger.info("WATCHDOG: username search %r killed mid-flight", target_clean)
+            if getattr(state, "current_username", None) == target_clean:
+                state.is_searching = False
+                username_progress.is_running = False
+                state.search_error = None
+                state.progress_version += 1
+                self._stop_render_flusher()
             raise
         except Exception as e:
             if getattr(state, "current_username", None) == target_clean:
@@ -1167,7 +1177,14 @@ class AppController:
             state.progress_version += 1
             self._stop_render_flusher()
         except asyncio.CancelledError:
+            # Same stuck-flag guard as the username path: clear is_searching
+            # so a cancelled scan never wedges the Search button.
             logger.info("WATCHDOG: email search %r killed mid-flight", email)
+            state.is_searching = False
+            email_progress.is_running = False
+            state.search_error = None
+            state.progress_version += 1
+            self._stop_render_flusher()
             raise
         except ValueError as ve:
             state.is_searching = False

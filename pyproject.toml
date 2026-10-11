@@ -24,6 +24,10 @@ icon = "src/assets/icon.png"
 
 [tool.flet.app]
 path = "src"
+# No `assets_dir` here on purpose: the CLI resolves it relative to `path`,
+# so any value produces src/src/assets under `flet run`. main() passes
+# `assets_dir="src/assets"` to ft.run() directly, which is the only place it
+# is needed.
 
 [tool.flet.boot_screen]
 name = "flet"

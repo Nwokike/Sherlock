@@ -7,11 +7,14 @@ Three device bugs, each reproduced from the owner's terminal log:
    the smart re-attach path and returned without scanning. The app sat at 99%
    forever. The gate now requires a genuinely live progress object, and the
    retry button no longer sets the flag.
-2. **Back button closes the app from any screen** — the app had exactly one
+2. **Back button closed the app from any screen** — the app had exactly one
    view, and flet's Dart `_handleSystemPopRoute` bails out when the top view
-   is the only one (`views.length <= 1`), so the framework popped the route
-   itself and `on_view_pop` never fired. A `/blank` underlay restores the
-   pop delivery, and the navigation logic (already present) runs.
+   is the only one (`views.length <= 1`), so the framework finished the
+   activity and no handler ran. Fixed with `View.can_pop=False` +
+   `on_confirm_pop` (the will-pop hook): back navigates in-app and the view
+   is kept. A `/blank` underlay was tried first and reverted — it blanked the
+   app at startup (it became the render target when inserted before
+   page.render) and left the blank view visible after back popped the shell.
 3. **Networks screen could not scroll vertically** — flet 1.0.4 ignores
    `expand` on Column children (no control sets `host_expanded`, verified
    against the installed Dart-side wrapper), so the ListView got unbounded
@@ -109,14 +112,16 @@ def test_live_scan_still_reattaches():
 # ── 2. Back button ────────────────────────────────────────────────────────
 
 
-def test_back_underlay_installed():
-    """The app needs 2+ views or Android's pop never reaches on_view_pop.
+def test_root_view_back_guard_installed():
+    """Android back on a single-view app must not exit it.
 
-    `on_view_pop` is flet's only hook for the Android back button, and its
-    Dart implementation bails out when the top view is the only one
-    (`_handleSystemPopRoute`: `views.length <= 1`) — the framework pops the
-    route itself and the activity finishes. So the shell must sit on a blank
-    underlay.
+    flet's Dart system-back handler bails when the top view is the only one
+    (`_handleSystemPopRoute`: `views.length <= 1`) and the framework finishes
+    the activity. `View.can_pop=False` + `on_confirm_pop` is the supported
+    will-pop hook: back fires the handler and `confirm_pop(False)` keeps the
+    view on the stack. No second view is introduced — an earlier attempt used
+    a blank underlay, which both blanked the app on startup and left the
+    blank view visible after back popped the shell.
     """
     import flet as ft
 
@@ -126,20 +131,71 @@ def test_back_underlay_installed():
     page = MagicMock()
     page.views = [shell]
     controller = AppController(page)
-    controller._install_back_underlay()
-    assert len(page.views) == 2
-    assert page.views[0].route == "/blank"
+    controller._guard_root_view_pop()
 
-    # idempotent: a second install must not stack another underlay
-    controller._install_back_underlay()
-    assert len(page.views) == 2
+    # exactly one view still, and it is now un-poppable with a handler
+    assert len(page.views) == 1
+    assert page.views[0].can_pop is False
+    handler = page.views[0].on_confirm_pop
+    assert handler.__func__ is controller._on_root_confirm_pop.__func__
+    assert handler.__self__ is controller
 
-    # it never runs before the shell exists (the root shell view is created
-    # by page.render during init)
+    # idempotent
+    controller._guard_root_view_pop()
+    assert len(page.views) == 1
+
+    # harmless before the shell view exists
     empty = MagicMock()
     empty.views = []
-    AppController(empty)._install_back_underlay()
+    AppController(empty)._guard_root_view_pop()
     assert empty.views == []
+
+
+def test_back_handler_never_pops_the_view():
+    """The handler navigates in-app and always resolves with should_pop=False."""
+    import asyncio
+
+    import flet as ft
+
+    from main import AppController
+
+    shell = ft.View(route="/")
+    page = MagicMock()
+    page.views = [shell]
+    controller = AppController(page)
+    controller._guard_root_view_pop()
+
+    navigated = []
+    methods = MagicMock()
+    methods.handle_system_back = lambda: navigated.append(1)
+    controller._controller_methods = methods
+
+    resolved = []
+
+    async def _confirm_pop(should_pop):
+        resolved.append(should_pop)
+
+    shell.confirm_pop = _confirm_pop
+
+    async def run():
+        await controller._on_root_confirm_pop(type("E", (), {"control": shell})())
+
+    asyncio.run(run())
+    assert navigated == [1], "in-app navigation must run"
+    assert resolved == [False], "the view must be kept"
+
+    # even when navigation raises, the pop still resolves False (app survives)
+    def _boom():
+        raise RuntimeError("nav exploded")
+
+    methods.handle_system_back = _boom
+    resolved.clear()
+
+    async def run2():
+        await controller._on_root_confirm_pop(type("E", (), {"control": shell})())
+
+    asyncio.run(run2())
+    assert resolved == [False]
 
 
 # ── 3. Networks screen layout ─────────────────────────────────────────────

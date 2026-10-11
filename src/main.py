@@ -392,35 +392,52 @@ class AppController:
                 pass
 
         self.page.on_view_pop = _on_system_back
-        self._install_back_underlay()
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
         logger.info("AppShell mounted successfully")
+        # After render: the root view now exists, so guard its back.
+        self._guard_root_view_pop()
 
-    def _install_back_underlay(self) -> None:
-        """Put a blank view beneath the shell so Android back reaches Python.
+    def _guard_root_view_pop(self) -> None:
+        """Intercept Android back on the shell view instead of letting it pop.
 
-        Without it the app has exactly ONE view, and Flet's Dart system-back
-        handler bails out when the top view is the only one
-        (`_handleSystemPopRoute` guards on `views.length <= 1`): the framework
-        pops the route itself, the activity finishes, and `on_view_pop` never
-        fires — so back closes the app from ANY screen, including Results.
+        A single-view app has nowhere to pop TO: flet's Dart system-back
+        handler bails out when the top view is the only one, so the
+        framework finishes the activity and the app closes from any screen.
 
-        This is the same underlay KTV-Player installs (see its
-        `_ensure_back_underlay`). With two views, the pop is delivered to
-        `_on_system_back` instead, which routes it into in-app navigation.
-        Idempotent: safe to call on every init.
+        `View.can_pop=False` + `on_confirm_pop` is the supported will-pop
+        hook: back fires the handler, we route it to in-app navigation, and
+        `confirm_pop(False)` keeps the view on the stack. No second view, so
+        there is also nothing to accidentally reveal underneath.
         """
         try:
             views = self.page.views
             if not views:
                 return
-            if any(getattr(v, "route", "") == "/blank" for v in views):
-                return
-            views.insert(0, ft.View(route="/blank", padding=0))
+            root = views[-1]
+            if getattr(root, "can_pop", True) is False:
+                return  # already guarded (init re-entered)
+            root.can_pop = False
+            root.on_confirm_pop = self._on_root_confirm_pop
             self.page.update()
-            logger.info("Back underlay installed beneath the shell")
+            logger.info("Root view back-guard installed")
         except Exception as exc:
-            logger.warning("Could not install the back underlay: %s", exc)
+            logger.warning("Could not install the back-guard: %s", exc)
+
+    async def _on_root_confirm_pop(self, e) -> None:
+        """Back was pressed on the shell: navigate in, never exit."""
+        try:
+            if self._controller_methods is not None and hasattr(
+                self._controller_methods, "handle_system_back"
+            ):
+                self._controller_methods.handle_system_back()
+        except Exception as exc:
+            logger.warning("Back navigation failed: %s", exc)
+        finally:
+            # Keep the view: the app stays alive whatever navigation did.
+            try:
+                await e.control.confirm_pop(False)
+            except Exception as exc:
+                logger.warning("confirm_pop(False) failed: %s", exc)
 
     async def _load_saved_state(self) -> None:
         """Load saved settings from storage into observable state."""

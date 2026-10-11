@@ -450,10 +450,16 @@ def load_sites_indices(expected_hash: str | None = None) -> dict[str, Any] | Non
     but changed tags. None skips the check (cold-start fast path).
     """
     data = _read_json(_cache_root() / "sites_indices.json")
-    hash_ok = expected_hash is None or data.get("db_hash") == expected_hash
-    if isinstance(data, dict) and isinstance(data.get("by_tag"), dict) and hash_ok:
-        return data
-    return None
+    # isinstance FIRST: a corrupt/legacy cache file can hold a list or a
+    # string, and data.get() on those is the 'NoneType'/'list' AttributeError
+    # that turned every site-database load into a warning.
+    if not isinstance(data, dict):
+        return None
+    if expected_hash is not None and data.get("db_hash") != expected_hash:
+        return None
+    if not isinstance(data.get("by_tag"), dict):
+        return None
+    return data
 
 
 # ── Layer 6: Persistent DNS Cache ───────────────────────────────────────────

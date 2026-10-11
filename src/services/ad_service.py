@@ -29,6 +29,8 @@ from collections.abc import Callable
 
 import flet as ft
 
+from components.banner_ad import clear_banner_pool
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -195,8 +197,15 @@ class AdService:
             logger.warning("AdService: failed to construct InterstitialAd: %s", exc)
             return
         self.interstitial = ad
-        if ad not in self.page.services:
-            self.page.services.append(ad)
+        try:
+            if ad not in self.page.services:
+                self.page.services.append(ad)
+        except Exception as exc:
+            logger.warning(
+                "AdService: could not register preloaded interstitial: %s", exc
+            )
+            self.interstitial = None
+            return
         logger.info("AdService: interstitial preloaded (unit=%s)", self.interstitial_id)
 
     async def _handle_close(self, e):
@@ -262,20 +271,34 @@ class AdService:
                 await e.control.show()
                 logger.info("InterstitialAd shown (fresh instance)")
 
+            def _on_error(e):
+                # Release the ref: previously a failed load kept the ad in
+                # _shown_interstitial and in page.services forever, because
+                # only a successful close path cleared them. Repeat no-fill
+                # conditions accumulated one orphan per attempt.
+                logger.warning("InterstitialAd load error: %s", getattr(e, "data", e))
+                if self._shown_interstitial is not None:
+                    _release_service(self.page.services, self._shown_interstitial)
+                    self._shown_interstitial = None
+
             ad = fta.InterstitialAd(
                 unit_id=self.interstitial_id,
                 on_load=lambda e: self.page.run_task(_show, e),
-                on_error=lambda e: logger.warning(
-                    "InterstitialAd load error: %s", getattr(e, "data", e)
-                ),
+                on_error=_on_error,
                 on_close=self._handle_close,
             )
         except Exception as e:
             logger.warning("AdService: fresh interstitial construction failed: %s", e)
             return False
         self._shown_interstitial = ad
-        if ad not in self.page.services:
-            self.page.services.append(ad)
+        try:
+            if ad not in self.page.services:
+                self.page.services.append(ad)
+        except Exception as exc:
+            # Never let a torn-down page escape a -> bool API.
+            logger.warning("AdService: could not register fresh interstitial: %s", exc)
+            self._shown_interstitial = None
+            return False
         logger.info("AdService: fresh interstitial queued — it will show on load")
         return True
 
@@ -286,6 +309,9 @@ class AdService:
                 _release_service(self.page.services, ad)
         self.interstitial = None
         self._shown_interstitial = None
+        # Banners live in a module pool independent of this service; torn-down
+        # pages must not keep their controls (and their baked-in theme colors).
+        clear_banner_pool()
 
 
 def _release_service(services: list, item) -> None:

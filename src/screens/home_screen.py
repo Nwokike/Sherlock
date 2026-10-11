@@ -1226,12 +1226,14 @@ def HomeScreen(banner: Control | None = None) -> Control:
         expand=True,
     )
 
+    # NOTE: the scrollable Column goes straight into the Container. An extra
+    # wrapper Column here gives it unbounded height (expand is a no-op on
+    # Column children in flet 1.0.4), so it shrink-wraps to full content and
+    # the wrapper — which has no scroll of its own — clips everything below
+    # the fold. Container keeps the constraints bounded, so the inner scroll
+    # works.
     return ft.Container(
-        content=ft.Column(
-            [content],
-            expand=True,
-            spacing=0,
-        ),
+        content=content,
         gradient=AppStyles.brand_gradient(_get_page())
         if hasattr(AppStyles, "brand_gradient")
         else None,

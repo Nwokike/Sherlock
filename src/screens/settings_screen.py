@@ -1398,7 +1398,11 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                             ),
                             border_radius=tokens.RADIUS_SM,
                             padding=tokens.SPACE_MD,
-                            expand=True,
+                            # Explicit height, not `expand`: this sits in a
+                            # Column, where expand is a no-op in flet 1.0.4,
+                            # so a 500-line buffer shrink-wrapped and burst
+                            # out of the fixed dialog box.
+                            height=260,
                         ),
                     ],
                     spacing=0,
@@ -1511,11 +1515,17 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     if banner:
         header_controls.append(banner)
 
-    return ft.Column(
+    # The ListView is the screen root and owns the scroll. The previous root
+    # was a plain Column, so `expand` on the inner ListView was a no-op (flet
+    # 1.0.4 ignores expand on Column children) and the whole card stack was
+    # laid out at content height inside a non-scrolling Column — everything
+    # below Preferences and Scan Parameters was unreachable. Header rides
+    # inside the list, matching the Networks screen.
+    return ft.ListView(
         controls=[
             *header_controls,
-            content,
+            *content.controls,
         ],
-        expand=True,
         spacing=0,
+        expand=True,
     )

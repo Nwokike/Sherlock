@@ -424,7 +424,12 @@ def build_sites_indices(sites_dict: dict[str, Any]) -> dict[str, Any]:
     names: list[str] = []
     for name, site in sites_dict.items():
         names.append(name)
-        for tag in getattr(site, "tags", None) or []:
+        # A custom manifest can carry tags as a plain string; iterating it
+        # directly would shred it into one-character buckets ("us" -> u, s).
+        tags = getattr(site, "tags", None) or []
+        if isinstance(tags, str):
+            tags = [tags]
+        for tag in tags:
             tag_key = str(tag).lower()
             by_tag.setdefault(tag_key, []).append(name)
     for tag_list in by_tag.values():
@@ -457,7 +462,13 @@ def load_sites_indices(expected_hash: str | None = None) -> dict[str, Any] | Non
         return None
     if expected_hash is not None and data.get("db_hash") != expected_hash:
         return None
-    if not isinstance(data.get("by_tag"), dict):
+    by_tag = data.get("by_tag")
+    if not isinstance(by_tag, dict):
+        return None
+    # Values must be lists: a hand-made or older file holding a bare number
+    # or string loads fine here and then crashes the consumers
+    # (len() on an int, frozenset() shredding a string into characters).
+    if not all(isinstance(v, list) for v in by_tag.values()):
         return None
     return data
 
@@ -486,8 +497,16 @@ def load_dns_cache() -> dict[str, dict[str, Any]]:
             for domain, rec in raw.items():
                 if not isinstance(rec, dict):
                     continue
-                ts = rec.get("ts", 0) or 0
-                ips = [str(i) for i in rec.get("ips", []) if i]
+                # Types are not assumed: a hand-edited or older cache can
+                # hold null/string/number ips and ts, and iterating or
+                # subtracting those raises out of every caller.
+                raw_ips = rec.get("ips")
+                if isinstance(raw_ips, (list, tuple)):
+                    ips = [str(i) for i in raw_ips if i]
+                else:
+                    ips = []
+                raw_ts = rec.get("ts", 0)
+                ts = raw_ts if isinstance(raw_ts, (int, float)) else 0
                 is_dead = bool(rec.get("dead", False)) or not ips
                 if is_dead:
                     if (now - ts) > _DNS_DEAD_TTL_SEC:

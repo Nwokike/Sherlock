@@ -176,9 +176,23 @@ class AppState:
         self.search_error = None
         self.active_username = ""
         self.history_unseen = 0
+        # The identity and result fields belong to the reset too: without
+        # them a cleared search left the previous target's name and its
+        # result set behind (current_username plus empty email_results with
+        # stale counts), which the next render would show as the target's.
+        self.current_username = ""
+        self.last_results.clear()
+        self.last_results_username = ""
+        self.email_results_address = ""
+        self.email_found_count = 0
+        self.email_not_found_count = 0
+        self.email_rate_limited_count = 0
+        self.email_unavailable_count = 0
+        self.email_total_modules = 0
         # NOTE: is_online is owned solely by the connectivity handlers in
         # main.py — resetting a search (e.g. cancel while offline) must not
-        # flip the device online and hide the offline banner.
+        # flip the device online and hide the offline banner. search_mode is
+        # likewise left alone: it is user intent, not scan residue.
         self.search_targets.clear()
         self.target_results.clear()
         self.email_results.clear()

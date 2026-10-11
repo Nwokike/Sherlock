@@ -195,6 +195,7 @@ def OnboardingScreen() -> Control:
         content=ft.Column(
             expand=True,
             spacing=0,
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             controls=[
                 # Top bar — Skip button (hidden on last slide)
                 ft.Container(
@@ -215,9 +216,12 @@ def OnboardingScreen() -> Control:
                         ],
                     ),
                 ),
-                # Middle — swipeable slide content fills all remaining space
+                # Middle — swipeable slide content fills all remaining space.
+                # No `expand` here: it is a no-op on a Column child in flet
+                # 1.0.4, and relying on it meant the slide only ever took its
+                # content height with the CTA drifting up after it. The
+                # Column's SPACE_BETWEEN alignment does the real work.
                 ft.Container(
-                    expand=True,
                     alignment=ft.Alignment.CENTER,
                     content=ft.GestureDetector(
                         content=ft.Container(

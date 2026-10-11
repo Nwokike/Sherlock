@@ -38,6 +38,12 @@ _CARD_STYLED_KEYS = frozenset(
         "image",
         "avatar",
         "photo",
+        "company",
+        "occupation",
+        "is_verified",
+        "links",
+        "website",
+        "url",
     }
 )
 _CARD_MAX_EXTRA_ROWS = 6

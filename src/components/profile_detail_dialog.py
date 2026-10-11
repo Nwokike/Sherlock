@@ -99,17 +99,37 @@ def _dossier_row(
     title: str,
     value: str,
     can_copy: bool = False,
+    link: str | None = None,
+    copy_text: str | None = None,
 ) -> ft.Container:
-    """Shared detail row with optional copy — used by both dossiers."""
-    copy_btn = (
-        ft.IconButton(
-            icon=ft.Icons.CONTENT_COPY_ROUNDED,
-            icon_size=16,
-            tooltip=f"Copy {title}",
-            on_click=lambda e, v=value, t=title: spawn(_copy_text(page, v, t)),
+    """Shared detail row with optional copy, and an optional open-link
+    action when the value itself is a URL. `copy_text` defaults to `value`
+    so a truncated display value still copies in full.
+    """
+    text_for_copy = copy_text if copy_text is not None else value
+    actions = []
+    if link:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
+                icon_size=16,
+                tooltip=f"Open {title}",
+                on_click=lambda e, u=link: spawn(_open_value(page, u)),
+            )
         )
-        if can_copy
-        else ft.Container(width=0)
+    if can_copy:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.CONTENT_COPY_ROUNDED,
+                icon_size=16,
+                tooltip=f"Copy {title}",
+                on_click=lambda e, v=text_for_copy, t=title: spawn(
+                    _copy_text(page, v, t)
+                ),
+            )
+        )
+    copy_btn = (
+        ft.Row(actions, spacing=0, tight=True) if actions else ft.Container(width=0)
     )
     return ft.Container(
         content=ft.Row(
@@ -140,6 +160,18 @@ def _dossier_row(
         ),
         padding=ft.Padding(0, 4, 0, 4),
     )
+
+
+async def _open_value(page: ft.Page, url: str):
+    try:
+        from core.shared_services import shared_url_launcher
+
+        await shared_url_launcher(page).launch_url(url)
+    except Exception as exc:
+        logger.warning("Failed to open %s: %s", url, exc)
+        from core.notify import show_snack
+
+        show_snack(page, "Could not open link", bgcolor=AppColors.ERROR)
 
 
 async def _copy_text(page: ft.Page, text: str, label: str):
@@ -393,10 +425,14 @@ def _email_dossier(
                         height=tokens.SPACE_MD,
                         color=ft.Colors.with_opacity(0.1, ft.Colors.OUTLINE),
                     ),
+                    # Explicit height, not `expand`: expand is a no-op on a
+                    # Column child in flet 1.0.4, so the list got unbounded
+                    # height, laid out every enrichment row, and a long
+                    # profile overflowed out of this fixed 380x420 dialog.
                     ft.ListView(
                         controls=items,
                         spacing=tokens.SPACE_XS,
-                        expand=True,
+                        height=300,
                         padding=0,
                     ),
                 ],
@@ -474,7 +510,10 @@ def _username_dossier(
 
     profile_open = open_url_action(profile_url)
 
-    enrich = enrichment or {}
+    # A corrupt state.enrichments entry can be a non-dict (list/str); .get()
+    # on that raises and the dialog never opens. Guard like ResultCard does.
+    enrich = enrichment if isinstance(enrichment, dict) else {}
+    others = others if isinstance(others, dict) else {}
     pivot_handles = _extract_pivot_handles(enrich, others) if on_pivot else []
     avatar_url = enrich.get("image") or enrich.get("avatar") or enrich.get("photo")
     display_name = _stringify(
@@ -790,7 +829,11 @@ def _username_dossier(
     # rendered without a hardcoded key list — that is how platform-specific
     # facts (payerId, locale, ambassador, follower counts…) reach the user
     # instead of being dropped on the floor.
-    from core.enrich_view import enrichment_rows
+    from core.enrich_view import (
+        enrichment_rows,
+        is_link_value,
+        truncate_value,
+    )
 
     specially_rendered = {
         "location",
@@ -807,6 +850,17 @@ def _username_dossier(
         "image",
         "avatar",
         "photo",
+        # Rendered as the metric strip / identity block above, so they must
+        # not also appear as generic rows below (every fact printed twice).
+        "follower_count",
+        "followers",
+        "following_count",
+        "following",
+        "posts_count",
+        "posts",
+        "company",
+        "occupation",
+        "is_verified",
     }
     extra_rows = [
         (label, value)
@@ -834,13 +888,30 @@ def _username_dossier(
             )
         )
         for label, value in extra_rows:
+            # URLs get their own tappable row — a profile website shown as
+            # dead text is the one field most worth being able to open.
+            if is_link_value(value):
+                items.append(
+                    _dossier_row(
+                        page,
+                        ft.Icons.LINK_ROUNDED,
+                        label,
+                        value,
+                        can_copy=True,
+                        link=value,
+                    )
+                )
+                continue
+            # Long values are truncated for display; _dossier_row's copy
+            # action keeps the full text.
             items.append(
                 _dossier_row(
                     page,
                     ft.Icons.LABEL_OUTLINE,
                     label,
-                    value,
-                    can_copy=bool(value) and value != "\u2014",
+                    truncate_value(value),
+                    can_copy=bool(value) and value != "—",
+                    copy_text=value,
                 )
             )
 
@@ -969,7 +1040,11 @@ def _username_dossier(
                             )
                         ],
                         spacing=tokens.SPACE_XS,
-                        expand=True,
+                        # Explicit height, not `expand` (see the username
+                        # dialog above): expand is a no-op on a Column child
+                        # in flet 1.0.4, so the list took unbounded height
+                        # and a long result overflowed the fixed dialog.
+                        height=300,
                         padding=0,
                     ),
                 ],

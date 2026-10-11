@@ -54,6 +54,17 @@ def pooled_banner_ad(slot: str, page: ft.Page | None = None) -> Control:
     return ad
 
 
+def clear_banner_pool() -> None:
+    """Drop every pooled banner (page teardown / theme change).
+
+    Pooled controls carry the page they were built under — their glass colors
+    are frozen at build time — so keeping them past a teardown would show a
+    stale theme and hold dead native views. The next render path simply
+    rebuilds what it needs.
+    """
+    _BANNER_POOL.clear()
+
+
 def build_banner_ad(page: ft.Page | None = None) -> Control:
     """Glass-container-wrapped banner ad (mobile only).
 

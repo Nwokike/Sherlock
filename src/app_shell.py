@@ -909,7 +909,6 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _restart(e):
             from core.constants import MODE_EMAIL as _MODE_EMAIL
-            from core.constants import MODE_USERNAME as _MODE_USERNAME
             from core.state import state as app_state
 
             # Owner fix: the retry button must respect the MODE of the
@@ -932,11 +931,13 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     # empty-frame concern is covered by the results screen
                     # rendering the cached rows first, then the scan view the
                     # moment start_search sets the flag itself.
-                    app_state.search_mode = _MODE_EMAIL
+                    # search_mode is likewise left alone: start_*_search sets
+                    # it after its own gates, so an offline/busy retry
+                    # cannot strand a live scan of the other mode with its
+                    # ticks being dropped.
                     spawn(controller.start_email_search(target))
                     controller.show_results()
             elif app_state.last_results_username:
-                app_state.search_mode = _MODE_USERNAME
                 spawn(controller.start_search(app_state.last_results_username))
                 controller.show_results()
 

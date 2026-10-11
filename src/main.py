@@ -212,6 +212,32 @@ class AppController:
             return False  # email progress or nothing at all
         return bool(getattr(prog, "is_running", False))
 
+    def _abandon_search(self, target: str, progress_obj) -> None:
+        """Clear this search's state after a cancellation before the engine
+        started (the window between setting the flags and the engine `try`).
+
+        Guarded on ownership so a superseded scan cannot clear the live
+        replacement's flags, exactly like the exception handlers below.
+        """
+        try:
+            if (state.current_username or "").strip().lower() != target.strip().lower():
+                return
+            state.is_searching = False
+            state.search_error = None
+            if progress_obj is not None:
+                progress_obj.is_running = False
+            state.progress_version += 1
+            self._stop_render_flusher()
+        except Exception as exc:  # never mask the cancellation
+            logger.warning("abandon_search cleanup failed: %s", exc)
+
+    def _live_email_progress(self) -> bool:
+        """Email counterpart of :meth:`_live_username_progress`."""
+        prog = state.search_progress
+        if prog is None or not hasattr(prog, "checked_modules"):
+            return False  # username progress or nothing at all
+        return bool(getattr(prog, "is_running", False))
+
     def _register_search_task(self) -> None:
         """Register the calling task as the active search (killable)."""
         self._search_task = asyncio.current_task()
@@ -274,6 +300,20 @@ class AppController:
                 state.progress_version += 1
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            # A raise here used to end the loop for good: every later
+            # `_render_dirty = True` set a flag nothing read, so the UI froze
+            # mid-scan with no error and no recovery. Keep the bump going.
+            logger.warning("Render flusher iteration failed: %s", exc, exc_info=True)
+            self._render_dirty = True
+            try:
+                while True:
+                    await asyncio.sleep(0.5)
+                    if self._render_dirty:
+                        self._render_dirty = False
+                        state.progress_version += 1
+            except asyncio.CancelledError:
+                pass
 
     async def init(self) -> None:
         """Configure the page, init services, load state, mount AppShell."""
@@ -710,6 +750,12 @@ class AppController:
         if self.ad_service:
             try:
                 await self.ad_service.show_interstitial()
+            except asyncio.CancelledError:
+                # A supersede landing in this window must not leave the
+                # flags set with no engine behind them (the stuck-flag
+                # wedge). Clear, then let it propagate.
+                self._abandon_search(target_clean, username_progress)
+                raise
             except Exception as exc:
                 logger.warning("Interstitial show failed: %s", exc)
 
@@ -717,11 +763,20 @@ class AppController:
         self._enriched_seen.clear()
         self._enrich_queue = asyncio.Queue()
         if self.enrich_service and self.enrich_service.is_available:
-            self._enrich_worker_task = spawn(self._drain_enrich_queue())
+            try:
+                self._enrich_worker_task = spawn(self._drain_enrich_queue())
+            except asyncio.CancelledError:
+                self._abandon_search(target_clean, username_progress)
+                raise
+            except Exception as exc:
+                logger.warning("Enrich worker start failed: %s", exc)
 
         # Make sure sites are loaded before searching
         try:
             await self.sherlock_service.load_sites()
+        except asyncio.CancelledError:
+            self._abandon_search(target_clean, username_progress)
+            raise
         except Exception as e:
             logger.warning("load_sites failed before scan: %s", e)
 
@@ -1068,9 +1123,12 @@ class AppController:
         """Cancel a running search (sync — called from UI)."""
         logger.info("CANCEL requested by user (username mode)")
         self._kill_all_activity("user-cancel[username]")
-        if state.search_progress:
-            state.search_progress.is_running = False
-            state.search_progress.is_cancelled = True
+        prog = state.search_progress
+        if prog is not None and getattr(prog, "is_running", False):
+            # Only mark a LIVE scan: a cancel landing after completion
+            # rewrote a finished result as cancelled.
+            prog.is_running = False
+            prog.is_cancelled = True
         state.progress_version += 1
         try:
             self.page.update()
@@ -1093,7 +1151,7 @@ class AppController:
         # stuck is_searching must not swallow the search).
         if (
             state.is_searching
-            and getattr(state.search_progress, "is_running", False)
+            and self._live_email_progress()
             and state.current_username.strip().lower() == email_clean.lower()
             and state.search_mode == MODE_EMAIL
         ):
@@ -1245,28 +1303,40 @@ class AppController:
             state.progress_version += 1
             self._stop_render_flusher()
         except asyncio.CancelledError:
-            # Same stuck-flag guard as the username path: clear is_searching
-            # so a cancelled scan never wedges the Search button.
+            # Supersede guard (same as the username path): only clear the
+            # flags if THIS search still owns the slot. A superseded task's
+            # cancellation is delivered late, and clearing unconditionally
+            # would flip the LIVE replacement's is_searching to False and
+            # stop its render flusher, stranding it with a dead UI.
             logger.info("WATCHDOG: email search %r killed mid-flight", email)
-            state.is_searching = False
-            email_progress.is_running = False
-            state.search_error = None
-            state.progress_version += 1
-            self._stop_render_flusher()
+            if state.current_username.strip().lower() == email_clean.lower() and (
+                state.search_mode == MODE_EMAIL
+            ):
+                state.is_searching = False
+                email_progress.is_running = False
+                state.search_error = None
+                state.progress_version += 1
+                self._stop_render_flusher()
             raise
         except ValueError as ve:
-            state.is_searching = False
-            email_progress.is_running = False
-            state.progress_version += 1
-            self._stop_render_flusher()
+            if state.current_username.strip().lower() == email_clean.lower() and (
+                state.search_mode == MODE_EMAIL
+            ):
+                state.is_searching = False
+                email_progress.is_running = False
+                state.progress_version += 1
+                self._stop_render_flusher()
             logger.warning("Email search rejected: %s", ve)
             self._show_snack(str(ve))
         except Exception as e:
             logger.exception("Email search failed")
-            state.is_searching = False
-            email_progress.is_running = False
-            state.progress_version += 1
-            state.search_error = str(e)
+            if state.current_username.strip().lower() == email_clean.lower() and (
+                state.search_mode == MODE_EMAIL
+            ):
+                state.is_searching = False
+                email_progress.is_running = False
+                state.progress_version += 1
+                state.search_error = str(e)
             msg = (
                 ERR_NETWORK
                 if any(
@@ -1290,9 +1360,10 @@ class AppController:
         """Cancel a running email search (sync — called from UI)."""
         logger.info("CANCEL requested by user (email mode)")
         self._kill_all_activity("user-cancel[email]")
-        if state.search_progress:
-            state.search_progress.is_running = False
-            state.search_progress.is_cancelled = True
+        prog = state.search_progress
+        if prog is not None and getattr(prog, "is_running", False):
+            prog.is_running = False
+            prog.is_cancelled = True
         state.progress_version += 1
         try:
             self.page.update()
@@ -1336,9 +1407,17 @@ class AppController:
 
         query_norm = query.strip().lower()
         current_norm = (state.current_username or "").strip().lower()
-        if state.is_searching and current_norm == query_norm:
-            # Same-target live scan: re-attach, do NOT clobber with a stale
-            # snapshot (mirrors the start_search smart re-attach).
+        # Same-target live scan: re-attach, do NOT clobber with a stale
+        # snapshot (mirrors the start_search smart re-attach). Liveness and
+        # mode are both required — is_searching alone can be stuck True
+        # (that is the 99%-hang bug), and re-attaching across modes for an
+        # identical string would open the wrong engine's results.
+        live = (
+            self._live_username_progress()
+            if mode == MODE_USERNAME
+            else self._live_email_progress()
+        ) and state.search_mode == mode
+        if state.is_searching and live and current_norm == query_norm:
             if self._controller_methods and self._controller_methods.show_results:
                 self._controller_methods.show_results()
             return True

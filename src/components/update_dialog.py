@@ -227,7 +227,7 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
             ],
             spacing=8,
         ),
-        content=ft.Container(content=body, width=380),
+        content=ft.Container(content=body, width=380, height=420),
         actions=actions,
         actions_alignment=ft.MainAxisAlignment.END,
     )

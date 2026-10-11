@@ -15,6 +15,11 @@ from core.format import human_date
 # they belong, not as generic text rows. Everything else is rendered.
 _RESERVED_KEYS = frozenset({"image", "avatar", "photo", "_extractor"})
 
+# A value longer than this is truncated for display (the copy action on the
+# dialog still carries the full text). Bounded so a data-URI or token-shaped
+# bio cannot blow up a card or a dialog layout.
+_MAX_VALUE_LEN = 300
+
 # Keys whose values are dates on most platforms — humanized on display.
 _DATE_HINTS = (
     "date",
@@ -109,17 +114,34 @@ def enrichment_rows(
             if key == "_extractor":
                 source_label = _stringify(value)
             continue
-        low = key.lower()
+        # str() the key: a malformed extractor can emit an int/None key,
+        # and .lower() on that raises — out of ResultCard that blanks the
+        # whole results list.
+        low = str(key).lower()
         is_date = any(h in low for h in _DATE_HINTS)
         for label, text in _flatten(value, _label(key)):
             if is_date:
                 human = human_date(text)
                 if human:
                     text = human
-            rows.append((key, label, text))
+            rows.append((str(key), label, text))
     if source_label:
         rows.append(("_extractor", "Source", source_label))
     return rows
+
+
+def is_link_value(text: str) -> bool:
+    """True when a rendered value is an ordinary http(s) URL."""
+    t = (text or "").strip()
+    return t.startswith(("http://", "https://")) and " " not in t
+
+
+def truncate_value(text: str, limit: int = _MAX_VALUE_LEN) -> str:
+    """Cap a value for display; the caller keeps the full text for copy."""
+    t = text or ""
+    if len(t) <= limit:
+        return t
+    return t[: limit - 1].rstrip() + "…"
 
 
 def enrichment_summary(rows: list, cap: int = 4) -> list:

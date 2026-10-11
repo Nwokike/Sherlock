@@ -206,7 +206,10 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         if not query:
             show_snack(page, "Invalid history entry", bgcolor=AppColors.WARNING)
             return
-        state.search_mode = mode
+        # search_mode is deliberately NOT set here: start_*_search owns it
+        # after its own gates, so a retry that gets blocked (offline/busy)
+        # cannot strand a live scan of the other mode with its ticks
+        # dropped by the cross-mode guard in _apply_progress.
         controller.show_results()
 
         async def _search():
@@ -435,14 +438,10 @@ def HistoryScreen(banner: Control | None = None) -> Control:
             )
             items.append(tile)
 
-        body = ft.ListView(
-            controls=items,
-            spacing=0,
-            expand=True,
-            padding=ft.Padding(
-                tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_MD
-            ),
-        )
+        # Items go straight into the root ListView built below — no nested
+        # ListView (a scrollable inside a scrollable fights for the gesture
+        # and double-buffers).
+        body = ft.Column(controls=items, spacing=0)
 
     header_actions = []
     if history:
@@ -469,12 +468,20 @@ def HistoryScreen(banner: Control | None = None) -> Control:
     if banner:
         header_controls.append(banner)
 
-    return ft.Column(
+    # The ListView is the screen root and owns the scroll. Wrapping it in a
+    # Column (as before) left it unbounded — `expand` is a no-op on Column
+    # children in flet 1.0.4 — so a history longer than one viewport was
+    # clipped and could not be scrolled. Header rides inside the list, the
+    # same shape as the Networks screen.
+    return ft.ListView(
         controls=[
             *header_controls,
-            ft.Container(content=body, expand=True),
+            body,
             pooled_banner_ad("history-1"),
         ],
-        expand=True,
         spacing=0,
+        expand=True,
+        padding=ft.Padding(
+            tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_MD
+        ),
     )

@@ -69,7 +69,11 @@ def test_query_notify_accumulation():
     assert progress.checked_sites == 2
     assert len(progress.not_found) == 1
 
-    # Mock Unknown error result
+    # Mock Unknown error result. `.error` is set explicitly: an unset
+    # attribute on a MagicMock is a child mock, so error_type would
+    # stringify to "<MagicMock id='...'>" and the classifier's digits
+    # decided the badge (id containing "403" -> WAF). Set it to None so
+    # this test is about an unrecognised error, not a random id.
     err_res = MagicMock()
     err_res.site_name = "BlockedSite"
     err_res.site_url_user = "https://blockedsite.com/testuser"
@@ -78,6 +82,7 @@ def test_query_notify_accumulation():
     err_res.context = "WAF challenge"
     err_res.tags = []
     err_res.ids_data = None
+    err_res.error = None
 
     notify.update(err_res)
     assert progress.checked_sites == 3
@@ -157,6 +162,27 @@ class TestErrorClassification:
         assert classify_error("Unknown", ["cf_js_challenge"]) == "bot"
         assert classify_error("Unknown", []) == "error"
         assert classify_error(None, ["tls_fingerprint"]) == ""
+
+    def test_numeric_codes_need_word_boundaries(self):
+        """403/429 must match as codes, never as a digit run inside other text.
+
+        Regression: "403" as a bare substring matched a MagicMock repr whose
+        id contained "403" (<MagicMock id='14023440312'>), so a CI run
+        classified a plain unrecognised failure as a WAF block and the status
+        came out "WAF" instead of "Error". The same lesson email_service
+        already applied with (?:403|429).
+        """
+        from services.sherlock_service import classify_error
+
+        assert classify_error("HTTP 403") == "bot"
+        assert classify_error("403 Forbidden") == "bot"
+        assert classify_error("HTTP 429") == "rate"
+        assert classify_error("429 Too Many Requests") == "rate"
+        # longer digit runs are NOT codes
+        assert classify_error("<MagicMock id='14023440312'>") == "error"
+        assert classify_error("<MagicMock id='9006429'>") == "error"
+        assert classify_error("HTTP 4030") == "error"
+        assert classify_error("site 1403403 unreachable") == "error"
 
 
 class TestNotifyBadgeBridge:

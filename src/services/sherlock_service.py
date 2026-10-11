@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -230,9 +231,14 @@ _RATE_ERROR_TYPE = "Rate limited"
 # Normalized substring fallback for error types outside maigret's exact
 # vocabulary ("HTTP 429", "403 Forbidden", "Cloudflare challenge", ...).
 # Checked AFTER the exact vocabulary above, so known types are unchanged.
-_RATE_SUBSTRINGS = ("429", "rate", "too many")
+# Numeric codes need word boundaries: "403" as a bare substring also
+# matches any longer digit run (a mock repr like <MagicMock id='140234403'>
+# or an unrelated count), which misclassifies ordinary failures as WAF.
+# Mirrors the \\b(?:403|429)\\b pattern email_service already uses.
+_RATE_CODE_RE = re.compile(r"\b429\b")
+_WAF_CODE_RE = re.compile(r"\b403\b")
+_RATE_SUBSTRINGS = ("rate", "too many")
 _WAF_SUBSTRINGS = (
-    "403",
     "cloudflare",
     "captcha",
     "waf",
@@ -273,9 +279,9 @@ def classify_error(error_type: str | None, protection: list[str] | None = None) 
     # Normalized substring fallback — catches "HTTP 429", "429 Too Many
     # Requests", "403 Forbidden", "Cloudflare challenge", "WAF blocked", etc.
     low = et.lower()
-    if any(s in low for s in _RATE_SUBSTRINGS):
+    if _RATE_CODE_RE.search(low) or any(s in low for s in _RATE_SUBSTRINGS):
         return "rate"
-    if any(s in low for s in _WAF_SUBSTRINGS):
+    if _WAF_CODE_RE.search(low) or any(s in low for s in _WAF_SUBSTRINGS):
         return "bot"
     if et:
         return "error"

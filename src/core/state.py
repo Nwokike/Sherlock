@@ -99,6 +99,10 @@ class AppState:
     # Scan separator variants of the handle (john.doe -> john_doe, ...) —
     # multiplies scan length; deliberate opt-in.
     permute_enabled: bool = False
+    # OS-level scan notifications (flet-notifications). OFF by default:
+    # a permission prompt on first scan is a real cost, and the in-app
+    # banner covers the app-foreground case.
+    scan_notifications: bool = False
     extract_info: bool = True
     max_connections: int = 50
     retries: int = 0

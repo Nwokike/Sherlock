@@ -45,6 +45,7 @@ from core.constants import (
     STORAGE_RETRIES,
     STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
+    STORAGE_SCAN_NOTIFICATIONS,
     STORAGE_SEARCH_KEYWORDS,
     STORAGE_THEME,
     STORAGE_TIMEOUT,
@@ -547,6 +548,10 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         state.permute_enabled = val
         spawn(_persist(STORAGE_PERMUTE, "true" if val else "false"))
 
+    def _toggle_scan_notifications(val: bool):
+        state.scan_notifications = bool(val)
+        spawn(_persist(STORAGE_SCAN_NOTIFICATIONS, "true" if val else "false"))
+
     def _toggle_extract_info(val: bool):
         state.extract_info = val
         spawn(_persist(STORAGE_EXTRACT_INFO, "true" if val else "false"))
@@ -674,6 +679,22 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             ft.Switch(
                 value=getattr(state, "permute_enabled", False),
                 on_change=lambda e: _toggle_permute(e.control.value),
+                active_color=ft.Colors.PRIMARY,
+            ),
+            stacked=narrow,
+        ),
+        ft.Divider(
+            height=1,
+            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+        ),
+        _setting_row(
+            ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED,
+            "Scan Notifications",
+            "Post scan progress to the notification shade, with a Cancel "
+            "action — for when you leave the app mid-scan",
+            ft.Switch(
+                value=getattr(state, "scan_notifications", False),
+                on_change=lambda e: _toggle_scan_notifications(e.control.value),
                 active_color=ft.Colors.PRIMARY,
             ),
             stacked=narrow,

@@ -62,6 +62,7 @@ from core.constants import (
     STORAGE_RETRIES,
     STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
+    STORAGE_SCAN_NOTIFICATIONS,
     STORAGE_SEARCH_KEYWORDS,
     STORAGE_SEARCH_MODE,
     STORAGE_SELECTED_SITES,
@@ -77,6 +78,7 @@ from core.theme import AppTheme
 from services.ad_service import AdService
 from services.email_service import EmailResult, EmailSearchProgress, EmailService
 from services.enrich_service import EnrichService
+from services.scan_notify import ScanNotifier
 from services.sherlock_service import SearchProgress, SherlockService, SiteResult
 from services.storage_service import StorageService
 from services.update_service import UpdateService
@@ -101,6 +103,10 @@ class AppController:
         self.page = page
         self.storage: StorageService | None = None
         self.ad_service: AdService | None = None
+        # Built in init() (needs page context); a no-op stand-in until then
+        # so cancel/close paths are safe on a partially-constructed object
+        # (tests build AppController directly).
+        self.scan_notify: ScanNotifier = ScanNotifier(page)
         self.sherlock_service: SherlockService | None = None
         self.email_service: EmailService | None = None
         self.enrich_service: EnrichService | None = None
@@ -211,6 +217,31 @@ class AppController:
         if prog is None or hasattr(prog, "checked_modules"):
             return False  # email progress or nothing at all
         return bool(getattr(prog, "is_running", False))
+
+    def _notify_scan_start(self, target: str, *, is_email: bool) -> None:
+        """Kick off the OS scan notification if the user enabled it."""
+        if not state.scan_notifications:
+            return
+        target = (target or "").strip()
+        if not target:
+            return
+        try:
+            page = self.page
+            page.run_task(self.scan_notify.start)
+            page.run_task(self.scan_notify.request_permission)
+            self.scan_notify.set_handlers(
+                on_cancel=self.cancel_search
+                if not is_email
+                else self.cancel_email_search,
+                on_view=(
+                    self._controller_methods.show_results
+                    if self._controller_methods
+                    else None
+                ),
+            )
+            self.scan_notify.scan_started(target, is_email=is_email)
+        except Exception as exc:
+            logger.warning("ScanNotifier: start failed: %s", exc)
 
     def _abandon_search(self, target: str, progress_obj) -> None:
         """Clear this search's state after a cancellation before the engine
@@ -627,6 +658,10 @@ class AppController:
             if perm_raw is not None:
                 state.permute_enabled = perm_raw == "true"
 
+            notif_raw = await self.storage.get(STORAGE_SCAN_NOTIFICATIONS)
+            if notif_raw is not None:
+                state.scan_notifications = notif_raw == "true"
+
             ext_raw = await self.storage.get(STORAGE_EXTRACT_INFO)
             if ext_raw is not None:
                 state.extract_info = ext_raw == "true"
@@ -745,6 +780,7 @@ class AppController:
             "WATCHDOG: username search START %r (total_sites pending)",
             target_clean,
         )
+        self._notify_scan_start(target_clean, is_email=False)
 
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
@@ -816,10 +852,15 @@ class AppController:
                 state.is_searching = False
                 username_progress.is_running = False
                 state.progress_version += 1
+                self.scan_notify.scan_cancelled()
                 self._stop_render_flusher()
                 return
 
             state.is_searching = False
+            if state.scan_notifications:
+                self.scan_notify.scan_finished(
+                    len(result.found), result.total_sites or result.checked_sites
+                )
             merged_results: dict = {}
 
             def _merge_result(r) -> None:
@@ -1090,6 +1131,17 @@ class AppController:
             return
         state.search_progress = progress
 
+        # Mirror the tick into the OS notification (same 2Hz budget as the
+        # render flusher — one call per flush, not per raw worker tick).
+        if state.scan_notifications and state.is_searching:
+            checked = getattr(progress, "checked_sites", None)
+            if checked is None:
+                checked = getattr(progress, "checked_modules", 0) or 0
+            total = getattr(progress, "total_sites", None)
+            if not total:
+                total = getattr(progress, "total_modules", 0) or 0
+            self.scan_notify.progress(checked, total)
+
         # Stream newly discovered found URLs into the enrichment queue
         if (
             self.enrich_service
@@ -1123,6 +1175,7 @@ class AppController:
         """Cancel a running search (sync — called from UI)."""
         logger.info("CANCEL requested by user (username mode)")
         self._kill_all_activity("user-cancel[username]")
+        self.scan_notify.scan_cancelled()
         prog = state.search_progress
         if prog is not None and getattr(prog, "is_running", False):
             # Only mark a LIVE scan: a cancel landing after completion
@@ -1189,6 +1242,7 @@ class AppController:
         state.search_progress = email_progress
         state.progress_version += 1
         logger.info("WATCHDOG: email search START %r", email_clean)
+        self._notify_scan_start(email_clean, is_email=True)
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:
@@ -1220,6 +1274,7 @@ class AppController:
                 state.is_searching = False
                 email_progress.is_running = False
                 state.progress_version += 1
+                self.scan_notify.scan_cancelled()
                 self._stop_render_flusher()
                 return
 
@@ -1231,6 +1286,10 @@ class AppController:
                 result.total_modules,
                 len(result.found),
             )
+            if state.scan_notifications:
+                self.scan_notify.scan_finished(
+                    len(result.found), result.total_modules or result.checked_modules
+                )
             self._last_scan_summary = ("email", email_clean, len(result.found))
 
             # Convert to result list for state
@@ -1360,6 +1419,7 @@ class AppController:
         """Cancel a running email search (sync — called from UI)."""
         logger.info("CANCEL requested by user (email mode)")
         self._kill_all_activity("user-cancel[email]")
+        self.scan_notify.scan_cancelled()
         prog = state.search_progress
         if prog is not None and getattr(prog, "is_running", False):
             prog.is_running = False
@@ -1876,6 +1936,9 @@ async def main(page: ft.Page) -> None:
         with contextlib.suppress(Exception):
             if controller.ad_service:
                 await controller.ad_service.close()
+        # A live scan's shade notification must not outlive the app.
+        with contextlib.suppress(Exception):
+            controller.scan_notify.shutdown()
         # Pooled httpx client — logs its own failures at WARNING
         # (no suppression inside close_client).
         from services.http_client import close_client

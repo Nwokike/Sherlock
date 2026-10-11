@@ -461,6 +461,18 @@ wheels = [
 ]
 
 [[package]]
+name = "flet-notifications"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flet" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cc/87/35ed7831e9598ca1bf1eeae59cd601db1231d58cf7ce47bdc4a59a5b9c38/flet_notifications-0.1.4.tar.gz", hash = "sha256:627b7920e0ab16da2de4f8846051810175638e493db57caa31ff5add1372e0a1", size = 52343, upload-time = "2026-10-11T18:44:40.36Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/d7/f65c0a1abf0c413a0d99339ee099540ee8272ca17a0fb65ee887c1a3b128/flet_notifications-0.1.4-py3-none-any.whl", hash = "sha256:2166ccbfdb05859eebbc3f2c988cae5cf552fd120e877b7ce28e5877aeebae22", size = 43920, upload-time = "2026-10-11T18:44:39.144Z" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1455,6 +1467,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "flet" },
     { name = "flet-ads" },
+    { name = "flet-notifications" },
     { name = "holehe-v2" },
     { name = "httpx", extra = ["http2", "socks"] },
     { name = "maigret" },
@@ -1472,6 +1485,7 @@ dev = [
 requires-dist = [
     { name = "flet", specifier = ">=1.0.4" },
     { name = "flet-ads", specifier = ">=1.0.4" },
+    { name = "flet-notifications", specifier = ">=0.1.4" },
     { name = "holehe-v2", specifier = ">=1.0.3" },
     { name = "httpx", extras = ["http2", "socks"], specifier = ">=0.28.1" },
     { name = "maigret", specifier = ">=0.6.6" },

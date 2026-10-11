@@ -166,6 +166,26 @@ jobs:
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: uv run flet build apk --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+      # flutter_local_notifications (via flet-notifications) needs Gradle core-library
+      # desugaring + multiDex, which pyproject cannot express. The package ships a
+      # console script for exactly this; build.gradle accepts the patched file, so
+      # the APK from `flet build` is superseded by the gradle rebuild.
+      - name: Patch the generated Android project (notifications)
+        run: uv run flet-notifications-patch --project-root build/flutter
+      - name: Rebuild APK with gradle
+        working-directory: build/flutter/android
+        env:
+          SERIOUS_PYTHON_SITE_PACKAGES: ${{ github.workspace }}/build/site-packages
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease -Psplit-per-abi=true
+      - name: Stage APKs
+        run: |
+          rm -rf build/apk && mkdir -p build/apk
+          find build/flutter -name "*.apk" -not -path "*/intermediates/*" -exec cp {} build/apk/ \;
+          ls -lh build/apk/
       - name: Size report + prune verification
         if: always()
         run: |
@@ -213,6 +233,18 @@ jobs:
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: uv run flet build aab --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+      # Same Gradle desugaring requirement as the APK job (flet-notifications).
+      - name: Patch the generated Android project (notifications)
+        run: uv run flet-notifications-patch --project-root build/flutter
+      - name: Rebuild AAB with gradle
+        working-directory: build/flutter/android
+        env:
+          SERIOUS_PYTHON_SITE_PACKAGES: ${{ github.workspace }}/build/site-packages
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
       - name: Size report
         if: always()
         run: ls -l build/aab/*.aab

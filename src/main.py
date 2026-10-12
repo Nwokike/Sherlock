@@ -2013,4 +2013,13 @@ async def main(page: ft.Page) -> None:
 
 
 if __name__ == "__main__":
-    ft.run(main, assets_dir="src/assets")
+    # Resolve against THIS file's directory, not the working directory.
+    # `ft.run` joins a relative assets_dir onto the CWD
+    # (.venv/flet/app.py:__get_assets_dir_path, relative_to_cwd=True), and the
+    # `flet run` CLI joins `--assets` onto the script dir and then exports it as
+    # FLET_ASSETS_DIR (.venv/flet_cli/commands/run.py:resolve_assets_dir) — so a
+    # literal "src/assets" here becomes <root>/src/src/assets under the CLI and
+    # warns "assets_dir does not exist". Deriving it from __file__ means the
+    # same value works whether launched directly, through the CLI, or built.
+    _here = Path(__file__).resolve().parent
+    ft.run(main, assets_dir=str(_here / "assets"))

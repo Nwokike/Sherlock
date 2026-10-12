@@ -76,6 +76,21 @@ def _relative_time(raw) -> str:
     return raw
 
 
+def _infer_mode(entry, query: str) -> str:
+    """Which engine a stored entry belongs to.
+
+    Trusts a stored `mode`; only falls back to the email validator for
+    legacy entries that predate the field. `"@" in query` is not enough —
+    it classifies `a@b` and `foo@bar` as email when they are not.
+    """
+    mode = entry.get("mode") if isinstance(entry, dict) else None
+    if mode in (MODE_EMAIL, MODE_USERNAME):
+        return mode
+    from services.email_service import validate_email
+
+    return MODE_EMAIL if validate_email((query or "").strip()) else MODE_USERNAME
+
+
 @ft.component
 def HistoryScreen(banner: Control | None = None) -> Control:
     state = ft.use_context(AppStateCtx)
@@ -177,7 +192,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
     def _on_open_history(entry: dict):
         query = entry.get("query") or entry.get("username", "")
-        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
+        mode = _infer_mode(entry, query)
         if not query:
             return
         if controller.open_cached_result and controller.open_cached_result(query, mode):
@@ -186,7 +201,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
     def _on_re_search(entry: dict):
         query = entry.get("query") or entry.get("username", "")
-        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
+        mode = _infer_mode(entry, query)
         if not query:
             return
         # search_mode is deliberately NOT set here: start_*_search owns it
@@ -242,7 +257,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         # started (fresh load vs in-app searches).
         for entry in history:
             query = entry.get("query") or entry.get("username", "")
-            mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
+            mode = _infer_mode(entry, query)
             found = entry.get("found", 0)
             total = entry.get("total", 0)
             ts = _relative_time(entry.get("timestamp", ""))
@@ -397,7 +412,13 @@ def HistoryScreen(banner: Control | None = None) -> Control:
 
                 return _on_dismiss
 
+            # ValueKey (not base Key): base Key has `_type=None` and is not in
+            # flet's KeyValue union, so Flutter gets no key kind. Identity
+            # carries found/total because `query-timestamp` alone collides at
+            # the writer's minute precision — two scans of the same handle
+            # inside one minute would otherwise reconcile to the same tile.
             tile = ft.Dismissible(
+                key=ft.ValueKey(f"{query}|{entry.get('mode')}|{ts}|{found}/{total}"),
                 content=inner_tile,
                 background=dismiss_bg,
                 dismiss_direction=ft.DismissDirection.END_TO_START,

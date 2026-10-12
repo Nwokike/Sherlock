@@ -317,3 +317,87 @@ def test_sites_banners_every_ten_rows():
     gaps = [positions[i + 1] - positions[i] - 1 for i in range(len(positions) - 1)]
     assert gaps and all(g == 10 for g in gaps), (positions, gaps)
     assert len(positions) <= 15
+
+
+# ── 4. Shell re-mounts the whole screen on every progress tick ───────────
+
+
+def _expand(node, out):
+    """Depth-first walk of a rendered component tree (component harness)."""
+    from flet.components.component import Component
+
+    out.append(node)
+    if isinstance(node, Component):
+        node.before_update()
+        b = getattr(node, "_b", None)
+        if b is not None:
+            _expand(b, out)
+    elif isinstance(node, list):
+        for item in node:
+            _expand(item, out)
+    else:
+        for ch in getattr(node, "controls", None) or []:
+            _expand(ch, out)
+        content = getattr(node, "content", None)
+        if content is not None and not isinstance(content, str):
+            _expand(content, out)
+
+
+def test_shell_does_not_remount_screen_on_progress_ticks():
+    """An unrelated AppState write must not rebuild the active screen.
+
+    `use_context(AppStateCtx)` subscribes the shell to the WHOLE observable
+    (`Observable.__on_change` fires on any field, and does not say which),
+    while the render body constructs the active screen from scratch. With
+    `progress_version` written 18x per scan tick in main.py, that is dozens of
+    full re-mounts per second — the multi-minute freeze the owner measured
+    (79s between two tab navigations in their log). Screen construction is
+    memoized on the branch, so the shell re-renders cheaply and each screen
+    keeps its own subscription for the fields it actually shows.
+    """
+    from flet.components.component import Renderer
+
+    import app_shell
+    import screens.home_screen as home_mod
+    from core.state import state
+    from state.app_state import AppStateCtx
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    state.sites_cache = [f"Site{i:05d}" for i in range(5178)]
+    state.sites_total = 5178
+    state.selected_sites = []
+    state.sites_version += 1
+    state.has_accepted_terms = True
+    state.is_first_launch = False
+
+    builds = {"home": 0}
+    real_home = home_mod.HomeScreen
+
+    def counting_home(*a, **k):
+        builds["home"] += 1
+        return real_home(*a, **k)
+
+    home_mod.HomeScreen = counting_home
+    try:
+        methods = ControllerMethods()
+        renderer = Renderer()
+        root = renderer.render(
+            lambda: ControllerMethodsCtx(
+                methods, lambda: AppStateCtx(state, app_shell.AppShell)
+            )
+        )
+        nodes = []
+        _expand(root, nodes)
+        assert builds["home"] == 1, "screen should be built exactly once"
+
+        # Simulate the scan-tick writes the owner was living through.
+        for _ in range(20):
+            state.progress_version = state.progress_version + 1
+        _expand(root, nodes)
+
+        assert builds["home"] == 1, (
+            f"screen rebuilt on unrelated state writes "
+            f"(built {builds['home']} times) — this is the freeze"
+        )
+    finally:
+        home_mod.HomeScreen = real_home

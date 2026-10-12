@@ -12,7 +12,6 @@ import unicodedata
 import flet as ft
 from flet import Control
 
-from components.active_scan_banner import ActiveScanBanner
 from core.tasks import spawn
 from core.theme import AppColors
 from state.app_state import AppStateCtx
@@ -129,11 +128,6 @@ def _email_export_bytes(format_type: str, app_state) -> bytes | None:
         f"{r.get('name', '?')} ({r.get('domain', '')}): {_status_of(r)}" for r in rows
     ]
     return ("\n".join(lines) + "\n").encode("utf-8")
-
-
-def _dashboard_scaffold(body: Control) -> Control:
-    """Build the dashboard body container."""
-    return ft.Container(content=body, expand=True)
 
 
 def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
@@ -1167,61 +1161,55 @@ def AppShell() -> Control:
     from screens.settings_screen import SettingsScreen
     from screens.sites_screen import SitesScreen
 
-    if _should_show_onboarding(state):
-        screen = OnboardingScreen()
-    elif active_view == "results":
-        screen = ResultsScreen()
-    elif active_view == "sites":
-        screen = SitesScreen()
-    else:
-        active_banner = None
-        if state.is_searching and state.current_username:
-            from core.constants import MODE_EMAIL, MODE_USERNAME
-            from services.email_service import EmailSearchProgress
+    # The branch is a pure function of these two local values plus the one-time
+    # onboarding flags. Nothing else in AppState may decide which screen is
+    # mounted.
+    onboarding = _should_show_onboarding(state)
+    branch = (
+        "onboarding"
+        if onboarding
+        else (
+            "results"
+            if active_view == "results"
+            else ("sites" if active_view == "sites" else "dashboard")
+        )
+    )
 
-            prog = state.search_progress
-            # Explicit per-mode counters — the old `a or b` fallback leaked
-            # the other mode's counter when the live one was legitimately 0
-            # at scan start.
-            if isinstance(prog, EmailSearchProgress):
-                checked = prog.checked_modules
-                total = prog.total_modules
-                active_scan_mode = MODE_EMAIL
-            else:
-                checked = getattr(prog, "checked_sites", 0) or 0
-                total = getattr(prog, "total_sites", 0) or 0
-                active_scan_mode = MODE_USERNAME
-
-            def _view_active_scan(mode=active_scan_mode):
-                state.search_mode = mode
-                controller.show_results()
-
-            # Phase-aware banner (owner report): during the recursive tail
-            # the ACTIVE target differs from the query that started the
-            # scan; when counts are full but the engine hasn't returned
-            # (final drains/follow-ups), say so honestly.
-            banner_target = state.current_username
-            prog_user = getattr(prog, "username", None)
-            if prog_user and prog_user != state.current_username:
-                banner_target = f"{prog_user} · follow-up"
-            finishing = bool(total and checked >= total)
-
-            active_banner = ActiveScanBanner(
-                target_query=banner_target,
-                search_mode=active_scan_mode,
-                checked=checked,
-                total=total,
-                finishing=finishing,
-                on_tap=_view_active_scan,
+    # Screen construction is memoized on the branch ONLY.
+    #
+    # `use_context(AppStateCtx)` subscribes this component to the whole
+    # observable — `Observable.__on_change` fires on any field change and does
+    # not say which one (.venv/flet/components/observable.py:82-92). So the
+    # shell re-renders on every write, and this render body used to construct
+    # the active screen from scratch each time: 20 setting cards, or 5,178
+    # network rows. With `progress_version` written 18x per scan tick in
+    # main.py, that is dozens of full re-mounts per second — the multi-minute
+    # freeze. The screens each hold their own AppStateCtx subscription, so
+    # they re-render themselves when their fields change; the shell does not
+    # need to, and must not.
+    screen = ft.use_memo(
+        lambda: (
+            OnboardingScreen()
+            if branch == "onboarding"
+            else (
+                ResultsScreen()
+                if branch == "results"
+                else (
+                    SitesScreen()
+                    if branch == "sites"
+                    else (
+                        HomeScreen(banner=None)
+                        if active_tab == 0
+                        else (
+                            HistoryScreen(banner=None)
+                            if active_tab == 1
+                            else SettingsScreen(banner=None)
+                        )
+                    )
+                )
             )
-
-        if active_tab == 0:
-            tab_body = HomeScreen(banner=active_banner)
-        elif active_tab == 1:
-            tab_body = HistoryScreen(banner=active_banner)
-        else:
-            tab_body = SettingsScreen(banner=active_banner)
-
-        screen = _dashboard_scaffold(body=tab_body)
+        ),
+        [branch, active_tab],
+    )
 
     return ft.SafeArea(content=screen, expand=True)

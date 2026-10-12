@@ -256,7 +256,14 @@ def test_sites_screen_list_owns_the_scroll():
 
 
 def list_item_is_a_site_row(control) -> bool:
-    """A site row is a height-56 Container with a Checkbox inside."""
+    """A site row is a height-56 Container with a Checkbox inside.
+
+    Rows are `SiteRow` components, so a list child may be the Component
+    wrapper rather than the built Container — accept either.
+    """
+    if type(control).__name__ == "Component":
+        fn = getattr(control, "fn", None)
+        return getattr(fn, "__name__", "") == "SiteRow"
     if type(control).__name__ != "Container":
         return False
     return getattr(control, "height", None) == 56.0

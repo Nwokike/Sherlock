@@ -80,6 +80,61 @@ _BANNER_MAX = 15
 
 
 @ft.component
+def SiteRow(name: str, checked: bool, on_toggle):
+    """One network row, isolated so a toggle re-renders one row.
+
+    Extracted because the row loop used to live in the parent: every checkbox
+    tap rebuilt ~5,200 Containers, which is the dominant cost on a
+    low-end Android. Local state here means the parent's `checked_states`
+    write only re-renders this component.
+    """
+    return ft.Container(
+        content=ft.Row(
+            controls=[
+                ft.Checkbox(
+                    key=ft.ValueKey(name),
+                    # A selectable Text label so a network name can be
+                    # long-pressed and copied (flet controls/core/text.py:309
+                    # — bare ft.Text is not selectable).
+                    label=ft.Text(
+                        name,
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.W_500,
+                        selectable=True,
+                        no_wrap=True,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    value=checked,
+                    # Checkbox owns a clickable label
+                    # (flet/controls/material/checkbox.py:36), so this is the
+                    # only handler for the row — no double-fire guard needed.
+                    on_change=lambda e: on_toggle(name),
+                    fill_color={
+                        ft.ControlState.HOVERED: ft.Colors.PRIMARY,
+                        ft.ControlState.FOCUSED: ft.Colors.PRIMARY,
+                        ft.ControlState.DEFAULT: ft.Colors.PRIMARY,
+                    },
+                ),
+            ],
+            spacing=tokens.SPACE_MD,
+        ),
+        padding=ft.Padding(
+            left=tokens.SPACE_MD,
+            right=tokens.SPACE_XL,
+            top=tokens.SPACE_SM,
+            bottom=tokens.SPACE_SM,
+        ),
+        height=_ROW_HEIGHT,
+        border=ft.Border.only(
+            bottom=ft.BorderSide(
+                width=0.5,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            )
+        ),
+    )
+
+
+@ft.component
 def SitesSearchBar(initial: str, on_debounced):
     """Search field isolated so keystrokes don't rebuild the 5,200-row list.
 
@@ -372,58 +427,12 @@ def SitesScreen() -> Control:
 
     live_cats, live_countries = ft.use_memo(_compute_chips, [state.sites_version])
 
-    # Build filtered list. `Checkbox(label=` is the only tap target, so
-    # there is exactly one handler per row — the previous Container.on_click
-    # + Checkbox.on_change pair needed a guard ref, and that guard ate the
-    # user's next legitimate row tap whenever a checkbox was toggled without
-    # a following click (keyboard, or a tap landing only on the box).
-    # The label is a selectable Text so a network name can be long-pressed
-    # and copied (flet/controls/core/text.py:309) — bare ft.Text is not.
-    items = []
-    for name in filtered_names:
-        is_checked = checked_states.get(name, False)
-        items.append(
-            ft.Container(
-                content=ft.Row(
-                    controls=[
-                        ft.Checkbox(
-                            key=ft.ValueKey(name),
-                            label=ft.Text(
-                                name,
-                                size=tokens.FONT_MD,
-                                weight=ft.FontWeight.W_500,
-                                selectable=True,
-                                no_wrap=True,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                            ),
-                            value=is_checked,
-                            on_change=lambda e, n=name: _on_checkbox_change(n),
-                            fill_color={
-                                ft.ControlState.HOVERED: ft.Colors.PRIMARY,
-                                ft.ControlState.FOCUSED: ft.Colors.PRIMARY,
-                                ft.ControlState.DEFAULT: ft.Colors.PRIMARY,
-                            },
-                        ),
-                    ],
-                    spacing=tokens.SPACE_MD,
-                ),
-                padding=ft.Padding(
-                    left=tokens.SPACE_MD,
-                    right=tokens.SPACE_XL,
-                    top=tokens.SPACE_SM,
-                    bottom=tokens.SPACE_SM,
-                ),
-                height=_ROW_HEIGHT,
-                border=ft.Border.only(
-                    bottom=ft.BorderSide(
-                        width=0.5,
-                        color=ft.Colors.with_opacity(
-                            tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE
-                        ),
-                    )
-                ),
-            )
-        )
+    # Rows are SiteRow components now: a toggle re-renders one row instead
+    # of inflating ~5,200 Containers in the parent.
+    items = [
+        SiteRow(name, checked_states.get(name, False), _on_checkbox_change)
+        for name in filtered_names
+    ]
 
     def _country_chip_label(code: str) -> str:
         """'gb' -> '🇬🇧 GB'; falls back to the bare code."""
@@ -658,6 +667,16 @@ def SitesScreen() -> Control:
     # Banner every _BANNER_EVERY rows (cap _BANNER_MAX), drawn from the shared
     # pool so no render ever re-requests an ad. Slot keys are per-ad so each
     # position keeps its own instance.
+    #
+    # `item_extent` is deliberately NOT set: it tells the ListView every item
+    # is exactly 56px (list_view.py:60-66), but the header block and the
+    # banners are other heights, so the virtualized offsets drift — jumpy
+    # scroll, blank gaps, misaligned rows. `build_controls_on_demand` alone
+    # still builds lazily and measures, which is correct for the mixed run;
+    # a header split so `item_extent` is safe would need a device check on
+    # whether a ListView expands inside this screen's SafeArea mount.
+    # `cache_extent` is pixels (list_view.py:108-125) — 500 was ~9 rows and
+    # flashed blanks on a fast fling.
     controls: list = list(header_block)
     placed = 0
     for i, row in enumerate(items):
@@ -676,8 +695,7 @@ def SitesScreen() -> Control:
         spacing=0,
         expand=True,
         build_controls_on_demand=True,
-        item_extent=_ROW_HEIGHT,
-        cache_extent=500,
+        cache_extent=2000,
         key=ft.ValueKey("sites-networks-root"),
     )
     return _root_list.current

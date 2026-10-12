@@ -5,68 +5,23 @@
 
 from __future__ import annotations
 
-import datetime
+import asyncio
 import logging
 
 import flet as ft
 from flet import Control
 
 from components.app_header import AppHeader
-from components.banner_ad import pooled_banner_ad
+from components.banner_ad import build_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
 from core.constants import MODE_EMAIL, MODE_USERNAME, STORAGE_HISTORY
 from core.notify import show_snack
-from core.tasks import spawn
 from core.theme import AppColors
 from state.app_state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
 logger = logging.getLogger("HistoryScreen")
-
-_TIMESTAMP_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
-
-
-def _relative_time(ts: object) -> str:
-    """Render a stored history timestamp as '5m ago / 3h ago / 2d ago'.
-
-    Parses what `_save_to_history` (main.py) writes ("%Y-%m-%d %H:%M")
-    plus seconds/T-separator/ISO variants. Returns the raw string
-    unchanged when parsing fails or the entry is >= 30 days old (the
-    full date stays more informative than "45d ago").
-    """
-    if not isinstance(ts, str) or not ts.strip():
-        return str(ts) if ts else ""
-    raw = ts.strip()
-    parsed: datetime.datetime | None = None
-    for fmt in _TIMESTAMP_FORMATS:
-        try:
-            # Naive-local to match the writer (strftime has no tz).
-            parsed = datetime.datetime.strptime(raw, fmt)  # noqa: DTZ007, RUF100
-            break
-        except ValueError:
-            continue
-    if parsed is None:
-        try:
-            parsed = datetime.datetime.fromisoformat(raw)
-        except ValueError:
-            return raw
-    if parsed.tzinfo is not None:
-        parsed = parsed.replace(tzinfo=None)
-    delta = datetime.datetime.now() - parsed  # noqa: DTZ005, RUF100
-    secs = delta.total_seconds()
-    if secs < 0:  # clock skew / future stamp — show stored value
-        return raw if secs < -60 else "just now"
-    if secs < 60:
-        return "just now"
-    if secs < 3600:
-        return f"{int(secs // 60)}m ago"
-    if secs < 86400:
-        return f"{int(secs // 3600)}h ago"
-    days = int(secs // 86400)
-    if days < 30:
-        return f"{days}d ago"
-    return raw
 
 
 @ft.component
@@ -80,13 +35,6 @@ def HistoryScreen(banner: Control | None = None) -> Control:
     except Exception:
         page = None
     history = state.history if state.history else []
-
-    def _infer_mode(entry: dict, query: str) -> str:
-        if entry.get("mode"):
-            return entry["mode"]
-        from services.email_service import validate_email
-
-        return MODE_EMAIL if validate_email(query.strip()) else MODE_USERNAME
 
     # Hydrate history on mount if empty
     def _hydrate():
@@ -104,36 +52,19 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                     if entries:
                         state.history.clear()
                         state.history.extend(entries)
-                        state.progress_version += 1
                 except Exception:
                     pass
 
-        spawn(_fetch())
-
-    def _clear_unseen():
-        # Opening History consumes the badge (the entries are now visible).
-        if getattr(state, "history_unseen", 0):
-            state.history_unseen = 0
+        asyncio.create_task(_fetch())
 
     ft.use_effect(_hydrate, [])
-    ft.use_effect(_clear_unseen, [])
-
-    # Portal-managed clear-confirm dialog (flet 1.0 use_dialog, P1-2).
-    pending_dialog, set_pending_dialog = ft.use_state(None)
-    try:
-        # use_dialog touches ft.context.page, which raises outside a live
-        # flet app (unit-test harness). The hook is still invoked every
-        # render so hook ordering stays stable; in-app there is no throw.
-        ft.use_dialog(pending_dialog)
-    except RuntimeError:
-        pass
 
     def _on_clear_all():
         if not page:
             return
 
         def _confirm_clear(e):
-            set_pending_dialog(None)
+            page.pop_dialog()
 
             async def _clear():
                 try:
@@ -145,10 +76,9 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                 except Exception:
                     pass
                 state.history.clear()
-                state.progress_version += 1
                 show_snack(page, "Search history cleared", bgcolor=AppColors.SUCCESS)
 
-            spawn(_clear())
+            asyncio.create_task(_clear())
 
         dlg = ft.AlertDialog(
             modal=False,
@@ -173,7 +103,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                 size=tokens.FONT_SM,
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: set_pending_dialog(None)),
+                ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
                 ft.FilledButton(
                     "Clear All",
                     style=ft.ButtonStyle(
@@ -184,32 +114,23 @@ def HistoryScreen(banner: Control | None = None) -> Control:
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        set_pending_dialog(dlg)
+        page.show_dialog(dlg)
 
     def _on_open_history(entry: dict):
-        if not isinstance(entry, dict):
-            return
         query = entry.get("query") or entry.get("username", "")
-        mode = _infer_mode(entry, query)
+        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
         if not query:
-            show_snack(page, "Invalid history entry", bgcolor=AppColors.WARNING)
             return
         if controller.open_cached_result and controller.open_cached_result(query, mode):
             return
         _on_re_search(entry)
 
     def _on_re_search(entry: dict):
-        if not isinstance(entry, dict):
-            return
         query = entry.get("query") or entry.get("username", "")
-        mode = _infer_mode(entry, query)
+        mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
         if not query:
-            show_snack(page, "Invalid history entry", bgcolor=AppColors.WARNING)
             return
-        # search_mode is deliberately NOT set here: start_*_search owns it
-        # after its own gates, so a retry that gets blocked (offline/busy)
-        # cannot strand a live scan of the other mode with its ticks
-        # dropped by the cross-mode guard in _apply_progress.
+        state.search_mode = mode
         controller.show_results()
 
         async def _search():
@@ -218,7 +139,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
             else:
                 await controller.start_search(query)
 
-        spawn(_search())
+        asyncio.create_task(_search())
 
     if not history:
         body = EmptyState(
@@ -232,19 +153,11 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         # recent search sits on top regardless of how this session was
         # started (fresh load vs in-app searches).
         for entry in history:
-            if not isinstance(entry, dict):
-                continue
             query = entry.get("query") or entry.get("username", "")
-            mode = _infer_mode(entry, query)
-            try:
-                found = int(entry.get("found", 0) or 0)
-            except TypeError, ValueError:
-                found = 0
-            try:
-                total = int(entry.get("total", 0) or 0)
-            except TypeError, ValueError:
-                total = 0
-            ts = _relative_time(entry.get("timestamp", ""))
+            mode = entry.get("mode") or (MODE_EMAIL if "@" in query else MODE_USERNAME)
+            found = entry.get("found", 0)
+            total = entry.get("total", 0)
+            ts = entry.get("timestamp", "")
             is_email = mode == MODE_EMAIL
 
             dismiss_bg = ft.Container(
@@ -284,8 +197,6 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                                     query,
                                     size=tokens.FONT_LG,
                                     weight=ft.FontWeight.W_600,
-                                    max_lines=1,
-                                    overflow=ft.TextOverflow.ELLIPSIS,
                                 ),
                                 ft.Row(
                                     controls=[
@@ -373,75 +284,39 @@ def HistoryScreen(banner: Control | None = None) -> Control:
             def _make_dismiss(ent=entry):
                 def _on_dismiss(e):
                     try:
-                        idx = list(state.history).index(ent)
-                    except ValueError:
-                        return
-                    state.history.remove(ent)
-                    state.progress_version += 1
+                        state.history.remove(ent)
+                        import asyncio as _asyncio
+                        from services.storage_service import StorageService
+                        from flet import context
 
-                    async def _persist_delete():
-                        try:
-                            from services.storage_service import (
-                                StorageService,
-                                encode_history_entries,
-                            )
+                        s = StorageService(context.page)
+                        all_entries = list(reversed(state.history))
+                        import json as _json
 
-                            s = StorageService(page)
-                            remaining = list(reversed(state.history))
-                            await s.set(
-                                STORAGE_HISTORY, encode_history_entries(remaining)
-                            )
-                            await s.flush()
-                        except Exception:
-                            pass
-
-                    spawn(_persist_delete())
-                    if page:
-                        show_snack(
-                            page,
-                            "Entry deleted",
-                            action_label="Undo",
-                            on_action=lambda e: _undo_delete(ent, idx),
+                        _asyncio.create_task(
+                            s.set("sherlock_history", _json.dumps(all_entries))
                         )
-
-                return _on_dismiss
-
-            def _undo_delete(ent, idx):
-                state.history.insert(min(idx, len(state.history)), ent)
-                state.progress_version += 1
-
-                async def _persist_undo():
-                    try:
-                        from services.storage_service import (
-                            StorageService,
-                            encode_history_entries,
-                        )
-
-                        s = StorageService(page)
-                        await s.set(
-                            STORAGE_HISTORY,
-                            encode_history_entries(list(reversed(state.history))),
-                        )
-                        await s.flush()
                     except Exception:
                         pass
 
-                spawn(_persist_undo())
+                return _on_dismiss
 
             tile = ft.Dismissible(
-                key=ft.Key(f"{entry.get('query', '')}-{entry.get('timestamp', '')}"),
                 content=inner_tile,
                 background=dismiss_bg,
-                secondary_background=dismiss_bg,
                 dismiss_direction=ft.DismissDirection.END_TO_START,
                 on_dismiss=_make_dismiss(),
             )
             items.append(tile)
 
-        # Items go straight into the root ListView built below — no nested
-        # ListView (a scrollable inside a scrollable fights for the gesture
-        # and double-buffers).
-        body = ft.Column(controls=items, spacing=0)
+        body = ft.ListView(
+            controls=items,
+            spacing=0,
+            expand=True,
+            padding=ft.Padding(
+                tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_MD
+            ),
+        )
 
     header_actions = []
     if history:
@@ -468,20 +343,12 @@ def HistoryScreen(banner: Control | None = None) -> Control:
     if banner:
         header_controls.append(banner)
 
-    # The ListView is the screen root and owns the scroll. Wrapping it in a
-    # Column (as before) left it unbounded — `expand` is a no-op on Column
-    # children in flet 1.0.4 — so a history longer than one viewport was
-    # clipped and could not be scrolled. Header rides inside the list, the
-    # same shape as the Networks screen.
-    return ft.ListView(
+    return ft.Column(
         controls=[
             *header_controls,
-            body,
-            pooled_banner_ad("history-1"),
+            ft.Container(content=body, expand=True),
+            build_banner_ad(),
         ],
-        spacing=0,
         expand=True,
-        padding=ft.Padding(
-            tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_MD
-        ),
+        spacing=0,
     )

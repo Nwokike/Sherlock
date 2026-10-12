@@ -62,7 +62,6 @@ from core.constants import (
     STORAGE_RETRIES,
     STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
-    STORAGE_SCAN_NOTIFICATIONS,
     STORAGE_SEARCH_KEYWORDS,
     STORAGE_SEARCH_MODE,
     STORAGE_SELECTED_SITES,
@@ -231,8 +230,6 @@ class AppController:
         A declined permission never blocks the scan: the user gets one snack
         offering the OS settings page instead.
         """
-        if not state.scan_notifications:
-            return False
         target = (target or "").strip()
         if not target:
             return False
@@ -697,10 +694,6 @@ class AppController:
             if perm_raw is not None:
                 state.permute_enabled = perm_raw == "true"
 
-            notif_raw = await self.storage.get(STORAGE_SCAN_NOTIFICATIONS)
-            if notif_raw is not None:
-                state.scan_notifications = notif_raw == "true"
-
             ext_raw = await self.storage.get(STORAGE_EXTRACT_INFO)
             if ext_raw is not None:
                 state.extract_info = ext_raw == "true"
@@ -822,8 +815,7 @@ class AppController:
         # Awaited (not run_task): the service and the POST_NOTIFICATIONS
         # request are coroutines that must land before the first show(),
         # or the first notification of the session is silently dropped.
-        if not state.scan_notifications:
-            await self._ensure_notifications_ready(target_clean, is_email=False)
+        await self._ensure_notifications_ready(target_clean, is_email=False)
 
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
@@ -900,10 +892,9 @@ class AppController:
                 return
 
             state.is_searching = False
-            if state.scan_notifications:
-                self.scan_notify.scan_finished(
-                    len(result.found), result.total_sites or result.checked_sites
-                )
+            self.scan_notify.scan_finished(
+                len(result.found), result.total_sites or result.checked_sites
+            )
             merged_results: dict = {}
 
             def _merge_result(r) -> None:
@@ -1175,8 +1166,9 @@ class AppController:
         state.search_progress = progress
 
         # Mirror the tick into the OS notification (same 2Hz budget as the
-        # render flusher — one call per flush, not per raw worker tick).
-        if state.scan_notifications and state.is_searching:
+        # Mirrors scan progress into the OS notification (the shade owns the
+        # live progress now), at the same 2Hz budget as the render flusher.
+        if state.is_searching:
             checked = getattr(progress, "checked_sites", None)
             if checked is None:
                 checked = getattr(progress, "checked_modules", 0) or 0
@@ -1286,8 +1278,7 @@ class AppController:
         state.progress_version += 1
         logger.info("WATCHDOG: email search START %r", email_clean)
         # Awaited, for the same reason as the username path above.
-        if not state.scan_notifications:
-            await self._ensure_notifications_ready(email_clean, is_email=True)
+        await self._ensure_notifications_ready(email_clean, is_email=True)
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:
@@ -1331,10 +1322,9 @@ class AppController:
                 result.total_modules,
                 len(result.found),
             )
-            if state.scan_notifications:
-                self.scan_notify.scan_finished(
-                    len(result.found), result.total_modules or result.checked_modules
-                )
+            self.scan_notify.scan_finished(
+                len(result.found), result.total_modules or result.checked_modules
+            )
             self._last_scan_summary = ("email", email_clean, len(result.found))
 
             # Convert to result list for state

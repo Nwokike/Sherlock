@@ -10,7 +10,7 @@ that no manifest patch is required (show + foreground actions only).
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -200,30 +200,13 @@ def _grant(notifier):
     return svc
 
 
-@pytest.fixture
-def state_on():
-    """The user setting ON, restored on teardown.
-
-    Plain attribute assignment — `AppState`'s observable `__setattr__` is
-    what makes it reactive, so nothing here should bypass it.
-    """
-    from core import state as state_mod
-
-    prev = state_mod.state.scan_notifications
-    state_mod.state.scan_notifications = True
-    yield state_mod.state
-    state_mod.state.scan_notifications = prev
-
-
-def test_ensure_ready_constructs_and_posts(notifier, state_on):
+def test_ensure_ready_constructs_and_posts(notifier):
     """ensure_ready awaited before a scan makes the first show possible.
 
     The regression: firing the init through `page.run_task` returns a Future
     immediately, so `_service` is still None when `scan_started()` runs on
     the next line and the first notification of the session is dropped.
     """
-    from core import state as state_mod  # noqa: F401 — fixture asserted below
-
     page = MagicMock()
     page.services = []
     n = ScanNotifier(page)
@@ -245,7 +228,7 @@ def test_ensure_ready_constructs_and_posts(notifier, state_on):
         sn.LocalNotifications = real
 
 
-def test_ensure_ready_no_show_when_denied(notifier, state_on):
+def test_ensure_ready_no_show_when_denied(notifier):
     """A declined permission must suppress the notification, not crash."""
     _deny(notifier)
 
@@ -256,7 +239,7 @@ def test_ensure_ready_no_show_when_denied(notifier, state_on):
     assert notifier.page.run_task.call_count == 0
 
 
-def test_denial_warns_once_and_routes_to_settings(notifier, state_on):
+def test_denial_warns_once_and_routes_to_settings(notifier):
     """Decline -> one warning carrying a Settings action -> OS page."""
     svc = _deny(notifier)
     seen = []
@@ -271,20 +254,24 @@ def test_denial_warns_once_and_routes_to_settings(notifier, state_on):
     assert svc.settings_calls == 1
 
 
-def test_permission_enabled_later_needs_no_restart(notifier, state_on):
+def test_permission_enabled_later_needs_no_restart(notifier):
     """Re-probed per scan, so enabling from OS settings takes effect now."""
     svc = _deny(notifier)
     assert asyncio.run(notifier.ensure_ready()) is False
 
     # user flips the switch in Android settings; next scan sees it
-    svc.are_notifications_enabled = AsyncMock(return_value=True)
+    svc.enabled = True
     assert asyncio.run(notifier.ensure_ready()) is True
     assert notifier.is_usable() is True
 
 
-def test_setting_off_is_a_no_op(notifier, state_on):
-    """Feature off: no construction, no permission prompt, no post."""
-    state_on.scan_notifications = False
-    _grant(notifier)
+def test_no_package_is_a_clean_no_op(notifier):
+    """With no notification backend, ensure_ready just says no.
+
+    There is no user setting to consult any more — a scan posts because it
+    is a foreground activity the system must show, not because of a
+    preference.
+    """
+    notifier._service = None
     assert asyncio.run(notifier.ensure_ready()) is False
     assert notifier.page.run_task.call_count == 0

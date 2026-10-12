@@ -138,10 +138,6 @@ class ScanNotifier:
         """
         if not _HAS_NOTIFICATIONS:
             return False
-        from core.state import state
-
-        if not getattr(state, "scan_notifications", False):
-            return False
         if not self._started:
             await self._construct()
         if self._service is None:

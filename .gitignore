@@ -18,6 +18,12 @@ dist/
 # Release notes
 release_notes.md
 
+# Update-config payload: written locally, never published from here.
+# src/core/constants.py UPDATE_CONFIG_URL reads it from a URL, so shipping a
+# 2.x entry tells every installed app to update for a release that doesn't
+# exist yet. Owner bumps the build number when something is live.
+version.json
+
 # Keystore
 kiri_keystore.jks
 

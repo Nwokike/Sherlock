@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from components.active_scan_banner import ActiveScanBanner
 from core.constants import MODE_EMAIL, MODE_USERNAME
 from core.state import state
 from main import AppController
@@ -59,21 +58,6 @@ def _restore_global_state():
     if state.email_results is None:
         state.email_results = []
     state.email_results[:] = saved_email_results
-
-
-def test_active_scan_banner_component():
-    clicked = []
-    banner = ActiveScanBanner(
-        target_query="torvalds",
-        search_mode=MODE_USERNAME,
-        checked=450,
-        total=5203,
-        on_tap=lambda: clicked.append(1),
-    )
-    assert banner is not None
-    assert banner.on_click is not None
-    banner.on_click(None)
-    assert clicked == [1]
 
 
 def test_results_cache_lru_cap():

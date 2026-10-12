@@ -250,7 +250,7 @@ def ResultsScreen() -> Control:
     # Single source of truth for "a scan is live": the PIPELINE flag, not
     # progress.is_running (which flips False per-target the moment maigret
     # returns — owner saw Results say 'finished' while the banner still
-    # counted 504/509). Results and the ActiveScanBanner now agree.
+    # counted 504/509). Results and the shade progress bar now agree.
     is_running = bool(state.is_searching)
 
     # When a scan is actively running, derive the display mode from the
@@ -814,9 +814,10 @@ def ResultsScreen() -> Control:
         if username_view.is_cancelled:
             progress_label = f"Cancelled — {checked}/{total} checked"
         elif checked == 0 and username_view.engine_total == 0:
-            # Initializing phase — mirrors the ActiveScanBanner: the engine
-            # has not reported a single site yet, so a 0/N denominator is
-            # meaningless; show the same "Initializing..." state the banner
+            # Initializing phase — mirrors the shade progress notification:
+            # the engine has not reported a single site yet, so a 0/N
+            # denominator is meaningless; show the same "Initializing..."
+            # state the notification shows.
             # shows instead of a frozen 0/total bar.
             progress_label = "Initializing..."
         else:
@@ -881,8 +882,8 @@ def ResultsScreen() -> Control:
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
         # Indeterminate (value=None) while the engine has reported nothing —
-        # the same continuously-filling "Initializing" animation the
-        # ActiveScanBanner shows. Once the first site completes (or the
+        # the same continuously-filling "Initializing" animation the shade
+        # progress notification shows. Once the first site completes (or the
         # engine publishes its real denominator), switch to a determinate
         # 0..1 fraction.
         engine_known_total = username_view.engine_total or (

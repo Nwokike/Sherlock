@@ -243,6 +243,7 @@ class AppController:
                     if self._controller_methods
                     else None
                 ),
+                on_copy=self._copy_scan_summary,
                 on_permission_denied=self._notify_permission_denied,
             )
             ready = await self.scan_notify.ensure_ready()
@@ -253,6 +254,33 @@ class AppController:
         except Exception as exc:
             logger.warning("ScanNotifier: start failed: %s", exc)
             return False
+
+    def _copy_scan_summary(self) -> None:
+        """Put the finished-scan one-liner on the clipboard.
+
+        The Copy-report notification action's target: the summary line is
+        the same one the resume snack shows, so the user gets the result
+        without opening anything.
+        """
+        summary = getattr(self, "_last_scan_summary", None)
+        if not summary:
+            return
+        mode, target, found = summary
+        noun = "accounts" if mode == "username" else "results"
+        line = f"Sherlock: {found} {noun} for {target}"
+
+        async def _copy():
+            try:
+                from core.shared_services import shared_clipboard
+
+                await shared_clipboard(self.page).set_text(line)
+                from core.notify import show_snack
+
+                show_snack(self.page, "Scan summary copied")
+            except Exception as exc:
+                logger.warning("Scan summary copy failed: %s", exc)
+
+        spawn(_copy())
 
     def _notify_permission_denied(self) -> None:
         """Offer the OS settings page once POST_NOTIFICATIONS is declined."""

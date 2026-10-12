@@ -232,30 +232,6 @@ class TestOnDeviceFixes:
         assert summary["flagged"] == 1
         assert summary["unhealthy"] == ["BadSite"]
 
-    def test_banner_finishing_and_followup(self):
-        from components.active_scan_banner import ActiveScanBanner
-        from tests.flet_tree import walk
-
-        def texts_of(control):
-            return [
-                c.value
-                for c in walk(control)
-                if hasattr(c, "value") and isinstance(c.value, str)
-            ]
-
-        finishing = ActiveScanBanner(
-            target_query="target",
-            search_mode="username",
-            checked=5174,
-            total=5174,
-            finishing=True,
-        )
-        assert any("Finishing" in t for t in texts_of(finishing))
-        running = ActiveScanBanner(
-            target_query="target", search_mode="username", checked=10, total=100
-        )
-        assert any("10/100" in t for t in texts_of(running))
-
 
 class TestBatch14Contracts:
     """Batch 14: caps, contracts, guards, single-sheet, truncation."""

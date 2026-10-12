@@ -126,6 +126,57 @@ def _validate_manifest(value: str) -> str | None:
     return None
 
 
+@ft.component
+def SettingsTextField(
+    value: str,
+    on_commit=None,
+    *,
+    hint_text: str = "",
+    width: int | None = None,
+):
+    """A settings text field that never loses what you typed.
+
+    `value` is the committed state, not the draft. The draft lives in local
+    state and only reaches the parent on submit/blur, so a whole-screen
+    re-render from some unrelated `AppState` write (a scan progress tick, a
+    sites reload) cannot reset the field mid-keystroke. Same isolation
+    `SitesSearchBar` already uses for the same reason.
+
+    If the parent rejects the value (`on_commit` returns False), the draft
+    snaps back to the committed state instead of holding a bad value.
+    """
+    draft, set_draft = ft.use_state(value or "")
+
+    def _commit():
+        if on_commit is None:
+            return
+        if on_commit(draft) is not False:
+            return
+        set_draft(value or "")
+
+    return ft.TextField(
+        value=draft,
+        hint_text=hint_text,
+        width=width,
+        border={
+            ft.ControlState.DEFAULT: ft.OutlineInputBorder(
+                border_radius=tokens.RADIUS_SM,
+            ),
+            ft.ControlState.FOCUSED: ft.OutlineInputBorder(
+                side=ft.BorderSide(color=ft.Colors.PRIMARY),
+                border_radius=tokens.RADIUS_SM,
+            ),
+        },
+        text_size=tokens.FONT_SM,
+        content_padding=tokens.SPACE_XS,
+        # A TextField is editable by nature, so its contents are already
+        # selectable — `selectable=` is a Text property and is rejected here.
+        on_change=lambda e: set_draft(e.control.value),
+        on_submit=lambda e: _commit(),
+        on_blur=lambda e: _commit(),
+    )
+
+
 def _setting_row(
     icon: ft.IconData,
     title: str,
@@ -343,19 +394,18 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         if controller.refresh_sites:
             spawn(controller.refresh_sites())
 
-    def _on_manifest_submit(e):
-        raw = e.control.value or ""
+    def _on_manifest_submit(val: str) -> bool:
+        raw = val or ""
         err = _validate_manifest(raw)
         if err is not None:
             show_snack(page, f"Invalid manifest: {err}.", bgcolor=AppColors.WARNING)
-            e.control.value = state.custom_manifest or ""
-            e.control.update()
-            return
+            return False
         val = raw.strip()
         state.custom_manifest = val
         spawn(_persist(STORAGE_MANIFEST, val))
         if controller.refresh_sites:
             spawn(controller.refresh_sites())
+        return True
 
     def _slider_live(label_fmt: str):
         """on_change handler: update the bubble label only (no state/persist)."""
@@ -402,17 +452,16 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         state.email_only_found = val
         spawn(_persist(STORAGE_EMAIL_ONLY_FOUND, "true" if val else "false"))
 
-    def _on_proxy_change(e):
-        raw = e.control.value or ""
+    def _on_proxy_change(val: str) -> bool:
+        raw = val or ""
         err = _parse_proxy(raw)
         if err is not None:
             show_snack(page, f"Invalid proxy URL: {err}.", bgcolor=AppColors.WARNING)
-            e.control.value = state.proxy_url or ""
-            e.control.update()
-            return
+            return False
         cleaned = raw.strip()
         state.proxy_url = cleaned
         spawn(_persist(STORAGE_PROXY_URL, cleaned))
+        return True
 
     def _on_enrichment_mode_change(val: str):
         state.enrichment_mode = val
@@ -427,29 +476,27 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         state.deep_enrich = bool(val)
         spawn(_persist(STORAGE_DEEP_ENRICH, "true" if val else "false"))
 
-    def _on_cookies_change(e):
-        raw = (e.control.value or "").strip()
+    def _on_cookies_change(val: str) -> bool:
+        raw = (val or "").strip()
         if raw and not os.path.isfile(raw):
             show_snack(
                 page, f"Cookies file not found: {raw}", bgcolor=AppColors.WARNING
             )
-            e.control.value = state.cookies_path or ""
-            e.control.update()
-            return
+            return False
         state.cookies_path = raw
         spawn(_persist(STORAGE_COOKIES_PATH, raw))
+        return True
 
-    def _on_i2p_change(e):
-        raw = e.control.value or ""
+    def _on_i2p_change(val: str) -> bool:
+        raw = val or ""
         err = _parse_proxy(raw)
         if err is not None:
             show_snack(page, f"Invalid I2P gateway: {err}.", bgcolor=AppColors.WARNING)
-            e.control.value = state.i2p_proxy or ""
-            e.control.update()
-            return
+            return False
         cleaned = raw.strip()
         state.i2p_proxy = cleaned
         spawn(_persist(STORAGE_I2P_PROXY, cleaned))
+        return True
 
     def _on_check_domains_change(val: bool):
         state.check_domains = bool(val)
@@ -538,7 +585,10 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     def _on_scan_depth_change(val: str):
         state.scan_depth = val
         spawn(_persist(STORAGE_SCAN_DEPTH, val))
-        spawn(controller.refresh_sites())
+        # Guarded like every other call site: a context that provides no
+        # refresher would otherwise crash the toggle handler.
+        if controller.refresh_sites:
+            spawn(controller.refresh_sites())
 
     def _toggle_recursive_search(val: bool):
         state.recursive_search = val
@@ -896,23 +946,11 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ft.Icons.TUNE_ROUNDED,
                 "Search Keywords",
                 "Comma-separated — matches get a KEYWORD badge on results",
-                ft.TextField(
+                SettingsTextField(
                     value=state.search_keywords or "",
+                    on_commit=_on_keywords_change,
                     hint_text="osint, investigator, security",
                     width=200,
-                    border={
-                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
-                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                    },
-                    text_size=tokens.FONT_SM,
-                    content_padding=tokens.SPACE_SM,
-                    on_submit=lambda e: _on_keywords_change(e.control.value),
-                    on_blur=lambda e: _on_keywords_change(e.control.value),
                 ),
                 stacked=narrow,
             ),
@@ -1064,30 +1102,10 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ),
             ),
             ft.Container(
-                content=ft.TextField(
+                content=SettingsTextField(
                     value=state.custom_manifest or "",
+                    on_commit=_on_manifest_submit,
                     hint_text="https://raw.githubusercontent.com/.../data.json",
-                    border={
-                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
-                            side=ft.BorderSide(
-                                width=1,
-                                color=ft.Colors.with_opacity(
-                                    tokens.OPACITY_MEDIUM, ft.Colors.OUTLINE
-                                ),
-                            ),
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
-                            side=ft.BorderSide(width=1, color=ft.Colors.PRIMARY),
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                    },
-                    text_size=tokens.FONT_SM,
-                    content_padding=tokens.SPACE_SM,
-                    bgcolor=ft.Colors.SURFACE,
-                    filled=True,
-                    on_submit=_on_manifest_submit,
-                    on_blur=_on_manifest_submit,
                 ),
                 padding=ft.Padding(
                     left=tokens.SPACE_LG,
@@ -1141,13 +1159,19 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                             on_click=_open_version_dialog,
                         ),
                         ft.Container(height=tokens.SPACE_XS),
-                        ft.Text(
-                            "A UI for Maigret & holehe.\nUsername & Email OSINT made easy.",
-                            size=tokens.FONT_SM,
-                            color=ft.Colors.with_opacity(
-                                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                        # Selectable so the boilerplate can be long-pressed
+                        # and copied. Scoped here rather than on the whole
+                        # card: `selectable` on interactive rows fights their
+                        # tap/scroll gestures.
+                        ft.SelectionArea(
+                            content=ft.Text(
+                                "A UI for Maigret & holehe.\nUsername & Email OSINT made easy.",
+                                size=tokens.FONT_SM,
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                                ),
+                                text_align=ft.TextAlign.CENTER,
                             ),
-                            text_align=ft.TextAlign.CENTER,
                         ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1168,78 +1192,30 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     network_card = _settings_card(
         [
             ft.Container(
-                content=ft.TextField(
+                content=SettingsTextField(
                     value=state.proxy_url or "",
+                    on_commit=_on_proxy_change,
                     hint_text="socks5://127.0.0.1:1080 or http://proxy:8080 (empty = direct)",
-                    label="Proxy URL",
-                    prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
-                    border={
-                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
-                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                    },
-                    text_size=tokens.FONT_SM,
-                    content_padding=tokens.SPACE_SM,
-                    bgcolor=ft.Colors.SURFACE,
-                    filled=True,
-                    on_submit=_on_proxy_change,
-                    on_blur=_on_proxy_change,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD
                 ),
             ),
             ft.Container(
-                content=ft.TextField(
+                content=SettingsTextField(
                     value=state.i2p_proxy or "",
+                    on_commit=_on_i2p_change,
                     hint_text="http://127.0.0.1:4444 (empty = unused)",
-                    label="I2P Gateway (optional)",
-                    prefix_icon=ft.Icons.LANGUAGE_ROUNDED,
-                    border={
-                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
-                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                    },
-                    text_size=tokens.FONT_SM,
-                    content_padding=tokens.SPACE_SM,
-                    bgcolor=ft.Colors.SURFACE,
-                    filled=True,
-                    on_submit=_on_i2p_change,
-                    on_blur=_on_i2p_change,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
                 ),
             ),
             ft.Container(
-                content=ft.TextField(
+                content=SettingsTextField(
                     value=state.cookies_path or "",
+                    on_commit=_on_cookies_change,
                     hint_text="path/to/cookies.txt — auth-gated sites",
-                    label="Cookies File (optional)",
-                    prefix_icon=ft.Icons.PASSWORD_ROUNDED,
-                    border={
-                        ft.ControlState.DEFAULT: ft.OutlineInputBorder(
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                        ft.ControlState.FOCUSED: ft.OutlineInputBorder(
-                            side=ft.BorderSide(color=ft.Colors.PRIMARY),
-                            border_radius=tokens.RADIUS_SM,
-                        ),
-                    },
-                    text_size=tokens.FONT_SM,
-                    content_padding=tokens.SPACE_SM,
-                    bgcolor=ft.Colors.SURFACE,
-                    filled=True,
-                    on_submit=_on_cookies_change,
-                    on_blur=_on_cookies_change,
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_MD

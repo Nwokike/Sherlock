@@ -137,11 +137,10 @@ def SitesScreen() -> Control:
     debounced_query, set_debounced_query = ft.use_state("")
     selected_tag, set_selected_tag = ft.use_state("all")
     checked_states, set_checked_states = ft.use_state({})
-    # Double-fire guard: Checkbox.on_change fires, then the tap bubbles to
-    # the row Container.on_click in the same frame — swallow the second.
-    _row_from_checkbox = ft.use_ref(False)
     _persist_task = ft.use_ref(None)
     _pending_states = ft.use_ref(None)
+    # The screen's own root ListView, for the Back-to-filters button.
+    _root_list = ft.use_ref(None)
 
     def _cleanup_persist():
         old = _persist_task.current
@@ -216,13 +215,6 @@ def SitesScreen() -> Control:
         _persist(new_states)
 
     def _on_checkbox_change(name: str):
-        _row_from_checkbox.current = True
-        _toggle_row(name)
-
-    def _on_row_click(name: str):
-        if _row_from_checkbox.current:
-            _row_from_checkbox.current = False
-            return
         _toggle_row(name)
 
     def _toggle_row(name: str):
@@ -231,41 +223,60 @@ def SitesScreen() -> Control:
         _apply(new_states)
 
     def _select_all():
-        _apply(dict.fromkeys(checked_states, True))
+        """Select every network in the CURRENT view, not the whole cache.
+
+        Filtering to a category and then hitting Select All used to select
+        all 5,200 — the opposite of what the button implies.
+        """
+        new_states = dict(checked_states)
+        for name in filtered_names:
+            new_states[name] = True
+        _apply(new_states)
 
     def _select_none():
-        _apply(dict.fromkeys(checked_states, False))
+        new_states = dict(checked_states)
+        for name in filtered_names:
+            new_states[name] = False
+        _apply(new_states)
 
     def _select_popular():
-        _apply({k: k.lower() in POPULAR_SITES for k in checked_states})
+        new_states = dict(checked_states)
+        for name in filtered_names:
+            new_states[name] = name.lower() in POPULAR_SITES
+        _apply(new_states)
+
+    def _invert():
+        new_states = dict(checked_states)
+        for name in filtered_names:
+            new_states[name] = not new_states.get(name, False)
+        _apply(new_states)
 
     def _scope_to_filter():
-        """Set the scan scope to exactly the current category filter.
+        """Set the scan scope to exactly what the current view shows.
 
         Uses the O(1) inverted tag index (falls back to the per-site tags
         map) and the existing selected-sites persistence — the preset
         becomes the scan scope without any engine re-query. "All Networks"
-        re-checks everything (= no custom scope).
+        with no query re-checks everything (= no custom scope).
+
+        The query is part of the view: typing "gaming" and hitting Scope
+        must not silently select the whole tag bucket.
         """
-        if selected_tag == "all":
+        scope_names = list(filtered_names)
+        if selected_tag == "all" and not debounced_query.strip():
             new_states = dict.fromkeys(checked_states, True)
             msg = "Scope: all networks"
         else:
-            tag_index = getattr(state, "sites_tag_index", None) or {}
-            bucket = set(tag_index.get(selected_tag.lower(), []))
-            if not bucket:
-                bucket = {
-                    name
-                    for name, site_tags in (
-                        getattr(state, "sites_tags_map", {}) or {}
-                    ).items()
-                    if selected_tag.lower() in [t.lower() for t in site_tags]
-                }
-            if not bucket:
-                _notify_scope(f'No "{selected_tag}" sites in this database')
+            if not scope_names:
+                _notify_scope("Nothing matches this filter — scope unchanged")
                 return
-            new_states = {k: k in bucket for k in checked_states}
-            msg = f"Scope: {selected_tag} — {sum(new_states.values())} networks"
+            new_states = {k: k in set(scope_names) for k in checked_states}
+            label = (
+                f'"{debounced_query.strip()}" in {selected_tag}'
+                if debounced_query.strip()
+                else selected_tag
+            )
+            msg = f"Scope: {label} — {len(scope_names)} networks"
         _apply(new_states)
         _notify_scope(msg)
 
@@ -361,7 +372,13 @@ def SitesScreen() -> Control:
 
     live_cats, live_countries = ft.use_memo(_compute_chips, [state.sites_version])
 
-    # Build filtered list
+    # Build filtered list. `Checkbox(label=` is the only tap target, so
+    # there is exactly one handler per row — the previous Container.on_click
+    # + Checkbox.on_change pair needed a guard ref, and that guard ate the
+    # user's next legitimate row tap whenever a checkbox was toggled without
+    # a following click (keyboard, or a tap landing only on the box).
+    # The label is a selectable Text so a network name can be long-pressed
+    # and copied (flet/controls/core/text.py:309) — bare ft.Text is not.
     items = []
     for name in filtered_names:
         is_checked = checked_states.get(name, False)
@@ -370,6 +387,15 @@ def SitesScreen() -> Control:
                 content=ft.Row(
                     controls=[
                         ft.Checkbox(
+                            key=ft.ValueKey(name),
+                            label=ft.Text(
+                                name,
+                                size=tokens.FONT_MD,
+                                weight=ft.FontWeight.W_500,
+                                selectable=True,
+                                no_wrap=True,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                            ),
                             value=is_checked,
                             on_change=lambda e, n=name: _on_checkbox_change(n),
                             fill_color={
@@ -377,11 +403,6 @@ def SitesScreen() -> Control:
                                 ft.ControlState.FOCUSED: ft.Colors.PRIMARY,
                                 ft.ControlState.DEFAULT: ft.Colors.PRIMARY,
                             },
-                        ),
-                        ft.Text(
-                            name,
-                            size=tokens.FONT_MD,
-                            weight=ft.FontWeight.W_500,
                         ),
                     ],
                     spacing=tokens.SPACE_MD,
@@ -401,7 +422,6 @@ def SitesScreen() -> Control:
                         ),
                     )
                 ),
-                on_click=lambda e, n=name: _on_row_click(n),
             )
         )
 
@@ -451,7 +471,9 @@ def SitesScreen() -> Control:
     # Search bar — isolated component so keystrokes don't rebuild the list.
     search_bar = SitesSearchBar(initial="", on_debounced=set_debounced_query)
 
-    # Bulk actions
+    # Bulk actions. "Top" is the way back to the filter controls: they are
+    # list items here, so once the user scrolls past ~10 rows there is no
+    # other route to the search bar or the category chips.
     bulk_actions = ft.Container(
         content=ft.Row(
             controls=[
@@ -472,11 +494,25 @@ def SitesScreen() -> Control:
                 ),
                 ft.TextButton(
                     "Scope to Filter"
-                    if selected_tag != "all"
+                    if selected_tag != "all" or debounced_query.strip()
                     else "Scope: All Networks",
                     on_click=lambda e: _scope_to_filter(),
                     style=ft.ButtonStyle(color=ft.Colors.PRIMARY),
-                    tooltip="Scan only the networks shown by the current category filter",
+                    tooltip="Scan only the networks shown by the current filter",
+                ),
+                ft.TextButton(
+                    "Invert",
+                    on_click=lambda e: _invert(),
+                    style=ft.ButtonStyle(color=ft.Colors.ON_SURFACE_VARIANT),
+                    tooltip="Swap the checked state of everything in view",
+                ),
+                ft.Container(expand=True),
+                ft.IconButton(
+                    icon=ft.Icons.ARROW_UPWARD_ROUNDED,
+                    icon_size=18,
+                    tooltip="Back to filters",
+                    on_click=lambda e: _scroll_to_top(),
+                    style=ft.ButtonStyle(color=ft.Colors.ON_SURFACE_VARIANT),
                 ),
             ],
             alignment=ft.MainAxisAlignment.START,
@@ -501,15 +537,29 @@ def SitesScreen() -> Control:
         if filtered_names and len(filtered_names) != len(checked_states)
         else ""
     )
+    # A custom scope can contain names this database no longer has (deep
+    # enrichment / scan_depth / exclusions shrink the cache before this screen
+    # sees it). Those networks silently would not be scanned, so say so.
+    missing = sorted(
+        (
+            name
+            for name, on in checked_states.items()
+            if on and name not in set(canonical_names)
+        ),
+        key=str.lower,
+    )
+    missing_text = (
+        f" • {len(missing)} selected network{'s' if len(missing) != 1 else ''} not in DB"
+        if missing
+        else ""
+    )
     stats_header = ft.Container(
         content=ft.Row(
             controls=[
                 ft.Text(
-                    stats_text + db_text + shown_text,
+                    stats_text + db_text + shown_text + missing_text,
                     size=tokens.FONT_XS,
-                    color=ft.Colors.with_opacity(
-                        tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
-                    ),
+                    color=ft.Colors.ERROR if missing else None,
                     weight=ft.FontWeight.W_500,
                 ),
             ],
@@ -517,6 +567,12 @@ def SitesScreen() -> Control:
         ),
         padding=ft.Padding(0, tokens.SPACE_XS, 0, tokens.SPACE_SM),
     )
+    if missing:
+        stats_header.tooltip = (
+            "Selected networks absent from this database (not scanned): "
+            + ", ".join(missing[:20])
+            + ("…" if len(missing) > 20 else "")
+        )
 
     # The ListView IS the screen root and owns the only scroll. A Column here
     # would give it unbounded height (flet 1.0.4 ignores `expand` on column
@@ -558,6 +614,11 @@ def SitesScreen() -> Control:
             if debounced_query
             else f"No networks in category '{selected_tag}'"
         )
+
+        def _reset_filters():
+            set_selected_tag("all")
+            set_debounced_query("")
+
         return ft.ListView(
             controls=[
                 *header_block,
@@ -565,11 +626,34 @@ def SitesScreen() -> Control:
                     title="No networks found",
                     message=filter_msg,
                     icon=ft.Icons.SEARCH_OFF_ROUNDED,
+                    # Without an escape this is a dead end — the filter that
+                    # produced the empty view is only reachable by scrolling
+                    # back up and clearing fields one at a time.
+                    action_label="Reset filters",
+                    on_action=_reset_filters,
                 ),
             ],
             spacing=0,
             expand=True,
+            key=ft.ValueKey("sites-no-match"),
         )
+
+    def _scroll_to_top():
+        """Jump the list back to the search bar and category chips.
+
+        The filter controls are list items, so once the user is past ~10 rows
+        this is the only route back to them. `scroll_to` is an async method on
+        the scrollable itself (flet/controls/scrollable_control.py:386).
+        """
+        if _root_list.current is None:
+            return
+        try:
+            spawn(
+                _root_list.current.scroll_to(offset=0, duration=250),
+                "sites-scroll-top",
+            )
+        except Exception as exc:
+            logger.debug("sites scroll-to-top skipped: %s", exc)
 
     # Banner every _BANNER_EVERY rows (cap _BANNER_MAX), drawn from the shared
     # pool so no render ever re-requests an ad. Slot keys are per-ad so each
@@ -587,11 +671,13 @@ def SitesScreen() -> Control:
             else:
                 placed = _BANNER_EVERY - 1  # keep spacing, stop adding banners
 
-    return ft.ListView(
+    _root_list.current = ft.ListView(
         controls=controls,
         spacing=0,
         expand=True,
         build_controls_on_demand=True,
         item_extent=_ROW_HEIGHT,
         cache_extent=500,
+        key=ft.ValueKey("sites-networks-root"),
     )
+    return _root_list.current

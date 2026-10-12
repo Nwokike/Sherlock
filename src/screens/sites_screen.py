@@ -78,6 +78,13 @@ _ROW_HEIGHT = 56.0
 _BANNER_EVERY = 10
 _BANNER_MAX = 15
 
+# Row windowing: construct only the first batch, extend as the user scrolls.
+# The whole 5,178-row list took 3.0s / 20,755 nodes just to build on desktop
+# Python, so the first paint is capped and the rest is appended on demand.
+_INITIAL_ROWS = 120
+_ROW_STEP = 120
+_SCROLL_EXTEND_AT = 0.85
+
 
 @ft.component
 def SiteRow(name: str, checked: bool, on_toggle):
@@ -196,6 +203,13 @@ def SitesScreen() -> Control:
     _pending_states = ft.use_ref(None)
     # The screen's own root ListView, for the Back-to-filters button.
     _root_list = ft.use_ref(None)
+    # Windowing: how many of the filtered rows to construct at all. The
+    # Python side builds a Component object per row before the ListView can
+    # build any of them on demand, so 5,178 filtered names mean 5,178
+    # constructions on every render regardless of `build_controls_on_demand`.
+    # Measured on this app: 20,755 nodes and 3.0s for the full list on
+    # desktop Python — on a phone that is the multi-minute freeze.
+    visible_limit, set_visible_limit = ft.use_state(_INITIAL_ROWS)
 
     def _cleanup_persist():
         old = _persist_task.current
@@ -272,10 +286,40 @@ def SitesScreen() -> Control:
     def _on_checkbox_change(name: str):
         _toggle_row(name)
 
+    def _extend_window():
+        """Grow the constructed row window by one batch."""
+        set_visible_limit(visible_limit + _ROW_STEP)
+
+    def _reset_window():
+        """A new filter starts at the first batch again."""
+        set_visible_limit(_INITIAL_ROWS)
+
+    def _on_scroll(e):
+        """Extend the window when the user nears the end of what is built.
+
+        The alternative — a "Show more" button — is one extra tap every 120
+        rows. Scrolling past the end silently is worse than a spinner here,
+        so the extension is triggered from the scroll position: at 85% of
+        `max_scroll_extent` the next batch is built before the user runs out.
+        """
+        try:
+            mx = getattr(e, "max_scroll_extent", None)
+            px = getattr(e, "pixels", None)
+            if mx is None or px is None or mx <= 0:
+                return
+            if px >= mx * _SCROLL_EXTEND_AT and visible_limit < len(filtered_names):
+                _extend_window()
+        except Exception as exc:
+            logger.debug("sites scroll-extend skipped: %s", exc)
+
     def _toggle_row(name: str):
         new_states = dict(checked_states)
         new_states[name] = not new_states.get(name, False)
         _apply(new_states)
+
+    # A new query or category means a different row set, so the window starts
+    # at the first batch again instead of jumping deep into the old one.
+    ft.use_effect(_reset_window, [debounced_query, selected_tag])
 
     def _select_all():
         """Select every network in the CURRENT view, not the whole cache.
@@ -427,12 +471,16 @@ def SitesScreen() -> Control:
 
     live_cats, live_countries = ft.use_memo(_compute_chips, [state.sites_version])
 
-    # Rows are SiteRow components now: a toggle re-renders one row instead
-    # of inflating ~5,200 Containers in the parent.
+    # Only the visible window is constructed. `build_controls_on_demand`
+    # cannot help here — the ListView only decides which ALREADY-CONSTRUCTED
+    # controls to mount, and the Python comprehension below used to build
+    # every row. Filter changes reset the window to the first batch.
+    shown = filtered_names[:visible_limit]
     items = [
         SiteRow(name, checked_states.get(name, False), _on_checkbox_change)
-        for name in filtered_names
+        for name in shown
     ]
+    has_more = len(filtered_names) > len(shown)
 
     def _country_chip_label(code: str) -> str:
         """'gb' -> '🇬🇧 GB'; falls back to the bare code."""
@@ -546,6 +594,12 @@ def SitesScreen() -> Control:
         if filtered_names and len(filtered_names) != len(checked_states)
         else ""
     )
+    # The window means "shown" under-reports what matches; say so, or the
+    # count looks like the whole result set and the user has no cue that
+    # scrolling loads more.
+    more_text = (
+        f" • +{len(filtered_names) - len(shown)} more as you scroll" if has_more else ""
+    )
     # A custom scope can contain names this database no longer has (deep
     # enrichment / scan_depth / exclusions shrink the cache before this screen
     # sees it). Those networks silently would not be scanned, so say so.
@@ -566,7 +620,7 @@ def SitesScreen() -> Control:
         content=ft.Row(
             controls=[
                 ft.Text(
-                    stats_text + db_text + shown_text + missing_text,
+                    stats_text + db_text + shown_text + more_text + missing_text,
                     size=tokens.FONT_XS,
                     color=ft.Colors.ERROR if missing else None,
                     weight=ft.FontWeight.W_500,
@@ -696,6 +750,7 @@ def SitesScreen() -> Control:
         expand=True,
         build_controls_on_demand=True,
         cache_extent=2000,
+        on_scroll=_on_scroll,
         key=ft.ValueKey("sites-networks-root"),
     )
     return _root_list.current

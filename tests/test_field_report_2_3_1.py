@@ -401,3 +401,48 @@ def test_shell_does_not_remount_screen_on_progress_ticks():
         )
     finally:
         home_mod.HomeScreen = real_home
+
+
+# ── 5. Networks screen eagerly builds every row ─────────────────────────
+
+
+def test_networks_screen_windows_its_rows():
+    """5,178 filtered names must not become 5,178 constructed Components.
+
+    `build_controls_on_demand` cannot help here: the ListView only picks
+    among controls the Python side has already built, and the row
+    comprehension ran over the whole filtered list on every render. Measured
+    on this app before the fix: 20,755 nodes and 3.0s just to build the tree
+    on desktop Python — the multi-minute freeze on a phone. The first paint
+    is now a fixed batch, extended by `on_scroll` as the user reaches the
+    end, with the stats line reporting how many more are pending.
+    """
+    from flet.components.component import Renderer
+
+    from core.state import state
+    from screens.sites_screen import _INITIAL_ROWS, SitesScreen
+    from state.app_state import AppStateCtx
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    atomic_total = 5178
+    state.sites_cache = [f"Site{i:05d}" for i in range(atomic_total)]
+    state.sites_tags_map = {}
+    state.sites_tag_index = {}
+    state.sites_total = atomic_total
+    state.selected_sites = []
+    state.sites_version += 1
+
+    methods = ControllerMethods()
+    renderer = Renderer()
+    root = renderer.render(
+        lambda: ControllerMethodsCtx(methods, lambda: AppStateCtx(state, SitesScreen))
+    )
+    nodes: list = []
+    _expand(root, nodes)
+
+    row_components = sum(1 for n in nodes if type(n).__name__ == "Component")
+    assert row_components <= _INITIAL_ROWS + 10, (
+        f"constructed {row_components} row components for {atomic_total} "
+        "names — the screen builds every row before the ListView can window it"
+    )
+    assert len(nodes) < 1500, f"built {len(nodes)} nodes for the first paint"

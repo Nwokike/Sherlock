@@ -9,7 +9,8 @@ that no manifest patch is required (show + foreground actions only).
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -26,6 +27,9 @@ def notifier():
     page = MagicMock()
     n = ScanNotifier(page)
     n._service = MagicMock()  # skip construction/permissions
+    # Posting paths gate on `is_usable()`, which needs both a service and a
+    # granted permission — the legacy tests assume a healthy backend.
+    n._ready = True
     return n
 
 
@@ -138,13 +142,15 @@ def test_view_action_failure_is_contained(notifier):
 
 
 def test_shutdown_clears_everything(notifier):
-    """shutdown() is sync and on the teardown path, so it calls the
-    backend directly rather than through page.run_task."""
+    """shutdown() is sync on the teardown path, so it dispatches the async
+    cancel_all through run_task rather than calling it directly — a direct
+    call returns an un-awaited coroutine and the shade keeps the bar."""
     svc = MagicMock()
     notifier._service = svc
     notifier.shutdown()
-    svc.cancel_all.assert_called_once()
-    assert notifier.page.run_task.call_count == 0
+    (name, _args, _kwargs) = _dispatched(notifier.page)[0]
+    assert name == "cancel_all"
+    svc.cancel_all.assert_not_called()
 
 
 def test_service_missing_is_noop():
@@ -167,3 +173,118 @@ def test_available_flag_matches_import():
     expected = importlib.util.find_spec("flet_notifications") is not None
     n = ScanNotifier(MagicMock())
     assert n.available is expected
+
+
+# ── the race that made the first notification of a session vanish ──────
+
+
+def _deny(notifier):
+    """Backend stub where notifications exist but the user declined.
+
+    A plain fake, not a MagicMock of `LocalNotifications` — the real control
+    is a dataclass whose methods need a mounted page.
+    """
+    from services.scan_notify import _FakeBackend
+
+    svc = _FakeBackend(enabled=False, granted=False)
+    notifier._service = svc
+    return svc
+
+
+def _grant(notifier):
+    """Backend stub with the permission already granted."""
+    from services.scan_notify import _FakeBackend
+
+    svc = _FakeBackend(enabled=True, granted=True)
+    notifier._service = svc
+    return svc
+
+
+@pytest.fixture
+def state_on():
+    """The user setting ON, restored on teardown.
+
+    Plain attribute assignment — `AppState`'s observable `__setattr__` is
+    what makes it reactive, so nothing here should bypass it.
+    """
+    from core import state as state_mod
+
+    prev = state_mod.state.scan_notifications
+    state_mod.state.scan_notifications = True
+    yield state_mod.state
+    state_mod.state.scan_notifications = prev
+
+
+def test_ensure_ready_constructs_and_posts(notifier, state_on):
+    """ensure_ready awaited before a scan makes the first show possible.
+
+    The regression: firing the init through `page.run_task` returns a Future
+    immediately, so `_service` is still None when `scan_started()` runs on
+    the next line and the first notification of the session is dropped.
+    """
+    from core import state as state_mod  # noqa: F401 — fixture asserted below
+
+    page = MagicMock()
+    page.services = []
+    n = ScanNotifier(page)
+
+    # make construction resolve to our stub
+    import services.scan_notify as sn
+
+    real = sn.LocalNotifications
+    sn.LocalNotifications = lambda: _grant(n)
+    try:
+        assert asyncio.run(n.ensure_ready()) is True
+        assert n._service is not None
+        assert n.is_usable() is True
+        # now the first post of the session lands
+        n.scan_started("torvalds", is_email=False)
+        dispatched = _dispatched(n.page)
+        assert dispatched and dispatched[0][0] == "show"
+    finally:
+        sn.LocalNotifications = real
+
+
+def test_ensure_ready_no_show_when_denied(notifier, state_on):
+    """A declined permission must suppress the notification, not crash."""
+    _deny(notifier)
+
+    assert asyncio.run(notifier.ensure_ready()) is False
+    assert notifier.is_usable() is False
+    notifier.scan_started("torvalds", is_email=False)
+    # nothing posted: the scan still runs, just silently
+    assert notifier.page.run_task.call_count == 0
+
+
+def test_denial_warns_once_and_routes_to_settings(notifier, state_on):
+    """Decline -> one warning carrying a Settings action -> OS page."""
+    svc = _deny(notifier)
+    seen = []
+    notifier.set_handlers(on_permission_denied=lambda: seen.append(True))
+
+    assert asyncio.run(notifier.ensure_ready()) is False
+    assert asyncio.run(notifier.ensure_ready()) is False
+    # warned once per session, not once per scan
+    assert seen == [True]
+
+    asyncio.run(notifier.open_settings())
+    assert svc.settings_calls == 1
+
+
+def test_permission_enabled_later_needs_no_restart(notifier, state_on):
+    """Re-probed per scan, so enabling from OS settings takes effect now."""
+    svc = _deny(notifier)
+    assert asyncio.run(notifier.ensure_ready()) is False
+
+    # user flips the switch in Android settings; next scan sees it
+    svc.are_notifications_enabled = AsyncMock(return_value=True)
+    assert asyncio.run(notifier.ensure_ready()) is True
+    assert notifier.is_usable() is True
+
+
+def test_setting_off_is_a_no_op(notifier, state_on):
+    """Feature off: no construction, no permission prompt, no post."""
+    state_on.scan_notifications = False
+    _grant(notifier)
+    assert asyncio.run(notifier.ensure_ready()) is False
+    assert notifier.page.run_task.call_count == 0

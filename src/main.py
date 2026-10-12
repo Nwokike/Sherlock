@@ -218,17 +218,25 @@ class AppController:
             return False  # email progress or nothing at all
         return bool(getattr(prog, "is_running", False))
 
-    def _notify_scan_start(self, target: str, *, is_email: bool) -> None:
-        """Kick off the OS scan notification if the user enabled it."""
+    async def _ensure_notifications_ready(self, target: str, *, is_email: bool) -> bool:
+        """Bring the OS notification up and ask for permission, once.
+
+        Must be **awaited**: the service construction and the POST_NOTIFICATIONS
+        request are coroutines, and firing them through `page.run_task` returns
+        a Future immediately — so a `show()` on the next synchronous line sees
+        no service and the first notification of the session is dropped
+        silently. Called from the spawned search task, before the engine
+        starts, so the sequence is guaranteed.
+
+        A declined permission never blocks the scan: the user gets one snack
+        offering the OS settings page instead.
+        """
         if not state.scan_notifications:
-            return
+            return False
         target = (target or "").strip()
         if not target:
-            return
+            return False
         try:
-            page = self.page
-            page.run_task(self.scan_notify.start)
-            page.run_task(self.scan_notify.request_permission)
             self.scan_notify.set_handlers(
                 on_cancel=self.cancel_search
                 if not is_email
@@ -238,10 +246,41 @@ class AppController:
                     if self._controller_methods
                     else None
                 ),
+                on_permission_denied=self._notify_permission_denied,
             )
+            ready = await self.scan_notify.ensure_ready()
+            if not ready:
+                return False
             self.scan_notify.scan_started(target, is_email=is_email)
+            return True
         except Exception as exc:
             logger.warning("ScanNotifier: start failed: %s", exc)
+            return False
+
+    def _notify_permission_denied(self) -> None:
+        """Offer the OS settings page once POST_NOTIFICATIONS is declined."""
+        from core.notify import show_snack
+        from core.theme import AppColors
+
+        show_snack(
+            self.page,
+            "Notifications are off for Sherlock — scans won't show progress",
+            bgcolor=AppColors.WARNING,
+            duration=6000,
+            action_label="Settings",
+            on_action=lambda _e: self._open_notification_settings(),
+        )
+
+    def _open_notification_settings(self) -> None:
+        """Async hop into the app's own notification settings page."""
+        page = self.page
+        if page is None:
+            return
+
+        async def _open():
+            await self.scan_notify.open_settings()
+
+        spawn(_open())
 
     def _abandon_search(self, target: str, progress_obj) -> None:
         """Clear this search's state after a cancellation before the engine
@@ -780,7 +819,11 @@ class AppController:
             "WATCHDOG: username search START %r (total_sites pending)",
             target_clean,
         )
-        self._notify_scan_start(target_clean, is_email=False)
+        # Awaited (not run_task): the service and the POST_NOTIFICATIONS
+        # request are coroutines that must land before the first show(),
+        # or the first notification of the session is silently dropped.
+        if not state.scan_notifications:
+            await self._ensure_notifications_ready(target_clean, is_email=False)
 
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
@@ -1242,7 +1285,9 @@ class AppController:
         state.search_progress = email_progress
         state.progress_version += 1
         logger.info("WATCHDOG: email search START %r", email_clean)
-        self._notify_scan_start(email_clean, is_email=True)
+        # Awaited, for the same reason as the username path above.
+        if not state.scan_notifications:
+            await self._ensure_notifications_ready(email_clean, is_email=True)
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:

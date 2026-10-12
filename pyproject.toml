@@ -123,6 +123,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests assert by design (pytest); S105 is a storage-KEY name, not a secret.
 "tests/**" = ["S101"]
+# `id` mirrors the flet_notifications.show/cancel signature it stands in
+# for; renaming it would hide the correspondence.
+"src/services/scan_notify.py" = ["A002"]
 
 # Build-time pruning: serious_python cleanup globs — the ONLY channel that
 # shrinks artifacts (post-build rm cannot; deps are re-packaged from

@@ -15,6 +15,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from services.scan_notify import (
+    CHANNEL_PROGRESS,
+    CHANNEL_RESULT,
+    FGS_TYPE,
     NOTIF_ID_DONE,
     NOTIF_ID_SCAN,
     ScanNotifier,
@@ -51,15 +54,22 @@ def _dispatched(page):
     return out
 
 
-def test_scan_start_uses_indeterminate_progress(notifier):
+def test_scan_start_runs_the_foreground_service(notifier):
+    """A running scan lives in a foreground service, not a plain show().
+
+    The service is what keeps the engine alive when the user closes the app,
+    and its notification is what the progress bar advances on.
+    """
     notifier.scan_started("torvalds", is_email=False)
     (name, args, kwargs) = _dispatched(notifier.page)[0]
-    assert name == "show"
+    assert name == "start_foreground_service"
     assert args[0] == NOTIF_ID_SCAN  # stable id -> update in place
     assert args[1] == "Scanning username"
     assert "torvalds" in args[2]
     assert kwargs["show_progress"] is True
     assert kwargs["indeterminate"] is True
+    assert kwargs["channel_id"] == CHANNEL_PROGRESS
+    assert kwargs["start_type"] == FGS_TYPE
     # a Cancel action is always offered while scanning
     assert [a.id for a in kwargs["actions"]] == ["cancel"]
 
@@ -77,7 +87,8 @@ def test_progress_tick_updates_same_notification_in_place(notifier):
 
 
 def test_completion_swaps_to_a_separate_notification(notifier):
-    """Completion posts its own notification and dismisses the progress bar."""
+    """Completion stops the service, posts its own notification with the
+    found count, offers View and Copy, and clears the progress bar."""
     notifier.scan_started("torvalds", is_email=False)
     notifier.progress(100, 100)
     notifier.scan_finished(14, 5897)
@@ -86,7 +97,12 @@ def test_completion_swaps_to_a_separate_notification(notifier):
     assert len(shows) == 1
     finish = shows[0]
     assert "14 accounts" in finish[1][1]
-    assert [a.id for a in finish[2]["actions"]] == ["view"]
+    assert finish[2]["channel_id"] == CHANNEL_RESULT
+    # View opens results; Copy report takes the summary to the clipboard.
+    assert [a.id for a in finish[2]["actions"]] == ["view", "copy"]
+    # the service is stopped before the result is posted
+    stops = [d for d in dispatched if d[0] == "stop_foreground_service"]
+    assert stops and dispatched.index(stops[0]) < dispatched.index(finish)
     # and the progress bar is cleared
     cancels = [d for d in dispatched if d[0] == "cancel" and d[1] == (NOTIF_ID_SCAN,)]
     assert cancels
@@ -223,7 +239,8 @@ def test_ensure_ready_constructs_and_posts(notifier):
         # now the first post of the session lands
         n.scan_started("torvalds", is_email=False)
         dispatched = _dispatched(n.page)
-        assert dispatched and dispatched[0][0] == "show"
+        assert dispatched
+        assert dispatched[0][0] == "start_foreground_service"
     finally:
         sn.LocalNotifications = real
 
@@ -275,3 +292,91 @@ def test_no_package_is_a_clean_no_op(notifier):
     notifier._service = None
     assert asyncio.run(notifier.ensure_ready()) is False
     assert notifier.page.run_task.call_count == 0
+
+
+# ── channels and the foreground service ───────────────────────────────
+
+
+async def _ready(n):
+    """Bring a fresh notifier to the usable state."""
+    import services.scan_notify as sn
+
+    real = sn.LocalNotifications
+    sn.LocalNotifications = lambda: _grant(n)
+    try:
+        await n.ensure_ready()
+    finally:
+        sn.LocalNotifications = real
+
+
+def test_two_channels_are_created_once():
+    """A silent low channel for progress, a default one for results.
+
+    Sound and vibration are immutable after creation
+    (.venv/flet_notifications/channels.py:13-16), so a running scan cannot
+    share the finished-scan channel — it must not ding.
+    """
+    from services.scan_notify import _FakeBackend
+
+    page = MagicMock()
+    page.services = []
+    n = ScanNotifier(page)
+    n._service = _FakeBackend(enabled=True, granted=True)
+    asyncio.run(_ready(n))
+
+    ids = [c["id"] for c in n._service.channels]
+    assert ids == [CHANNEL_PROGRESS, CHANNEL_RESULT]
+
+
+def test_completion_stops_the_service_before_posting():
+    """Stopping the FGS first avoids the bar and the result racing."""
+    page = MagicMock()
+    n = ScanNotifier(page)
+    n._service = MagicMock()
+    n._ready = True
+    n.scan_finished(3, 10)
+    ops = [d[0] for d in _dispatched(page)]
+    assert "stop_foreground_service" in ops
+    assert ops.index("stop_foreground_service") < ops.index("show")
+
+
+def test_cancel_action_routes_to_the_scan_canceller():
+    """The shade's Cancel button stops the scan without opening the app."""
+    from services.scan_notify import _ACTION_CANCEL
+
+    class _Event:
+        action_id = _ACTION_CANCEL
+
+    n = ScanNotifier(MagicMock())
+    calls = []
+    n.set_handlers(on_cancel=lambda: calls.append(True))
+    handler = _installed_on_action(n)
+    asyncio.run(handler(_Event()))
+    assert calls == [True]
+
+
+def _installed_on_action(notifier):
+    """The on_action closure the notifier installed on its real service."""
+    import services.scan_notify as sn
+
+    captured = {}
+
+    class _Svc:
+        def __init__(self):
+            self.on_action = None
+            self.on_tap = None
+
+    def _fake():
+        s = _Svc()
+        captured["svc"] = s
+        return s
+
+    notifier._started = False
+    notifier._service = None
+    real_ctor = sn.LocalNotifications
+    sn.LocalNotifications = _fake
+    try:
+        asyncio.run(notifier._construct())
+    finally:
+        sn.LocalNotifications = real_ctor
+    return captured["svc"].on_action

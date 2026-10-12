@@ -1,35 +1,43 @@
-"""Scan notifications — OS-level progress for long scans.
+"""Scan notifications — the OS is the progress UI for a running scan.
 
-Wraps flet-notifications (the owner's own package, cross-platform local
-notifications over flutter_local_notifications). A 5,200-site scan takes
-minutes and the user spends most of that outside the app, so progress
-belongs in the notification shade, not only on a screen they've left.
+A 5,200-site scan takes minutes and the user spends most of that outside
+the app, so progress lives in the notification shade rather than on a
+screen they have left. There is no in-app progress banner and no settings
+toggle: a scan is a foreground activity the system must be able to show,
+not a preference to opt into.
 
 Design notes
 ------------
-- **No build-pipeline change.** Only `show()` + progress updates + actions
-  are used. The `<receiver>` manifest entries the package's patcher adds
-  are needed for scheduling and for actions that run with the app dead
-  (`foreground=False`); every action here is `foreground=True`, which is
-  delivered through `onDidReceiveNotificationResponse`. Verified against
-  the package's Dart side rather than inferred from its README.
+- **Two channels, created once.** `scan_progress` is low-importance and
+  silent so a running scan never dings, `scan_result` is default importance
+  so a finished scan gets attention. Sound and vibration are immutable
+  after creation (`.venv/flet_notifications/channels.py:13-16`), so they
+  are set here and never revised.
+- **A determinate bar that survives the app closing.** The scan runs in a
+  foreground service (`start_foreground_service`) whose notification IS the
+  progress bar; `stop_foreground_service()` clears it at the end. This is
+  what keeps the engine alive when the user swipes the app away — the owner's
+  "it keeps running in the background".
 - **One notification id per scan, re-shown.** `show()` with the same id
-  updates in place, which is how a determinate progress bar advances.
+  updates in place, which is how the bar advances.
+- **Actions, not one button.** Cancel (with inline reply so the scan stops
+  without opening the app) while running; View (tap-to-results) and Copy
+  report on completion. Inline reply needs `NotificationActionInput`
+  (`.venv/flet_notifications/actions.py:9-28`), and `foreground=True` so
+  the action is delivered to the live app rather than needing the
+  manifest receivers the patcher adds for `foreground=False`.
+- **Permission is asked at the first scan, never on cold start.** Asking
+  before the user has a reason is the classic notification-permission
+  mistake, and on Android the dialog appears only once or twice before the
+  OS hard-denies it permanently — after which `request_permissions()` can
+  never succeed and the only route back is the OS settings page.
 - **Hold the reference.** `Service.__post_init__` self-registers through
-  `page._services.register_service()` (`.venv/.../flet/controls/services/
+  `page._services.register_service()` (`.venv/flet/controls/services/
   service.py`); `ServiceRegistry.unregister_services` drops anything whose
   refcount falls to <=3, so the service is also appended to `page.services`
   for app lifetime.
-- **Cancelled scans clear the notification** so a dead scan never leaves
-  a live-looking bar in the shade.
-- **Every failure is logged, never raised** into the scan path: a
-  notification backend that refuses to start must not break OSINT.
-
-`is_usable()` is the single gate the UI consults — false when the package
-is missing, the service never came up, or the OS has notifications off for
-this app. `ensure_ready()` is the only entry point callers use: it is a
-coroutine, so the caller MUST await it, which is what makes the first
-`show()` of a session possible (see the race note below).
+- **Every failure is logged, never raised** into the scan path: a broken
+  notification backend must not break OSINT.
 """
 
 from __future__ import annotations
@@ -40,7 +48,13 @@ logger = logging.getLogger(__name__)
 
 _HAS_NOTIFICATIONS = True
 try:
-    from flet_notifications import LocalNotifications, NotificationAction
+    from flet_notifications import (
+        Importance,
+        LocalNotifications,
+        NotificationAction,
+        NotificationActionInput,
+        NotificationChannel,
+    )
 except ImportError:  # pragma: no cover — dep is pinned in pyproject
     _HAS_NOTIFICATIONS = False
 
@@ -48,8 +62,18 @@ except ImportError:  # pragma: no cover — dep is pinned in pyproject
 NOTIF_ID_SCAN = 3401
 NOTIF_ID_DONE = 3402
 
+# Channel ids. A channel's sound/vibration are fixed at creation, so the
+# running-scan and the finished-scan notifications cannot share one.
+CHANNEL_PROGRESS = "scan_progress"
+CHANNEL_RESULT = "scan_result"
+
+# Android foreground-service type. `dataSync` covers network I/O for a
+# user-initiated job without claiming a more privileged type.
+FGS_TYPE = "dataSync"
+
 _ACTION_VIEW = "view"
 _ACTION_CANCEL = "cancel"
+_ACTION_COPY = "copy"
 
 
 class _FakeBackend:
@@ -64,8 +88,10 @@ class _FakeBackend:
         self.enabled = enabled
         self.granted = granted
         self.shown: list[dict] = []
+        self.service_calls: list[dict] = []
         self.cancelled: list[int] = []
         self.cancel_all_calls = 0
+        self.channels: list[dict] = []
         self.settings_calls = 0
         self.on_tap = None
         self.on_action = None
@@ -76,8 +102,24 @@ class _FakeBackend:
     async def request_permissions(self) -> bool:
         return self.granted
 
+    async def create_notification_channel(self, channel) -> None:
+        self.channels.append(
+            {
+                "id": getattr(channel, "id", None),
+                "importance": getattr(
+                    getattr(channel, "importance", None), "value", None
+                ),
+            }
+        )
+
     async def show(self, *args, **kwargs) -> None:
         self.shown.append({"args": args, "kwargs": kwargs})
+
+    async def start_foreground_service(self, *args, **kwargs) -> None:
+        self.service_calls.append({"op": "start", "args": args, "kwargs": kwargs})
+
+    async def stop_foreground_service(self) -> None:
+        self.service_calls.append({"op": "stop"})
 
     async def cancel(self, id: int) -> None:
         self.cancelled.append(id)
@@ -90,17 +132,19 @@ class _FakeBackend:
 
 
 class ScanNotifier:
-    """OS-notification mirror of scan progress for one app lifetime."""
+    """OS-notification progress surface for one app lifetime."""
 
     def __init__(self, page) -> None:
         self.page = page
         self._service: LocalNotifications | None = None
         self._started = False
         self._ready = False
+        self._channels_made = False
         self._active_target = ""
         self._active_is_email = False
         self._on_cancel = None
         self._on_view = None
+        self._on_copy = None
         # Set by the controller so a denied permission can route the user
         # to the OS page without this class importing app-level UI.
         self._on_permission_denied = None
@@ -125,13 +169,12 @@ class ScanNotifier:
     async def ensure_ready(self) -> bool:
         """Await this before the first `show()` of a session.
 
-        Constructing the service and asking for POST_NOTIFICATIONS both
-        need the page session to own the service first; both are coroutines
-        here so the caller's `await` is what sequences them ahead of the
-        first post. Firing them through `page.run_task` does NOT work —
-        `run_task` schedules onto the loop and returns a Future at once, so
-        a `show()` on the next synchronous line sees `_service is None` and
-        the first notification of the session is silently dropped.
+        Constructing the service, creating the channels and asking for
+        POST_NOTIFICATIONS are all coroutines that must complete before the
+        first post; firing them through `page.run_task` returns a Future
+        immediately, so a `show()` on the next synchronous line would see no
+        service and the first notification of the session would be dropped
+        silently. The caller's `await` is what sequences them.
 
         Idempotent: safe to call before every scan. Cheap after the first
         call (one `are_notifications_enabled` probe).
@@ -142,6 +185,7 @@ class ScanNotifier:
             await self._construct()
         if self._service is None:
             return False
+        await self._ensure_channels()
         return await self._check_permission()
 
     async def _construct(self) -> None:
@@ -166,8 +210,11 @@ class ScanNotifier:
             svc.on_tap = _on_tap
 
             async def _on_action(e):
-                if e.action_id == _ACTION_CANCEL and self._on_cancel:
+                action_id = getattr(e, "action_id", "") or ""
+                if action_id == _ACTION_CANCEL and self._on_cancel:
                     self._on_cancel()
+                elif action_id == _ACTION_COPY and self._on_copy:
+                    self._on_copy()
                 else:
                     self._fire_view()
 
@@ -180,6 +227,39 @@ class ScanNotifier:
             # A dead notification backend must never break a scan.
             logger.warning("ScanNotifier: init failed (%s)", exc)
             self._service = None
+
+    async def _ensure_channels(self) -> None:
+        """Create the two channels once per app lifetime."""
+        if self._channels_made or self._service is None:
+            return
+        self._channels_made = True
+        try:
+            # Low + silent: a scan that takes minutes must not ding on every
+            # tick, and the bar is visible in the shade regardless.
+            await self._service.create_notification_channel(
+                NotificationChannel(
+                    id=CHANNEL_PROGRESS,
+                    name="Scan progress",
+                    description="Live progress of a running username or email scan",
+                    importance=Importance.LOW,
+                    play_sound=False,
+                    enable_vibration=False,
+                    show_badge=False,
+                )
+            )
+            # Default: a finished scan is the one worth pulling the shade down
+            # for, so it keeps sound and badge.
+            await self._service.create_notification_channel(
+                NotificationChannel(
+                    id=CHANNEL_RESULT,
+                    name="Scan results",
+                    description="The outcome of a finished scan",
+                    importance=Importance.DEFAULT,
+                    show_badge=True,
+                )
+            )
+        except Exception as exc:
+            logger.warning("ScanNotifier: channel setup failed (%s)", exc)
 
     async def _check_permission(self) -> bool:
         """Make sure the OS will actually deliver what we post.
@@ -243,13 +323,25 @@ class ScanNotifier:
     # ── scan mirror ───────────────────────────────────────────────────
 
     def set_handlers(
-        self, *, on_cancel=None, on_view=None, on_permission_denied=None
+        self,
+        *,
+        on_cancel=None,
+        on_view=None,
+        on_copy=None,
+        on_permission_denied=None,
     ) -> None:
         self._on_cancel = on_cancel
         self._on_view = on_view
+        self._on_copy = on_copy
         self._on_permission_denied = on_permission_denied
 
     def scan_started(self, target: str, *, is_email: bool = False) -> None:
+        """Post the indeterminate start and open the foreground service.
+
+        The service is what keeps the engine alive when the app is closed or
+        backgrounded; its notification is the same one the bar advances on,
+        so there is exactly one live scan notification.
+        """
         self._active_target = target
         self._active_is_email = is_email
         if not self.is_usable():
@@ -257,14 +349,23 @@ class ScanNotifier:
         kind = "email" if is_email else "username"
         try:
             self.page.run_task(
-                self._service.show,
+                self._service.start_foreground_service,
                 NOTIF_ID_SCAN,
                 f"Scanning {kind}",
                 f"{target} — preparing…",
                 show_progress=True,
                 indeterminate=True,
+                channel_id=CHANNEL_PROGRESS,
+                start_type=FGS_TYPE,
+                foreground_service_types=[FGS_TYPE],
                 actions=[
-                    NotificationAction(id=_ACTION_CANCEL, title="Cancel"),
+                    NotificationAction(
+                        id=_ACTION_CANCEL,
+                        title="Cancel",
+                        input=NotificationActionInput(
+                            label="Reason (optional)",
+                        ),
+                    )
                 ],
             )
         except Exception as exc:
@@ -286,6 +387,7 @@ class ScanNotifier:
                 show_progress=True,
                 max_progress=total,
                 progress=checked,
+                channel_id=CHANNEL_PROGRESS,
                 actions=[
                     NotificationAction(id=_ACTION_CANCEL, title="Cancel"),
                 ],
@@ -294,20 +396,25 @@ class ScanNotifier:
             logger.warning("ScanNotifier: progress post failed: %s", exc)
 
     def scan_finished(self, found: int, total: int) -> None:
-        """Swap the progress bar for a completion notification."""
+        """Stop the service and post the result, then drop the old bar."""
         if not self.is_usable():
             return
         label = self._active_target or "target"
         noun = "results" if self._active_is_email else "accounts"
         suffix = f" ({total} checked)" if total else ""
         try:
+            # Stop first: the service notification is the OLD id, and posting
+            # the result before stopping would race the two against it.
+            self.page.run_task(self._service.stop_foreground_service)
             self.page.run_task(
                 self._service.show,
                 NOTIF_ID_DONE,
                 f"Scan finished — {found} {noun}",
                 f"{label}{suffix}",
+                channel_id=CHANNEL_RESULT,
                 actions=[
                     NotificationAction(id=_ACTION_VIEW, title="View"),
+                    NotificationAction(id=_ACTION_COPY, title="Copy report"),
                 ],
             )
             self._dismiss_progress()

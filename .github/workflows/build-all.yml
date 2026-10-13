@@ -47,7 +47,10 @@ jobs:
           sys.path.insert(0, "src")
           from core.constants import APP_BUILD_NUMBER, APP_VERSION
 
-          vj = json.load(open("version.json"))
+          vj = None
+          if os.path.exists("version.json"):
+              with open("version.json") as f:
+                  vj = json.load(f)
           env_v, env_b = os.environ["BUILD_VERSION"], os.environ["BUILD_NUMBER"]
           errs = []
 
@@ -65,8 +68,17 @@ jobs:
           def vt(s):
               return tuple(int(x) for x in s.split("."))
 
-          vj_v, py_v = vj["version"], py
-          if vj_v == py_v:
+          vj_v, py_v = (vj or {}).get("version"), py
+          if vj_v is None:
+              # Absent entirely: the update-notes file is gitignored and
+              # untracked, so nothing is published from the repo until the
+              # Play Store upload ships. Nothing to compare.
+              print(
+                  f"NOTICE: version.json absent from the repo — held back "
+                  f"entirely while app is {py} (build {env_b}). Expected "
+                  "until the Play Store upload; no update notes published."
+              )
+          elif vj_v == py_v:
               # Fully-synced state must agree on the build number too.
               if str(vj["build_number"]) != env_b:
                   errs.append(

@@ -9,11 +9,11 @@ on:
       build_version:
         description: "Build version"
         required: true
-        default: "2.2.0"
+        default: "2.3.0"
       build_number:
         description: "Build number"
         required: true
-        default: "12"
+        default: "13"
 
 permissions:
   contents: write
@@ -22,8 +22,8 @@ env:
   PYTHONUTF8: "1"
   FLET_CLI_NO_RICH_OUTPUT: "1"
   UV_PYTHON: "3.14"
-  BUILD_VERSION: ${{ inputs.build_version || '2.2.0' }}
-  BUILD_NUMBER: ${{ inputs.build_number || '12' }}
+  BUILD_VERSION: ${{ inputs.build_version || '2.3.0' }}
+  BUILD_NUMBER: ${{ inputs.build_number || '13' }}
 
 jobs:
   # ─── 0. Quality Gate: lint + tests + version consistency ───

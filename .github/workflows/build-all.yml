@@ -120,6 +120,7 @@ jobs:
       TAG_NAME: ${{ steps.tag_info.outputs.TAG_NAME }}
       RELEASE_NAME: ${{ steps.tag_info.outputs.RELEASE_NAME }}
       IS_PRERELEASE: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
+      MAKE_LATEST: ${{ steps.tag_info.outputs.MAKE_LATEST }}
     steps:
       - uses: actions/checkout@v7
       - name: Generate Release Tag & Name
@@ -127,13 +128,15 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "RELEASE_NAME=Sherlock ${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+            echo "RELEASE_NAME=Sherlock ${{ github.ref_name }} (pre-release, pending approval)" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+            echo "MAKE_LATEST=false" >> $GITHUB_OUTPUT
           else
             SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
             echo "TAG_NAME=build-${SHORT_SHA}" >> $GITHUB_OUTPUT
             echo "RELEASE_NAME=Automated Build (${SHORT_SHA})" >> $GITHUB_OUTPUT
             echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+            echo "MAKE_LATEST=false" >> $GITHUB_OUTPUT
           fi
       - name: Create GitHub Release Placeholder
         if: github.event_name != 'pull_request'
@@ -142,7 +145,7 @@ jobs:
           tag_name: ${{ steps.tag_info.outputs.TAG_NAME }}
           name: ${{ steps.tag_info.outputs.RELEASE_NAME }}
           prerelease: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
-          make_latest: true
+          make_latest: ${{ steps.tag_info.outputs.MAKE_LATEST }}
           body: |
             Automated multi-platform build generated from commit `${{ github.sha }}`.
 

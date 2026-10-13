@@ -457,7 +457,12 @@ def HistoryScreen(banner: Control | None = None) -> Control:
     # set host_expanded), so the previous shape — ListView inside a Container
     # inside a Column — left the list unbounded and un-scrollable, clipping
     # any history taller than one viewport. Header items ride inside the
-    # list instead of around it.
+    # The ListView owns the only scroll (a Column root gives it unbounded
+    # height) and the header rides inside the list. Padding must therefore
+    # go on the ROWS, not the list root: a root padding would inset
+    # `AppHeader` on top of its own, which is why History's header looked
+    # narrower/hardcoded next to Settings and Home (whose roots carry no
+    # padding and whose header keeps only its own).
     return ft.ListView(
         controls=[
             *header_controls,
@@ -466,7 +471,5 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         ],
         spacing=0,
         expand=True,
-        padding=ft.Padding(
-            tokens.SPACE_XL, tokens.SPACE_MD, tokens.SPACE_XL, tokens.SPACE_MD
-        ),
+        padding=ft.Padding(0, 0, 0, tokens.SPACE_LG),
     )

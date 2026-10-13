@@ -106,3 +106,47 @@ def test_streaming_enrichment_queues_and_processes():
         assert enrichment_data.get("name") == "Enriched User"
 
     asyncio.run(run_test())
+
+
+# ── Engine log noise ───────────────────────────────────────────────────
+
+
+def test_set_engine_logs_mutes_maigret_but_keeps_our_own():
+    """Maigret's per-check chatter must not bury the rest of the terminal.
+
+    It logs on every site-check of a 5,200-site scan, so the console and the
+    in-app terminal become unreadable and real warnings are missed. The mute
+    has to be scoped to that logger — silencing everything would hide errors.
+    """
+    from core.logger_handler import MemoryLogHandler, set_engine_logs
+
+    handler = MemoryLogHandler(level=logging.DEBUG)
+    root = logging.getLogger()
+    restore = root.level
+    root.addHandler(handler)
+    last = set_engine_logs(True)
+    saved_mig = logging.getLogger("maigret").level
+    root.setLevel(logging.DEBUG)
+    try:
+        set_engine_logs(False)
+        logging.getLogger("maigret").info("per-check chatter")
+        logging.getLogger("maigret").debug("more chatter")
+        assert handler.get_logs() == [], "maigret log lines reached the terminal"
+
+        logging.getLogger("services.sherlock_service").warning("a real warning")
+        logs = handler.get_logs()
+        assert any("a real warning" in line for line in logs), (
+            "the mute swallowed non-engine warnings too"
+        )
+
+        set_engine_logs(True)
+        logging.getLogger("maigret").info("verbose detail on purpose")
+        assert any(
+            "verbose detail on purpose" in line for line in handler.get_logs()
+        ), "restoring verbosity did not let engine logs back through"
+    finally:
+        set_engine_logs(last)
+        logging.getLogger("maigret").setLevel(saved_mig)
+        root.removeHandler(handler)
+        root.setLevel(restore)
+        handler.clear_logs()

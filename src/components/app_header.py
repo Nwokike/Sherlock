@@ -129,6 +129,16 @@ def AppHeader(
         except Exception:
             pass
 
+        # Pooled banner ads capture their glass colours when first built, so a
+        # theme swap leaves stale light/dark glass on every banner until the
+        # app restarts. clear_banner_pool's own docstring already promises this.
+        try:
+            from components.banner_ad import clear_banner_pool
+
+            clear_banner_pool()
+        except Exception:
+            pass
+
         async def _persist():
             try:
                 from services.storage_service import StorageService

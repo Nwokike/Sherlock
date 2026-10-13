@@ -71,6 +71,18 @@ CHANNEL_RESULT = "scan_result"
 # user-initiated job without claiming a more privileged type.
 FGS_TYPE = "dataSync"
 
+# `start_type` is a DIFFERENT vocabulary from the service type above: Dart's
+# _mapServiceStartType accepts only these three strings
+# (.venv/flutter/flet_notifications/lib/src/notifications_service.dart
+# :1254-1265) and silently falls back to startSticky for anything else.
+# Passing FGS_TYPE here worked only by falling into that default.
+FGS_START_TYPE = "startSticky"
+
+# Stable payload on every post: what the notification says about itself when
+# tapped. Any scan notification means "show the live results", so one route
+# covers progress, completion and a cold-start tap alike.
+PAYLOAD_ROUTE = "sherlock://results"
+
 _ACTION_VIEW = "view"
 _ACTION_CANCEL = "cancel"
 _ACTION_COPY = "copy"
@@ -192,12 +204,14 @@ class ScanNotifier:
         """Build the service once and wire its handlers.
 
         An already-injected service wins — that is how tests drive the
-        permission paths without a mounted page.
+        permission paths without a mounted page. `_started` is set only on
+        SUCCESS: latching it before the build meant one transient failure
+        disabled notifications for the whole session with no retry.
         """
         if self._started:
             return
-        self._started = True
         if self._service is not None:
+            self._started = True
             return
         try:
             svc = LocalNotifications()
@@ -219,9 +233,22 @@ class ScanNotifier:
                     self._fire_view()
 
             svc.on_action = _on_action
+
+            async def _on_dismissed(e):
+                # The user swiped the shade entry away. Nothing to retract
+                # (the scan itself is untouched) but local state must not
+                # pretend the bar is still showing.
+                logger.debug(
+                    "ScanNotifier: notification dismissed (id=%s)",
+                    getattr(e, "id", "?"),
+                )
+
+            svc.on_dismissed = _on_dismissed
+
             if svc not in self.page.services:
                 self.page.services.append(svc)
             self._service = svc
+            self._started = True
             logger.info("ScanNotifier: ready")
         except Exception as exc:
             # A dead notification backend must never break a scan.
@@ -229,10 +256,14 @@ class ScanNotifier:
             self._service = None
 
     async def _ensure_channels(self) -> None:
-        """Create the two channels once per app lifetime."""
+        """Create the two channels once per app lifetime.
+
+        Same latch discipline as `_construct`: the flag is set only after
+        both creates succeed, so a transient failure is retried instead of
+        silently leaving the result channel missing for the session.
+        """
         if self._channels_made or self._service is None:
             return
-        self._channels_made = True
         try:
             # Low + silent: a scan that takes minutes must not ding on every
             # tick, and the bar is visible in the shade regardless.
@@ -258,6 +289,7 @@ class ScanNotifier:
                     show_badge=True,
                 )
             )
+            self._channels_made = True
         except Exception as exc:
             logger.warning("ScanNotifier: channel setup failed (%s)", exc)
 
@@ -356,8 +388,9 @@ class ScanNotifier:
                 show_progress=True,
                 indeterminate=True,
                 channel_id=CHANNEL_PROGRESS,
-                start_type=FGS_TYPE,
+                start_type=FGS_START_TYPE,
                 foreground_service_types=[FGS_TYPE],
+                payload=PAYLOAD_ROUTE,
                 actions=[
                     NotificationAction(
                         id=_ACTION_CANCEL,
@@ -365,7 +398,12 @@ class ScanNotifier:
                         input=NotificationActionInput(
                             label="Reason (optional)",
                         ),
-                    )
+                    ),
+                    # A running scan must be able to take the user back to
+                    # it. Without this the only actions were Cancel and a
+                    # body-tap whose delivery depends on the OS, so a user
+                    # could not get from the shade into the live results.
+                    NotificationAction(id=_ACTION_VIEW, title="View"),
                 ],
             )
         except Exception as exc:
@@ -388,8 +426,13 @@ class ScanNotifier:
                 max_progress=total,
                 progress=checked,
                 channel_id=CHANNEL_PROGRESS,
+                payload=PAYLOAD_ROUTE,
                 actions=[
                     NotificationAction(id=_ACTION_CANCEL, title="Cancel"),
+                    # Re-show REPLACES the action list, so View must be here
+                    # too or the first tick would strip it off the FGS
+                    # notification posted by scan_started().
+                    NotificationAction(id=_ACTION_VIEW, title="View"),
                 ],
             )
         except Exception as exc:
@@ -412,6 +455,7 @@ class ScanNotifier:
                 f"Scan finished — {found} {noun}",
                 f"{label}{suffix}",
                 channel_id=CHANNEL_RESULT,
+                payload=PAYLOAD_ROUTE,
                 actions=[
                     NotificationAction(id=_ACTION_VIEW, title="View"),
                     NotificationAction(id=_ACTION_COPY, title="Copy report"),
@@ -422,7 +466,29 @@ class ScanNotifier:
             logger.warning("ScanNotifier: finish post failed: %s", exc)
 
     def scan_cancelled(self) -> None:
+        """A scan ended without a result: stop the service, drop the bar.
+
+        `cancel()` alone only removes the tray entry — the foreground
+        service keeps running (Android can even re-post its ongoing
+        notification), which is exactly the "something is still stuck"
+        symptom after a cancel or a superseded scan.
+        """
+        self.stop_service()
         self._dismiss_progress()
+
+    def stop_service(self) -> None:
+        """Stop the foreground service if one is running. Idempotent.
+
+        Paired with `start_foreground_service` on EVERY exit path:
+        complete / cancel / supersede / error / app close. Calling it when
+        nothing runs is a no-op on the Android side.
+        """
+        if self._service is None:
+            return
+        try:
+            self.page.run_task(self._service.stop_foreground_service)
+        except Exception as exc:
+            logger.warning("ScanNotifier: stop service failed: %s", exc)
 
     def _dismiss_progress(self) -> None:
         if self._service is None:
@@ -440,15 +506,19 @@ class ScanNotifier:
                 logger.warning("ScanNotifier: view action failed: %s", exc)
 
     def shutdown(self) -> None:
-        """Clear notifications on teardown.
+        """Teardown on app close: stop the service, then clear the tray.
 
-        `cancel_all` is a coroutine, so it has to go through `run_task`
-        like every other dispatch here; calling it directly returns an
-        un-awaited coroutine and the shade keeps a live-looking bar.
+        Both are coroutines, so both go through `run_task` like every other
+        dispatch here; calling them directly returns un-awaited coroutines
+        and the shade keeps a live-looking bar. Order matters: stop first,
+        otherwise the tray clear can race the service's own ongoing
+        notification.
         """
         if self._service is None:
             return
         try:
+            self.page.run_task(self._service.stop_foreground_service)
             self.page.run_task(self._service.cancel_all)
+            self._ready = False
         except Exception as exc:
-            logger.warning("ScanNotifier: shutdown cancel failed: %s", exc)
+            logger.warning("ScanNotifier: shutdown failed: %s", exc)

@@ -218,6 +218,17 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
         actions = _build_current_buttons(page)
         modal = False
 
+    # v2.2.0 sized this to content (`Container(width=380)`) and the inner
+    # Column already scrolls. A fixed `height=420` was added later and clips
+    # the action buttons on short viewports — the Actions sit outside the
+    # scroll area, so they get cut off with no way to reach them. The width
+    # is derived from the page so it also fits a narrow phone.
+    try:
+        page_width = int(getattr(page, "width", 0) or 0)
+    except TypeError, ValueError:
+        page_width = 0
+    content_width = min(380, max(300, page_width - 48)) if page_width else 380
+
     dlg = ft.AlertDialog(
         modal=modal,
         title=ft.Row(
@@ -227,7 +238,7 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
             ],
             spacing=8,
         ),
-        content=ft.Container(content=body, width=380, height=420),
+        content=ft.Container(content=body, width=content_width),
         actions=actions,
         actions_alignment=ft.MainAxisAlignment.END,
     )

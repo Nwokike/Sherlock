@@ -51,6 +51,7 @@ from core.constants import (
     STORAGE_HISTORY,
     STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
+    STORAGE_LOG_ENGINE_LOGS,
     STORAGE_MANIFEST,
     STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
@@ -69,7 +70,7 @@ from core.constants import (
     STORAGE_TIMEOUT,
     STORAGE_USE_CURL_CFFI,
 )
-from core.logger_handler import in_memory_log_handler
+from core.logger_handler import in_memory_log_handler, set_engine_logs
 from core.shared_services import mount_shared_services
 from core.state import state
 from core.tasks import spawn
@@ -202,6 +203,11 @@ class AppController:
             self._cancel_task_threadsafe(self._search_task)
             killed.append("search-task")
         state.is_searching = False
+        # The old scan's foreground service must die with its engine. Without
+        # this the superseding scan posted a second start_foreground_service
+        # while the previous one kept running, and the orphaned bar looked
+        # exactly like a scan stuck at 99%. Idempotent when nothing runs.
+        self.scan_notify.stop_service()
         logger.info("KILL %s → cancelled: %s", reason, ", ".join(killed) or "nothing")
 
     def _live_username_progress(self) -> bool:
@@ -323,6 +329,11 @@ class AppController:
                 progress_obj.is_running = False
             state.progress_version += 1
             self._stop_render_flusher()
+            # The notification was already posted (ensure_ready + scan_started
+            # run before the interstitial/site-load window this guard covers),
+            # so it must be retracted too — otherwise a cancel during that
+            # window strands a live foreground service with nothing to show.
+            self.scan_notify.stop_service()
         except Exception as exc:  # never mask the cancellation
             logger.warning("abandon_search cleanup failed: %s", exc)
 
@@ -722,6 +733,13 @@ class AppController:
             if perm_raw is not None:
                 state.permute_enabled = perm_raw == "true"
 
+            log_engine = await self.storage.get(STORAGE_LOG_ENGINE_LOGS)
+            if log_engine is not None:
+                state.log_engine_logs = log_engine == "true"
+            # Applies the stored choice (or the muted default) to the engine
+            # before any scan can emit anything.
+            set_engine_logs(state.log_engine_logs)
+
             ext_raw = await self.storage.get(STORAGE_EXTRACT_INFO)
             if ext_raw is not None:
                 state.extract_info = ext_raw == "true"
@@ -828,6 +846,12 @@ class AppController:
         self._register_search_task()
 
         state.current_username = target_clean
+        # Own the mode as documented (history_screen/_on_re_search: "start_*
+        # owns it after its own gates"). Without this, a start whose mode
+        # disagrees with the running engine (hydrated default, a chip set
+        # elsewhere) made _apply_progress's cross-mode guard drop EVERY tick
+        # of a perfectly live scan — screen and shade both frozen.
+        state.search_mode = MODE_USERNAME
         state.is_searching = True
         state.search_error = None
         # Reset to a fresh USERNAME-typed progress immediately: the UI
@@ -975,6 +999,11 @@ class AppController:
                 state.search_error = None
                 state.progress_version += 1
                 self._stop_render_flusher()
+                # A crash/cancel between scan_started() and completion
+                # never reaches scan_finished(), so the foreground service
+                # has to be retracted here or it outlives the failure with
+                # a frozen percentage in the shade.
+                self.scan_notify.stop_service()
             raise
         except Exception as e:
             if getattr(state, "current_username", None) == target_clean:
@@ -1003,6 +1032,10 @@ class AppController:
                 )
                 self._show_snack(msg, duration=10000)
                 self._stop_render_flusher()
+                # Same contract as the CancelledError handler above: a hard
+                # failure is not a completion, so retract the service rather
+                # than leaving a dead bar claiming a scan still runs.
+                self.scan_notify.stop_service()
 
     async def _drain_enrich_queue(self) -> None:
         """Stream profile enrichment in real-time as sites are found."""
@@ -1173,29 +1206,38 @@ class AppController:
             if getattr(progress, "email", None) != state.current_username:
                 logger.debug("Dropping stale email progress tick — superseded scan")
                 return
-        elif (state.current_username or "").strip() and (
-            getattr(progress, "username", "") or ""
-        ).strip().lower() != (state.current_username or "").strip().lower():
-            # Identity check mirroring the email branch: a superseded scan's
-            # late ticks must never clobber the current search, even when both
-            # targets remain in the mutated search_targets list. Skipped when
-            # no identity is set (cached reattach writes progress directly).
-            logger.debug("Dropping stale username progress tick — superseded scan")
-            return
-        elif (
-            state.search_targets
-            and state.is_searching
-            # Snapshot: the worker thread appends secondaries to this same
-            # list object; never iterate it live (see sherlock_service).
-            and getattr(progress, "username", None) not in list(state.search_targets)
-        ):
-            logger.debug("Dropping stale username progress tick — superseded scan")
-            return
+        else:
+            # Scope of a legitimate tick = the active query PLUS every
+            # target the engine is scanning right now.
+            #
+            # The engine APPENDS recursive secondaries to state.search_targets
+            # (sherlock_service, `targets.append` — whose own comment says it
+            # exists precisely so this filter admits them) and `parse_usernames`
+            # puts permute variants there too. The old check compared ONLY
+            # against current_username and fired first, so it dropped every
+            # secondary tick and the final apply — which carries `last_prog`,
+            # the last secondary. The primary rendered, the recursive tail
+            # froze, and `is_searching` stayed True for the whole tail (up to
+            # 20 targets x 500 sites). That is the "stuck at 98/99%" stall.
+            probe = (getattr(progress, "username", None) or "").strip().lower()
+            primary = (state.current_username or "").strip().lower()
+            # primary unset => cached reattach writes progress directly:
+            # nothing to supersede against, so admit.
+            if primary and probe != primary:
+                # Snapshot: the worker thread appends secondaries to this
+                # same list object; never iterate it live.
+                scope = {
+                    str(t).strip().lower() for t in list(state.search_targets or [])
+                }
+                if probe not in scope:
+                    logger.debug(
+                        "Dropping stale username progress tick — superseded scan"
+                    )
+                    return
         state.search_progress = progress
 
-        # Mirror the tick into the OS notification (same 2Hz budget as the
-        # Mirrors scan progress into the OS notification (the shade owns the
-        # live progress now), at the same 2Hz budget as the render flusher.
+        # Mirror the tick into the OS notification (the shade owns live
+        # progress), at the same 2Hz budget as the render flusher.
         if state.is_searching:
             checked = getattr(progress, "checked_sites", None)
             if checked is None:
@@ -1295,6 +1337,9 @@ class AppController:
         self._register_search_task()
 
         state.current_username = email_clean
+        # Same contract as the username path: the start owns the mode, so the
+        # cross-mode guard can't drop a live email scan's ticks.
+        state.search_mode = MODE_EMAIL
         state.is_searching = True
         state.search_error = None
         state.email_results.clear()
@@ -1312,6 +1357,14 @@ class AppController:
         if self.ad_service:
             try:
                 await self.ad_service.show_interstitial()
+            except asyncio.CancelledError:
+                # Mirrors the username path (:862): a supersede landing in
+                # this window must not leave the flags set with no engine
+                # behind them. Without this, a cancel caught here fell
+                # through to `except Exception` — which does NOT catch
+                # BaseException — leaving is_searching stuck True.
+                self._abandon_search(email_clean, email_progress)
+                raise
             except Exception as exc:
                 logger.warning("Interstitial show failed: %s", exc)
 
@@ -1439,6 +1492,10 @@ class AppController:
                 state.search_error = None
                 state.progress_version += 1
                 self._stop_render_flusher()
+                # Retract the foreground service on this exit path too —
+                # inside the ownership guard so a superseded task's late
+                # cancellation cannot kill the live replacement's service.
+                self.scan_notify.stop_service()
             raise
         except ValueError as ve:
             if state.current_username.strip().lower() == email_clean.lower() and (
@@ -1448,6 +1505,7 @@ class AppController:
                 email_progress.is_running = False
                 state.progress_version += 1
                 self._stop_render_flusher()
+                self.scan_notify.stop_service()
             logger.warning("Email search rejected: %s", ve)
             self._show_snack(str(ve))
         except Exception as e:
@@ -1459,6 +1517,7 @@ class AppController:
                 email_progress.is_running = False
                 state.progress_version += 1
                 state.search_error = str(e)
+                self.scan_notify.stop_service()
             msg = (
                 ERR_NETWORK
                 if any(
@@ -1827,9 +1886,14 @@ class AppController:
                 state.history[0] = entry
             else:
                 state.history.insert(0, entry)
-            # "New history while you were elsewhere" indicator for the nav
-            # badge. Counted, not flagged, so consecutive scans stack.
-            state.history_unseen = (state.history_unseen or 0) + 1
+                # "New history while you were elsewhere" indicator for the
+                # nav badge. Counted, not flagged, so consecutive scans
+                # stack — but only for a row that was actually INSERTED.
+                # A username scan saves twice (primary-done bridge + the
+                # final upsert), and the second save replaces the head row
+                # the first one created; incrementing there read the badge
+                # as 2 for one scan.
+                state.history_unseen = (state.history_unseen or 0) + 1
             if len(state.history) > 50:
                 state.history[:] = state.history[:50]
         except Exception as e:
@@ -1979,6 +2043,10 @@ async def main(page: ft.Page) -> None:
     root_logger = logging.getLogger()
     if in_memory_log_handler not in root_logger.handlers:
         root_logger.addHandler(in_memory_log_handler)
+    # Quiet the engine's per-check chatter from the very first log line —
+    # impossible to read the console or the in-app terminal otherwise.
+    # The Settings troubleshooting toggle and stored preference can lift it.
+    set_engine_logs(state.log_engine_logs)
 
     controller = AppController(page)
     await controller.init()

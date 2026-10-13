@@ -580,18 +580,28 @@ def HomeScreen(banner: Control | None = None) -> Control:
     def _on_input_change(e):
         value = e.control.value or ""
         set_search_query(value)
-        # Live auto-switch (not paste-only): typing an email in username
-        # mode flips immediately — the check is a cheap sync regex.
-        _maybe_switch_mode(value)
+        # Forward direction only: typing a complete address flips to Email.
+        # The reverse is deliberately not run here — see _maybe_switch_mode.
+        _maybe_switch_mode(value, allow_username_flip=False)
 
-    def _maybe_switch_mode(value: str):
-        """Auto-switch mode on paste or typing: email <-> username."""
+    def _maybe_switch_mode(value: str, *, allow_username_flip: bool = True):
+        """Auto-switch mode on paste or typing: email <-> username.
+
+        `allow_username_flip` exists because Email -> Username is only safe
+        when the whole value is known. On a single keystroke `"@" not in val`
+        is true for the FIRST character, so running it per-keystroke made
+        Email mode snap back to Username before the user could type
+        anything (owner report). `_on_input_change` therefore passes
+        False; `_on_paste` (whole value known) leaves it True. The
+        username -> email direction is unaffected either way: it requires a
+        full `validate_email()` match, never a partial.
+        """
         val = value.strip()
         if not val:
             return
         if state.search_mode == MODE_USERNAME and _is_email_query(val):
             _switch_mode(MODE_EMAIL, keep_query=True)
-        elif state.search_mode == MODE_EMAIL and "@" not in val:
+        elif allow_username_flip and state.search_mode == MODE_EMAIL and "@" not in val:
             _switch_mode(MODE_USERNAME, keep_query=True)
 
     def _on_paste(e):

@@ -51,6 +51,22 @@ class MemoryLogHandler(logging.Handler):
 
 in_memory_log_handler = MemoryLogHandler()
 
+# Loggers that speak on every site-check of a 5,200-site scan. Their volume
+# buries real warnings in both the console and the in-app terminal, so the
+# default keeps them at WARNING and a Settings toggle restores verbosity.
+_NOISY_LOGGERS = ("maigret",)
+
+
+def set_engine_logs(verbose: bool) -> None:
+    """Mute or restore the OSINT engine's own log noise.
+
+    Off (the default) raises these loggers to WARNING, so the terminal still
+    shows real errors but not per-check chatter. On restores them to NOTSET,
+    i.e. inherit the root level.
+    """
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.NOTSET if verbose else logging.WARNING)
+
 
 def get_telemetry_snapshot() -> str:
     """Return a compact system telemetry string (CPU, RAM, Net, Battery)."""

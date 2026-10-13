@@ -17,9 +17,11 @@ import pytest
 from services.scan_notify import (
     CHANNEL_PROGRESS,
     CHANNEL_RESULT,
+    FGS_START_TYPE,
     FGS_TYPE,
     NOTIF_ID_DONE,
     NOTIF_ID_SCAN,
+    PAYLOAD_ROUTE,
     ScanNotifier,
 )
 
@@ -69,9 +71,15 @@ def test_scan_start_runs_the_foreground_service(notifier):
     assert kwargs["show_progress"] is True
     assert kwargs["indeterminate"] is True
     assert kwargs["channel_id"] == CHANNEL_PROGRESS
-    assert kwargs["start_type"] == FGS_TYPE
-    # a Cancel action is always offered while scanning
-    assert [a.id for a in kwargs["actions"]] == ["cancel"]
+    # `start_type` is a different vocabulary from the service type: Dart
+    # accepts only the three sticky strings, so passing FGS_TYPE here would
+    # have silently fallen back to startSticky anyway.
+    assert kwargs["start_type"] == FGS_START_TYPE
+    assert kwargs["foreground_service_types"] == [FGS_TYPE]
+    assert kwargs["payload"] == PAYLOAD_ROUTE
+    # Cancel AND View: a running scan has to be able to take the user back
+    # to it, otherwise the shade is a dead end mid-scan.
+    assert [a.id for a in kwargs["actions"]] == ["cancel", "view"]
 
 
 def test_progress_tick_updates_same_notification_in_place(notifier):
@@ -83,7 +91,11 @@ def test_progress_tick_updates_same_notification_in_place(notifier):
     assert "45%" in dispatched[1][1][1]
     assert dispatched[1][2]["progress"] == 2671
     assert dispatched[1][2]["max_progress"] == 5897
-    assert [a.id for a in dispatched[1][2]["actions"]] == ["cancel"]
+    assert dispatched[1][2]["payload"] == PAYLOAD_ROUTE
+    # Re-show REPLACES the action list, so the tick must re-offer View or
+    # the first progress update would strip the button off the FGS
+    # notification posted by scan_started().
+    assert [a.id for a in dispatched[1][2]["actions"]] == ["cancel", "view"]
 
 
 def test_completion_swaps_to_a_separate_notification(notifier):
@@ -115,6 +127,36 @@ def test_cancel_clears_the_progress_bar(notifier):
     cancel = dispatched[-1]
     assert cancel[0] == "cancel"
     assert cancel[1] == (NOTIF_ID_SCAN,)
+
+
+def test_cancel_also_stops_the_foreground_service(notifier):
+    """A cancelled scan must not leave the service running.
+
+    `cancel()` only removes the tray entry; Android can re-post the service's
+    own ongoing notification and the process stays flagged foreground. Every
+    cancel/supersede path funneled through `scan_cancelled()` previously left
+    it running, which reads exactly like a scan stuck at 99%.
+    """
+    notifier.scan_started("torvalds", is_email=False)
+    notifier.page.run_task.reset_mock()
+    notifier.scan_cancelled()
+    ops = [d[0] for d in _dispatched(notifier.page)]
+    assert "stop_foreground_service" in ops, (
+        "scan_cancelled() dropped the notification but left the foreground "
+        "service running"
+    )
+    # Stop first: dismissing the bar before stopping can race the service's
+    # own ongoing notification back into the shade.
+    assert ops.index("stop_foreground_service") < ops.index("cancel")
+
+
+def test_stop_service_is_safe_with_nothing_running():
+    """stop_service() must be a no-op rather than a raise when idle."""
+    page = MagicMock()
+    n = ScanNotifier(page)
+    n._service = None
+    n.stop_service()  # must not raise
+    assert page.run_task.call_count == 0
 
 
 def test_email_scan_wording(notifier):
@@ -158,14 +200,18 @@ def test_view_action_failure_is_contained(notifier):
 
 
 def test_shutdown_clears_everything(notifier):
-    """shutdown() is sync on the teardown path, so it dispatches the async
-    cancel_all through run_task rather than calling it directly — a direct
-    call returns an un-awaited coroutine and the shade keeps the bar."""
+    """Teardown stops the foreground service, THEN clears the tray.
+
+    Both are coroutines, so both go through run_task rather than being
+    called directly — a direct call returns an un-awaited coroutine and the
+    shade keeps the bar. Order matters: stopping first means the tray clear
+    can't race the service's own ongoing notification.
+    """
     svc = MagicMock()
     notifier._service = svc
     notifier.shutdown()
-    (name, _args, _kwargs) = _dispatched(notifier.page)[0]
-    assert name == "cancel_all"
+    ops = [d[0] for d in _dispatched(notifier.page)]
+    assert ops == ["stop_foreground_service", "cancel_all"]
     svc.cancel_all.assert_not_called()
 
 

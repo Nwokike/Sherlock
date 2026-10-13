@@ -99,6 +99,10 @@ class AppState:
     # Scan separator variants of the handle (john.doe -> john_doe, ...) —
     # multiplies scan length; deliberate opt-in.
     permute_enabled: bool = False
+    # Engine log verbosity. False (default) keeps maigret at WARNING: it speaks
+    # on every site-check and buries real errors. The Settings troubleshooting
+    # toggle restores full verbosity.
+    log_engine_logs: bool = False
     extract_info: bool = True
     max_connections: int = 50
     retries: int = 0

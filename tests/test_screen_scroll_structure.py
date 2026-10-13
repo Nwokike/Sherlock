@@ -225,3 +225,35 @@ def test_no_screen_puts_a_listview_directly_under_a_plain_column():
                 f"{fn.__name__}: ListView directly inside a Column "
                 "(unbounded height, no scroll)"
             )
+
+
+def test_history_list_root_does_not_inset_the_shared_header():
+    """History's header must sit at the same inset as Settings and Home.
+
+    A root-ListView `padding` insets EVERY child, and the shared `AppHeader`
+    applies its own inset — so the History root's Padding(XL, MD, XL, MD)
+    stacked on top of AppHeader's Padding(LG, SM, LG, SM) and rendered the
+    header ~16px narrower than on every other screen. Owner report:
+    "the header in history screen looks hardcoded because I think there is
+    a padding, but then the settings and home don't have padding."
+
+    Padding belongs on the rows (which already carry their own), not the
+    scroll root.
+    """
+    from screens.history_screen import HistoryScreen
+
+    _long_history_state()
+    try:
+        nodes = _mount(HistoryScreen)
+    finally:
+        state.history = []
+
+    views = [n for n, _c in nodes if type(n).__name__ == "ListView"]
+    assert views, "History should render a ListView root"
+    pad = getattr(views[0], "padding", None)
+    left = getattr(pad, "left", 0) or 0
+    right = getattr(pad, "right", 0) or 0
+    assert (left, right) == (0, 0), (
+        f"history root pads horizontally {left}/{right}; AppHeader would be "
+        "inset twice and disagree with Settings/Home"
+    )

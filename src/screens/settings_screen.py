@@ -35,6 +35,7 @@ from core.constants import (
     STORAGE_EXTRACT_INFO,
     STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
+    STORAGE_LOG_ENGINE_LOGS,
     STORAGE_MANIFEST,
     STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
@@ -301,6 +302,15 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             new_mode = ft.ThemeMode.DARK
         page.theme_mode = new_mode
         state.theme_mode = new_mode
+        # Pooled banner ads freeze their glass colours at first build; clearing
+        # here is what clear_banner_pool's docstring says it does on a theme
+        # change (the header's theme-cycle button does the same).
+        try:
+            from components.banner_ad import clear_banner_pool
+
+            clear_banner_pool()
+        except Exception:
+            pass
         from services.storage_service import StorageService
 
         storage = StorageService(page)
@@ -596,6 +606,15 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     def _toggle_permute(val: bool):
         state.permute_enabled = val
         spawn(_persist(STORAGE_PERMUTE, "true" if val else "false"))
+
+    def _on_log_engine_change(val: bool):
+        from core.logger_handler import set_engine_logs
+
+        state.log_engine_logs = val
+        # Apply immediately — otherwise the toggle has to wait for a restart
+        # to affect anything already running.
+        set_engine_logs(val)
+        spawn(_persist(STORAGE_LOG_ENGINE_LOGS, "true" if val else "false"))
 
     def _toggle_extract_info(val: bool):
         state.extract_info = val
@@ -1413,6 +1432,23 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     log_count = len(in_memory_log_handler.get_logs())
     logs_card = _settings_card(
         [
+            _setting_row(
+                ft.Icons.NEWSPAPER_ROUNDED,
+                "Engine Logs",
+                "The OSINT engine logs on every site-check, which buries "
+                "everything else in the console and terminal. Leave off while "
+                "troubleshooting; turn on only when you need per-check detail.",
+                ft.Switch(
+                    value=getattr(state, "log_engine_logs", False),
+                    on_change=_on_log_engine_change,
+                    active_color=ft.Colors.PRIMARY,
+                ),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
             _setting_row(
                 ft.Icons.TERMINAL_ROUNDED,
                 "Live Activity Terminal",

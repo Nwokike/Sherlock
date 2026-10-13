@@ -446,3 +446,66 @@ def test_networks_screen_windows_its_rows():
         "names — the screen builds every row before the ListView can window it"
     )
     assert len(nodes) < 1500, f"built {len(nodes)} nodes for the first paint"
+
+
+# ── 6. Email mode must survive the first keystroke ──────────────────────
+
+
+def test_email_mode_survives_typing():
+    """Typing the first character must not snap Email mode back to Username.
+
+    `_on_input_change` called `_maybe_switch_mode(value)` on every keystroke
+    (added in 660bde5), and that helper's Email->Username branch is
+    `if "@" not in val` — true for the very first character. So switching to
+    Email and starting to type immediately reverted the mode and the query
+    UI, and because `_switch_mode` persists to STORAGE_SEARCH_MODE the wrong
+    mode stuck across launches. Owner report.
+
+    The forward direction (username -> email on a complete address) still
+    runs per keystroke; only the destructive reverse is paste-only.
+    """
+    from flet.components.component import Renderer
+
+    from core.constants import MODE_EMAIL
+    from core.state import state
+    from screens.home_screen import HomeScreen
+    from state.app_state import AppStateCtx
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved_mode = state.search_mode
+    state.search_mode = MODE_EMAIL
+    try:
+        methods = ControllerMethods()
+        renderer = Renderer()
+        root = renderer.render(
+            lambda: ControllerMethodsCtx(
+                methods, lambda: AppStateCtx(state, HomeScreen)
+            )
+        )
+        nodes: list = []
+        _expand(root, nodes)
+
+        bars = [n for n in nodes if type(n).__name__ == "SearchBar"]
+        assert bars, "Home search field did not render"
+        assert bars[0].on_change is not None, "search field has no on_change"
+
+        class _Event:
+            class Control:
+                value = "j"
+
+            control = Control()
+
+        # Drive it inside a running loop: on the buggy code the flip calls
+        # `spawn()` to persist, which needs a loop. Without this the test
+        # would fail on old code via an incidental RuntimeError instead of
+        # on the assertion itself.
+        async def _type_one_char():
+            bars[0].on_change(_Event())
+
+        asyncio.run(_type_one_char())
+
+        assert state.search_mode == MODE_EMAIL, (
+            "first keystroke in Email mode flipped back to Username"
+        )
+    finally:
+        state.search_mode = saved_mode

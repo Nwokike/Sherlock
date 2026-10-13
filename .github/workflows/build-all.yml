@@ -156,6 +156,41 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
+      # ── Notifications: the generated project needs things pyproject cannot
+      # express. `flet build apk` runs its own Gradle build, which stops at
+      # :app:checkReleaseAarMetadata because flutter_local_notifications (via
+      # flet_notifications' Dart half) requires core-library desugaring. So
+      # this is three phases, not one:
+      #   1. flet build generates the project (its Gradle run is expected to
+      #      stop at the desugaring check — the step only fails hard if the
+      #      project was never written)
+      #   2. the patcher injects the desugaring flags, the notification
+      #      receivers/permissions, AND the ForegroundService manifest entry
+      #      that start_foreground_service needs (a scan must outlive the app)
+      #   3. flet build runs again — the template hash is unchanged so the patch
+      #      survives, and --split-per-abi is honoured (a bare
+      #      `gradlew assembleRelease` produces a universal APK instead)
+      - name: Generate the Android project
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set +e
+          uv run flet build apk --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "flet build apk completed on the first pass; no patch required."
+          elif [ -f build/flutter/android/app/build.gradle.kts ]; then
+            echo "::warning::flet build apk stopped at its Gradle run (expected: core library desugaring missing). Project generated; patching and re-running."
+          else
+            echo "::error::flet build apk failed before generating the Android project"
+            exit 1
+          fi
+      - name: Patch the generated Android project (notifications)
+        run: uv run flet-notifications-patch --project-root build/flutter --foreground-service-type dataSync
       - name: Build APK (split per ABI)
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
@@ -203,6 +238,30 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
+      # Three phases for the same reason as the APK job — see the comment
+      # there. scan_notify.start_foreground_service needs the manifest entry
+      # the patcher's --foreground-service-type injects.
+      - name: Generate the Android project
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set +e
+          uv run flet build aab --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "flet build aab completed on the first pass; no patch required."
+          elif [ -f build/flutter/android/app/build.gradle.kts ]; then
+            echo "::warning::flet build aab stopped at its Gradle run (expected: core library desugaring missing). Project generated; patching and re-running."
+          else
+            echo "::error::flet build aab failed before generating the Android project"
+            exit 1
+          fi
+      - name: Patch the generated Android project (notifications)
+        run: uv run flet-notifications-patch --project-root build/flutter --foreground-service-type dataSync
       - name: Build AAB
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks

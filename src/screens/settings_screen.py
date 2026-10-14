@@ -1440,7 +1440,11 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 "troubleshooting; turn on only when you need per-check detail.",
                 ft.Switch(
                     value=getattr(state, "log_engine_logs", False),
-                    on_change=_on_log_engine_change,
+                    # Must unwrap the ControlEvent like every other switch
+                    # here: passing the handler directly stores the event
+                    # object as the state value, which is always truthy, so
+                    # the toggle could never be turned off.
+                    on_change=lambda e: _on_log_engine_change(e.control.value),
                     active_color=ft.Colors.PRIMARY,
                 ),
                 stacked=narrow,

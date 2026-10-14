@@ -403,7 +403,14 @@ class ScanNotifier:
                     # it. Without this the only actions were Cancel and a
                     # body-tap whose delivery depends on the OS, so a user
                     # could not get from the shade into the live results.
-                    NotificationAction(id=_ACTION_VIEW, title="View"),
+                    NotificationAction(
+                        id=_ACTION_VIEW,
+                        title="View",
+                        # Tapping View must not dismiss the bar it is
+                        # navigating to — the default cancel_notification=True
+                        # removed the live progress the user just asked for.
+                        cancel_notification=False,
+                    ),
                 ],
             )
         except Exception as exc:
@@ -432,23 +439,31 @@ class ScanNotifier:
                     # Re-show REPLACES the action list, so View must be here
                     # too or the first tick would strip it off the FGS
                     # notification posted by scan_started().
-                    NotificationAction(id=_ACTION_VIEW, title="View"),
+                    NotificationAction(
+                        id=_ACTION_VIEW,
+                        title="View",
+                        # Tapping View must not dismiss the bar it is
+                        # navigating to — the default cancel_notification=True
+                        # removed the live progress the user just asked for.
+                        cancel_notification=False,
+                    ),
                 ],
             )
         except Exception as exc:
             logger.warning("ScanNotifier: progress post failed: %s", exc)
 
     def scan_finished(self, found: int, total: int) -> None:
-        """Stop the service and post the result, then drop the old bar."""
+        """Stop the service, drop the progress bar, then post the result."""
         if not self.is_usable():
             return
         label = self._active_target or "target"
         noun = "results" if self._active_is_email else "accounts"
         suffix = f" ({total} checked)" if total else ""
         try:
-            # Stop first: the service notification is the OLD id, and posting
-            # the result before stopping would race the two against it.
-            self.page.run_task(self._service.stop_foreground_service)
+            # Teardown first: the service notification and the last progress
+            # tick share NOTIF_ID_SCAN, and posting the result before they are
+            # gone races them against it.
+            self.stop_service()
             self.page.run_task(
                 self._service.show,
                 NOTIF_ID_DONE,
@@ -457,11 +472,14 @@ class ScanNotifier:
                 channel_id=CHANNEL_RESULT,
                 payload=PAYLOAD_ROUTE,
                 actions=[
-                    NotificationAction(id=_ACTION_VIEW, title="View"),
+                    NotificationAction(
+                        id=_ACTION_VIEW,
+                        title="View",
+                        # The scan is over, so dismissing on tap is fine.
+                    ),
                     NotificationAction(id=_ACTION_COPY, title="Copy report"),
                 ],
             )
-            self._dismiss_progress()
         except Exception as exc:
             logger.warning("ScanNotifier: finish post failed: %s", exc)
 
@@ -474,19 +492,28 @@ class ScanNotifier:
         symptom after a cancel or a superseded scan.
         """
         self.stop_service()
-        self._dismiss_progress()
 
     def stop_service(self) -> None:
-        """Stop the foreground service if one is running. Idempotent.
+        """Stop the foreground service and drop the progress bar.
 
-        Paired with `start_foreground_service` on EVERY exit path:
-        complete / cancel / supersede / error / app close. Calling it when
-        nothing runs is a no-op on the Android side.
+        Idempotent, and the ONE call every exit path uses — complete, cancel,
+        supersede, error, app close. Two halves are required:
+
+        * `stop_foreground_service()` retracts the service; without it the
+          process stays flagged foreground and Android can re-post the bar.
+        * `cancel(NOTIF_ID_SCAN)` clears the tray entry; every progress tick
+          re-posts with `show()` on that id, so the last one would otherwise
+          persist as a normal notification frozen at its percentage — the
+          exact "stuck at 99%" symptom claimed fixed.
+
+        Stop comes first so the OS cannot re-post the service's own ongoing
+        entry over the tray we just cleared.
         """
         if self._service is None:
             return
         try:
             self.page.run_task(self._service.stop_foreground_service)
+            self.page.run_task(self._service.cancel, NOTIF_ID_SCAN)
         except Exception as exc:
             logger.warning("ScanNotifier: stop service failed: %s", exc)
 

@@ -220,11 +220,34 @@ def _build_result_list(
     slots = _banner_slots(len(items))
     controls = []
     cursor = 0
+
+    def _cards(rows):
+        """Build cards, degrading one bad row instead of killing the screen.
+
+        Flet's update scheduler runs `for control in pending_updates:
+        control.update()` with NO try/except (.venv/flet/messaging/session.py
+        __updates_scheduler): a raise inside a component's render ends that
+        loop permanently and silently, so the whole UI freezes mid-scan and
+        nothing is logged. A single row with a hostile enrichment/location/
+        avatar payload used to take the entire Results screen down — the
+        "works, then stops" freeze. Skipping the row is strictly better than
+        a dead screen, and it is logged so a bad source is still visible.
+        """
+        for row in rows:
+            try:
+                controls.append(build_card(row))
+            except Exception:
+                logger.warning(
+                    "Skipping an unrenderable result row (%s)",
+                    getattr(row, "site_name", type(row).__name__),
+                    exc_info=True,
+                )
+
     for ordinal, slot in enumerate(slots):
-        controls.extend(build_card(r) for r in items[cursor : slot + 1])
+        _cards(items[cursor : slot + 1])
         controls.append(banner_at(ordinal))
         cursor = slot + 1
-    controls.extend(build_card(r) for r in items[cursor:])
+    _cards(items[cursor:])
     # ListView with build_controls_on_demand: cards materialize lazily as the
     # user scrolls, so even 5,200 entries stay smooth.
     return ft.ListView(

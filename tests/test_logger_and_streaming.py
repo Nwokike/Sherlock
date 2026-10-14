@@ -150,3 +150,78 @@ def test_set_engine_logs_mutes_maigret_but_keeps_our_own():
         root.removeHandler(handler)
         root.setLevel(restore)
         handler.clear_logs()
+
+
+def test_engine_logs_switch_receives_a_bool_not_the_event():
+    """The Engine Logs switch must unwrap `e.control.value`.
+
+    Passing the handler straight to `ft.Switch(on_change=...)` stores the
+    ControlEvent object as the state value. An event is always truthy, so
+    `set_engine_logs(event)` resolved to verbose every time and the toggle
+    could never be turned off — the exact bug introduced in 1ea9815 and
+    caught by the adversarial review. Every other switch in SettingsScreen
+    unwraps; this one must too.
+    """
+    from flet.components.component import Component, Renderer
+
+    from screens.settings_screen import SettingsScreen
+    from state.app_state import AppStateCtx
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    prev = state.log_engine_logs
+    try:
+        state.log_engine_logs = True  # start verbose, then switch OFF
+        from core.logger_handler import set_engine_logs
+
+        set_engine_logs(prev)
+        methods = ControllerMethods()
+        renderer = Renderer()
+        root = renderer.render(
+            lambda: ControllerMethodsCtx(
+                methods, lambda: AppStateCtx(state, SettingsScreen)
+            )
+        )
+
+        def walk(node, out):
+            out.append(node)
+            if isinstance(node, Component):
+                node.before_update()
+                b = getattr(node, "_b", None)
+                if b is not None:
+                    walk(b, out)
+            elif isinstance(node, list):
+                for i in node:
+                    walk(i, out)
+            else:
+                for ch in getattr(node, "controls", None) or []:
+                    walk(ch, out)
+                c = getattr(node, "content", None)
+                if c is not None and not isinstance(c, str):
+                    walk(c, out)
+
+        nodes = []
+        walk(root, nodes)
+        switches = [n for n in nodes if type(n).__name__ == "Switch"]
+        assert switches, "SettingsScreen rendered no switches"
+
+        class _Event:
+            class Control:
+                value = False
+
+            control = Control()
+
+        # The handler persists via spawn(), which needs a running loop.
+        async def _toggle(event):
+            for sw in switches:
+                if getattr(sw, "value", None) is True:
+                    sw.on_change(event)
+
+        asyncio.run(_toggle(_Event()))
+
+        assert state.log_engine_logs is False, (
+            "the switch stored the event object (always truthy) instead of "
+            "the new value — Engine Logs can never be turned off"
+        )
+    finally:
+        state.log_engine_logs = prev
+        set_engine_logs(prev)

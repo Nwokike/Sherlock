@@ -426,3 +426,36 @@ def _installed_on_action(notifier):
     finally:
         sn.LocalNotifications = real_ctor
     return captured["svc"].on_action
+
+
+def test_stop_service_also_clears_the_frozen_bar():
+    """Stopping the service alone leaves the last progress tick up.
+
+    Every tick re-posts with `show()` on NOTIF_ID_SCAN, so when the service
+    goes away that entry lingers as a normal notification frozen at its
+    percentage — the "stuck at 99%" look the whole fix was supposed to
+    remove. stop_service() must do both halves.
+    """
+    page = MagicMock()
+    n = ScanNotifier(page)
+    n._service = MagicMock()
+    n._ready = True
+    n.stop_service()
+    ops = [d[0] for d in _dispatched(page)]
+    assert ops == ["stop_foreground_service", "cancel"], ops
+    assert [d[1] for d in _dispatched(page) if d[0] == "cancel"] == [(NOTIF_ID_SCAN,)]
+
+
+def test_view_does_not_dismiss_the_live_bar(notifier):
+    """View must keep the progress bar it navigates the user to.
+
+    `cancel_notification` defaults to True, so tapping View used to remove
+    the live progress the user just asked for.
+    """
+    notifier.scan_started("torvalds", is_email=False)
+    (_name, _args, kwargs) = _dispatched(notifier.page)[0]
+    views = [a for a in kwargs["actions"] if a.id == "view"]
+    assert views, "the live notification has no View action"
+    assert views[0].cancel_notification is False, (
+        "View cancels the notification, hiding the live progress bar"
+    )

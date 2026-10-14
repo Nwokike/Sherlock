@@ -939,7 +939,12 @@ class AppController:
                 state.is_searching = False
                 username_progress.is_running = False
                 state.progress_version += 1
-                self.scan_notify.scan_cancelled()
+                # Only a USER cancel takes the bar with it. A superseded scan
+                # reaches here after its replacement, which has already posted
+                # its own notification on the same id and started its own
+                # foreground service — retracting would kill theirs.
+                if getattr(result, "is_cancelled", False):
+                    self.scan_notify.scan_cancelled()
                 self._stop_render_flusher()
                 return
 
@@ -1391,7 +1396,11 @@ class AppController:
                 state.is_searching = False
                 email_progress.is_running = False
                 state.progress_version += 1
-                self.scan_notify.scan_cancelled()
+                # Same rule as the username path: only a user cancel retracts,
+                # because a superseded scan's replacement owns the notification
+                # id and the foreground service.
+                if getattr(result, "is_cancelled", False):
+                    self.scan_notify.scan_cancelled()
                 self._stop_render_flusher()
                 return
 

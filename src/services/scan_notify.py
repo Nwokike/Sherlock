@@ -42,9 +42,15 @@ Design notes
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
+
+# How long to wait for the native layer before giving up on it for the
+# session. flet's own invoke timeout is 10s per call; waiting that out twice
+# (channels + permission) blocked scan start for 20 seconds.
+_PROBE_TIMEOUT = 1.5
 
 _HAS_NOTIFICATIONS = True
 try:
@@ -163,6 +169,8 @@ class ScanNotifier:
         # One warning per session; the OS dialog only appears once or twice
         # and then hard-denies, so nagging every scan would be noise.
         self._warned = False
+        # Latched when the native side never answers. See _PROBE_TIMEOUT.
+        self._unavailable = False
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
@@ -176,7 +184,24 @@ class ScanNotifier:
         This is a *state* probe, not a coroutine, so it never touches the
         service and can be consulted from render code.
         """
+        if self._unavailable:
+            # The native half never answered, so every further call would
+            # block for the same timeout and raise the same way. Staying
+            # silent keeps scans fast and the console clean.
+            return False
         return self._service is not None and self._ready
+
+    def _can_dispatch(self) -> bool:
+        """Guard for every outbound native call, not just the posts.
+
+        Teardown and probe methods used to check only `_service is None`, so
+        once the native layer stopped answering they still attempted their
+        calls — each one waiting out flet's 10s invoke timeout and then
+        raising inside `page._on_completion`, which printed a full traceback
+        per call. Gating them on `_unavailable` too is what makes the latch
+        actually quiet.
+        """
+        return self._service is not None and not self._unavailable
 
     async def ensure_ready(self) -> bool:
         """Await this before the first `show()` of a session.
@@ -188,17 +213,55 @@ class ScanNotifier:
         service and the first notification of the session would be dropped
         silently. The caller's `await` is what sequences them.
 
-        Idempotent: safe to call before every scan. Cheap after the first
-        call (one `are_notifications_enabled` probe).
+        Bounded: every native call is wrapped in `_PROBE_TIMEOUT`. Under
+        plain `flet run` the extension's Dart half is absent, and flet's
+        own invoke timeout is 10s PER CALL — channels plus the permission
+        probe blocked scan start for 20 seconds, which showed up as the
+        Results screen sitting on "Initializing" while nothing scanned.
+        A timeout latches `_unavailable` for the session.
+
+        Idempotent: safe to call before every scan.
         """
-        if not _HAS_NOTIFICATIONS:
+        if not _HAS_NOTIFICATIONS or self._unavailable:
             return False
         if not self._started:
             await self._construct()
         if self._service is None:
+            self._unavailable = True
             return False
-        await self._ensure_channels()
-        return await self._check_permission()
+        ok, _ = await self._probe(self._ensure_channels())
+        if not ok:
+            return False
+        ok, granted = await self._probe(self._check_permission())
+        return bool(granted) if ok else False
+
+    async def _probe(self, coro):
+        """Run a native call with a short bound. Returns ``(completed, value)``.
+
+        `_ensure_channels` returns None on success, so the caller cannot use
+        the value alone to tell success from failure — hence the explicit
+        `completed` flag rather than a truthiness test.
+
+        On timeout the coroutine is abandoned deliberately: awaiting it would
+        only wait out flet's own 10s and then raise, and the call is already
+        lost either way.
+        """
+        try:
+            return True, await asyncio.wait_for(coro, timeout=_PROBE_TIMEOUT)
+        except TimeoutError:
+            self._unavailable = True
+            logger.info(
+                "ScanNotifier: no response from the native notification "
+                "layer within %.1fs — notifications off for this session "
+                "(expected under plain `flet run`, where the extension's "
+                "Dart half is not loaded)",
+                _PROBE_TIMEOUT,
+            )
+            return False, None
+        except Exception as exc:
+            self._unavailable = True
+            logger.info("ScanNotifier: notification layer unavailable (%s)", exc)
+            return False, None
 
     async def _construct(self) -> None:
         """Build the service once and wire its handlers.
@@ -300,7 +363,7 @@ class ScanNotifier:
         who turns notifications on from Android settings later gets them on
         the next scan with no restart.
         """
-        if self._service is None:
+        if not self._can_dispatch():
             return False
         try:
             if await self._service.are_notifications_enabled():
@@ -335,7 +398,7 @@ class ScanNotifier:
 
     async def open_settings(self) -> None:
         """Route the user to the OS notification settings for this app."""
-        if self._service is None:
+        if not self._can_dispatch():
             return
         try:
             await self._service.open_app_notification_settings()
@@ -344,7 +407,7 @@ class ScanNotifier:
 
     async def request_permission(self) -> bool:
         """Ask for POST_NOTIFICATIONS. Best-effort; never raises."""
-        if self._service is None:
+        if not self._can_dispatch():
             return False
         try:
             return bool(await self._service.request_permissions())
@@ -509,7 +572,7 @@ class ScanNotifier:
         Stop comes first so the OS cannot re-post the service's own ongoing
         entry over the tray we just cleared.
         """
-        if self._service is None:
+        if not self._can_dispatch():
             return
         try:
             self.page.run_task(self._service.stop_foreground_service)
@@ -518,7 +581,7 @@ class ScanNotifier:
             logger.warning("ScanNotifier: stop service failed: %s", exc)
 
     def _dismiss_progress(self) -> None:
-        if self._service is None:
+        if not self._can_dispatch():
             return
         try:
             self.page.run_task(self._service.cancel, NOTIF_ID_SCAN)
@@ -541,7 +604,7 @@ class ScanNotifier:
         otherwise the tray clear can race the service's own ongoing
         notification.
         """
-        if self._service is None:
+        if not self._can_dispatch():
             return
         try:
             self.page.run_task(self._service.stop_foreground_service)

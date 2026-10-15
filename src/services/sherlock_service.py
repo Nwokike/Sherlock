@@ -14,6 +14,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# maigret reports every site check through the logger it is handed, so
+# passing our own module logger made 5,000+ per-check lines arrive under
+# "services.sherlock_service" — indistinguishable from our own messages, and
+# unmutable by name. Give it a dedicated child logger so the engine's noise
+# can be raised to WARNING on its own (see core.logger_handler.set_engine_logs)
+# while our own INFO lines stay visible.
+engine_logger = logging.getLogger("sherlock.engine")
+
 _MAIGRET_AVAILABLE = False
 try:
     import maigret
@@ -692,7 +700,7 @@ def _run_maigret_worker_thread(
                 await maigret_search(
                     username=tgt,
                     site_dict=sites_to_scan,
-                    logger=logger,
+                    logger=engine_logger,
                     **_maigret_kwargs(
                         maigret_search,
                         query_notify=query_notify,
@@ -824,7 +832,7 @@ def _run_maigret_worker_thread(
                     await maigret_search(
                         username=new_id,
                         site_dict=sites2,
-                        logger=logger,
+                        logger=engine_logger,
                         **_maigret_kwargs(
                             maigret_search,
                             query_notify=notify2,

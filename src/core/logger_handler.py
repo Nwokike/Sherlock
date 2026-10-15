@@ -54,7 +54,12 @@ in_memory_log_handler = MemoryLogHandler()
 # Loggers that speak on every site-check of a 5,200-site scan. Their volume
 # buries real warnings in both the console and the in-app terminal, so the
 # default keeps them at WARNING and a Settings toggle restores verbosity.
-_NOISY_LOGGERS = ("maigret",)
+#
+# `sherlock.engine` is the child logger handed to maigret — it reports every
+# check through whatever logger it is given, and it used to be handed OUR
+# module logger, so those records arrived as "services.sherlock_service" and
+# muting `maigret` by name did nothing at all.
+_NOISY_LOGGERS = ("sherlock.engine",)
 
 
 def set_engine_logs(verbose: bool) -> None:

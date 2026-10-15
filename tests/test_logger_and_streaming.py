@@ -112,11 +112,18 @@ def test_streaming_enrichment_queues_and_processes():
 
 
 def test_set_engine_logs_mutes_maigret_but_keeps_our_own():
-    """Maigret's per-check chatter must not bury the rest of the terminal.
+    """The engine's per-check chatter must not bury the rest of the terminal.
 
     It logs on every site-check of a 5,200-site scan, so the console and the
-    in-app terminal become unreadable and real warnings are missed. The mute
-    has to be scoped to that logger — silencing everything would hide errors.
+    in-app terminal become unreadable and real warnings are missed. Two
+    things have to hold:
+
+    * the mute targets the logger maigret actually writes to. It reports
+      through whatever logger it is handed, and we hand it the
+      `sherlock.engine` child — NOT `maigret` by name, which is why the
+      first attempt at this mute did nothing at all (the records arrived
+      under `services.sherlock_service` and looked like our own messages).
+    * our own logger keeps talking, or errors would vanish with the noise.
     """
     from core.logger_handler import MemoryLogHandler, set_engine_logs
 
@@ -125,13 +132,13 @@ def test_set_engine_logs_mutes_maigret_but_keeps_our_own():
     restore = root.level
     root.addHandler(handler)
     last = set_engine_logs(True)
-    saved_mig = logging.getLogger("maigret").level
+    saved_engine = logging.getLogger("sherlock.engine").level
     root.setLevel(logging.DEBUG)
     try:
         set_engine_logs(False)
-        logging.getLogger("maigret").info("per-check chatter")
-        logging.getLogger("maigret").debug("more chatter")
-        assert handler.get_logs() == [], "maigret log lines reached the terminal"
+        logging.getLogger("sherlock.engine").info("per-check chatter")
+        logging.getLogger("sherlock.engine").debug("more chatter")
+        assert handler.get_logs() == [], "engine log lines reached the terminal"
 
         logging.getLogger("services.sherlock_service").warning("a real warning")
         logs = handler.get_logs()
@@ -140,16 +147,35 @@ def test_set_engine_logs_mutes_maigret_but_keeps_our_own():
         )
 
         set_engine_logs(True)
-        logging.getLogger("maigret").info("verbose detail on purpose")
+        logging.getLogger("sherlock.engine").info("verbose detail on purpose")
         assert any(
             "verbose detail on purpose" in line for line in handler.get_logs()
         ), "restoring verbosity did not let engine logs back through"
     finally:
         set_engine_logs(last)
-        logging.getLogger("maigret").setLevel(saved_mig)
+        logging.getLogger("sherlock.engine").setLevel(saved_engine)
         root.removeHandler(handler)
         root.setLevel(restore)
         handler.clear_logs()
+
+
+def test_maigret_reports_through_the_dedicated_engine_logger():
+    """The engine must be handed `sherlock.engine`, not our module logger.
+
+    Passing `logger` (this module's) made every site-check line arrive as
+    `services.sherlock_service`, indistinguishable from our own messages and
+    impossible to mute by name.
+    """
+    import inspect
+
+    import services.sherlock_service as svc
+
+    assert svc.engine_logger.name == "sherlock.engine"
+    src = inspect.getsource(svc)
+    assert "logger=engine_logger," in src, "maigret is still handed the module logger"
+    assert "logger=logger," not in src, (
+        "an engine call still passes the shared module logger"
+    )
 
 
 def test_engine_logs_switch_receives_a_bool_not_the_event():

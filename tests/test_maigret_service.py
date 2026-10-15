@@ -366,3 +366,126 @@ class TestRecursiveTargetExtraction:
 
         assert _collect_recursive_targets({}, self._stub_db(), []) == {}
         assert _collect_recursive_targets({"a": {}}, self._stub_db(), ["a"]) == {}
+
+
+def test_username_cancel_aborts_site_checks_promptly():
+    """Cancel must stop the engine, not just stop collecting results.
+
+    An earlier version only set a cooperative flag the worker polls between
+    *targets*. A username scan has ONE target and thousands of sites, so a
+    cancelled scan ran to completion in the background while the UI reported
+    it stopped — a field log showed maigret still reporting sites seconds
+    after the cancel.
+
+    The supported abort path is cancelling the maigret task itself: its
+    executor cancels the queue workers and each worker cancels its live
+    request (.venv/maigret/executors.py:60-69, 99-110). This drives the real
+    worker function with a stub engine so there is no DB or network, and
+    asserts the checks actually stop — the assertion every existing
+    username-cancel test was missing (they all used mocks).
+
+    It also pins the contract we rely on for partial results: maigret
+    updates `output_container` per result, so cancelling mid-scan keeps
+    everything checked so far.
+    """
+    import threading
+    import time
+
+    import services.sherlock_service as svc
+
+    total_checks = 4000
+    checks: list[int] = []
+    started = threading.Event()
+    captured: dict = {}
+
+    async def _stub_maigret_search(**kwargs):
+        """Many slow 'site checks', each recording into output_container."""
+        container = kwargs.get("output_container")
+        captured["container"] = container
+        for i in range(total_checks):
+            if container is not None and i % 10 == 0:
+                container[f"id{i}"] = {"username": f"id{i}"}
+            checks.append(i)
+            started.set()
+            await asyncio.sleep(0.01)
+        return
+
+    cancel_event = threading.Event()
+    handle = svc._CancelHandle()
+    original = svc.maigret_search
+    svc.maigret_search = _stub_maigret_search
+    try:
+        worker = threading.Thread(
+            target=svc._run_maigret_worker_thread,
+            kwargs={
+                "targets": ["probeuser"],
+                "sites_to_scan": {"Site": object()},
+                "proxy": None,
+                "timeout": 3,
+                "max_conns": 5,
+                "dns_res": "threaded",
+                "extract_info": False,
+                "retry_count": 0,
+                "cancel_event": cancel_event,
+                "cancel_handle": handle,
+                "on_progress_cb": lambda _p: None,
+                "db": None,
+                "recursive": False,
+            },
+            daemon=True,
+        )
+        worker.start()
+        assert started.wait(10), "the stub engine never started"
+
+        time.sleep(0.1)  # let a handful of checks accrue
+        before = len(checks)
+        assert before > 0
+
+        cancel_event.set()
+        handle.cancel()
+
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "the worker thread outlived the cancel"
+
+        stopped_at = len(checks)
+        assert stopped_at < total_checks, (
+            "the stub ran to completion — cancel never reached the engine"
+        )
+        # And it really stopped, rather than finishing the loop on the way out.
+        time.sleep(0.3)
+        assert len(checks) == stopped_at, "site checks kept running after cancel"
+
+        container = captured.get("container")
+        assert container, (
+            "output_container was not passed — partial results would be lost"
+        )
+    finally:
+        svc.maigret_search = original
+
+
+def test_service_cancel_tells_the_engine_to_stop():
+    """`cancel()` must drive the task handle, not only the cooperative flag.
+
+    The flag alone is what made a cancelled username scan keep running: it
+    is polled between targets, and a username scan has one target.
+    """
+    import services.sherlock_service as svc
+    from core.state import state
+
+    service = svc.SherlockService()
+    told: list[bool] = []
+
+    class _Spy(svc._CancelHandle):
+        def cancel(self):
+            told.append(True)
+
+    service._cancel_handle = _Spy()
+    saved = state.target_results
+    state.target_results = {}
+    try:
+        service.cancel()
+    finally:
+        state.target_results = saved
+
+    assert service._thread_cancel.is_set(), "the cooperative flag was not set"
+    assert told == [True], "cancel() never told the running engine to stop"

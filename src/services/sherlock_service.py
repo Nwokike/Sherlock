@@ -514,6 +514,50 @@ def _mark_cancelled(prog: SearchProgress) -> None:
     prog.is_cancelled = True
 
 
+class _CancelHandle:
+    """Cross-thread handle to the maigret task currently running.
+
+    The scan runs on a private event loop inside a worker thread, so
+    `cancel()` — called from the main loop — cannot touch the task directly.
+    It needs both the loop and the task to reach in with
+    `call_soon_threadsafe`, which is exactly what `EmailService.cancel()`
+    already keeps on itself.
+
+    Cancelling that task is the supported abort path: maigret's own
+    `executors.run()` finally cancels its queue workers, and each worker
+    cancels the HTTP request in flight (`.venv/maigret/executors.py:60-69,
+    99-110`). `checking.py:1399` re-raises `CancelledError` after calling
+    `query_notify.finish()`, leaving partial results in the
+    `output_container` we already pass.
+
+    Without this, `cancel()` only set a flag that the engine checks between
+    *targets* — useless for a single-target scan of 5,200 sites, which is
+    why a cancelled username scan kept running to completion.
+    """
+
+    __slots__ = ("loop", "task")
+
+    def __init__(self) -> None:
+        self.loop: Any = None
+        self.task: Any = None
+
+    def cancel(self) -> None:
+        """Cancel the running task from any thread. Safe when idle."""
+        loop, task = self.loop, self.task
+        if loop is None or task is None or task.done():
+            return
+        if not loop.is_running():
+            return
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:
+            pass  # worker loop already tearing down
+
+    def clear(self) -> None:
+        self.loop = None
+        self.task = None
+
+
 def _maigret_kwargs(func: Any, **kwargs: Any) -> dict[str, Any]:
     """Drop kwargs the installed maigret() doesn't accept (version skew)."""
     import inspect as _inspect
@@ -619,6 +663,7 @@ def _run_maigret_worker_thread(
     extract_info: bool,
     retry_count: int,
     cancel_event: threading.Event,
+    cancel_handle: _CancelHandle,
     on_progress_cb: Callable[[SearchProgress], None],
     db: Any | None = None,
     recursive: bool = False,
@@ -633,6 +678,10 @@ def _run_maigret_worker_thread(
 
     Keeping this off the main thread ensures 100% UI responsiveness for Flet.
     """
+    # Tracked-task helper (the repo forbids bare create_task/ensure_future).
+    # It returns the Task, which is exactly the handle cancel_handle needs.
+    from core.tasks import spawn
+
     worker_loop = asyncio.new_event_loop()
     try:
         asyncio.get_event_loop()
@@ -643,6 +692,8 @@ def _run_maigret_worker_thread(
         if _old_loop is not None and _old_loop.is_closed():
             _old_loop = None
     asyncio.set_event_loop(worker_loop)
+    # Publish the loop so cancel() can reach into it from the main thread.
+    cancel_handle.loop = worker_loop
 
     last_prog: SearchProgress | None = None
     total_sites = len(sites_to_scan)
@@ -697,28 +748,38 @@ def _run_maigret_worker_thread(
                 containers[tgt] = output_container
 
             try:
-                await maigret_search(
-                    username=tgt,
-                    site_dict=sites_to_scan,
-                    logger=engine_logger,
-                    **_maigret_kwargs(
-                        maigret_search,
-                        query_notify=query_notify,
-                        proxy=proxy,
-                        timeout=timeout,
-                        max_connections=max_conns,
-                        no_progressbar=True,
-                        dns_resolver=dns_res,
-                        is_parsing_enabled=extract_info,
-                        is_enrich_enabled=deep_enrich,
-                        retries=retry_count,
-                        output_container=output_container,
-                        keywords=keywords,
-                        cookies=cookies_path,
-                        i2p_proxy=i2p_proxy,
-                        check_domains=check_domains,
+                # Run as a TASK, not a bare await: `cancel_handle` needs a
+                # handle to cancel, and cancelling it is what aborts the
+                # in-flight site checks (see _CancelHandle).
+                cancel_handle.task = spawn(
+                    maigret_search(
+                        username=tgt,
+                        site_dict=sites_to_scan,
+                        logger=engine_logger,
+                        **_maigret_kwargs(
+                            maigret_search,
+                            query_notify=query_notify,
+                            proxy=proxy,
+                            timeout=timeout,
+                            max_connections=max_conns,
+                            no_progressbar=True,
+                            dns_resolver=dns_res,
+                            is_parsing_enabled=extract_info,
+                            is_enrich_enabled=deep_enrich,
+                            retries=retry_count,
+                            output_container=output_container,
+                            keywords=keywords,
+                            cookies=cookies_path,
+                            i2p_proxy=i2p_proxy,
+                            check_domains=check_domains,
+                        ),
                     ),
+                    "maigret-primary",
                 )
+                try:
+                    await cancel_handle.task
+                finally:
+                    cancel_handle.task = None
             except asyncio.CancelledError:
                 progress.is_cancelled = True
                 raise
@@ -829,29 +890,36 @@ def _run_maigret_worker_thread(
                 if keep_containers:
                     containers[new_id] = container2
                 try:
-                    await maigret_search(
-                        username=new_id,
-                        site_dict=sites2,
-                        logger=engine_logger,
-                        **_maigret_kwargs(
-                            maigret_search,
-                            query_notify=notify2,
-                            proxy=proxy,
-                            timeout=timeout,
-                            max_connections=max_conns,
-                            no_progressbar=True,
-                            dns_resolver=dns_res,
-                            is_parsing_enabled=extract_info,
-                            is_enrich_enabled=deep_enrich,
-                            retries=retry_count,
-                            output_container=container2,
-                            id_type=id_type,
-                            keywords=keywords,
-                            cookies=cookies_path,
-                            i2p_proxy=i2p_proxy,
-                            check_domains=check_domains,
+                    cancel_handle.task = spawn(
+                        maigret_search(
+                            username=new_id,
+                            site_dict=sites2,
+                            logger=engine_logger,
+                            **_maigret_kwargs(
+                                maigret_search,
+                                query_notify=notify2,
+                                proxy=proxy,
+                                timeout=timeout,
+                                max_connections=max_conns,
+                                no_progressbar=True,
+                                dns_resolver=dns_res,
+                                is_parsing_enabled=extract_info,
+                                is_enrich_enabled=deep_enrich,
+                                retries=retry_count,
+                                output_container=container2,
+                                id_type=id_type,
+                                keywords=keywords,
+                                cookies=cookies_path,
+                                i2p_proxy=i2p_proxy,
+                                check_domains=check_domains,
+                            ),
                         ),
+                        "maigret-secondary",
                     )
+                    try:
+                        await cancel_handle.task
+                    finally:
+                        cancel_handle.task = None
                 except asyncio.CancelledError:
                     progress2.is_cancelled = True
                     raise
@@ -878,6 +946,18 @@ def _run_maigret_worker_thread(
 
     try:
         return worker_loop.run_until_complete(_runner())
+    except asyncio.CancelledError:
+        # Expected outcome of cancel(): the task we cancelled is the maigret
+        # scan itself, so its CancelledError unwinds through _runner(). That
+        # is a stop the user asked for, not a failure — letting it escape
+        # would kill the thread with a full traceback on every single cancel.
+        # Partial results survive in the progress objects already recorded in
+        # state.target_results and marked cancelled by cancel().
+        if cancel_event.is_set():
+            logger.info("Username scan cancelled — engine stopped")
+        else:
+            logger.warning("Username scan aborted without a cancel request")
+        return last_prog
     finally:
         pending = asyncio.all_tasks(worker_loop)
         for task in pending:
@@ -888,6 +968,8 @@ def _run_maigret_worker_thread(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
         worker_loop.close()
+        # Nothing to cancel on a dead loop any more.
+        cancel_handle.clear()
         try:
             asyncio.set_event_loop(_old_loop)
         except Exception:
@@ -898,12 +980,13 @@ class SherlockService:
     """Runs high-performance username OSINT searches powered by Maigret across 5,200+ sites."""
 
     def __init__(self):
-        # Cooperative cancel only: the worker thread polls _thread_cancel
-        # between targets. There is intentionally no asyncio.Event / task
-        # handle — the scan runs in a threadpool thread that cannot be
-        # interrupted mid-target; cancel takes effect at target boundaries
-        # and suppresses further progress ticks.
+        # Two-layer cancel. `_thread_cancel` is the cooperative flag the
+        # worker polls between targets and the collector checks per site;
+        # `_cancel_handle` reaches into the worker's own event loop and
+        # cancels the running maigret task, which is what actually aborts
+        # in-flight site checks (see _CancelHandle).
         self._thread_cancel = threading.Event()
+        self._cancel_handle = _CancelHandle()
         self._db: Any | None = None
         self._sites_dict: dict[str, Any] = {}
         self._total_sites: int = 0
@@ -1122,7 +1205,14 @@ class SherlockService:
                 after_primary(tgt, len(prog.found), prog.total_sites)
 
         def _recording_progress(prog: SearchProgress) -> None:
-            """Store per-target truth, then forward to the caller."""
+            """Store per-target truth, then forward to the caller.
+
+            Gated on cancel: a scan that is cancelling still has a tick or
+            two in flight, and those must not land in `state.target_results`
+            or reach the UI after the user asked it to stop.
+            """
+            if self._thread_cancel.is_set():
+                return
             try:
                 state.target_results[prog.username] = prog
             except Exception:
@@ -1141,6 +1231,7 @@ class SherlockService:
             extract_info=extract_info,
             retry_count=retry_count,
             cancel_event=self._thread_cancel,
+            cancel_handle=self._cancel_handle,
             on_progress_cb=_recording_progress,
             db=self._db,
             recursive=recursive,
@@ -1267,13 +1358,25 @@ class SherlockService:
             return {"error": f"DB health check failed: {exc}"}
 
     def cancel(self) -> None:
-        """Signal cancel — cooperative, between-target boundary only.
+        """Cancel a running username scan — prompt, from any thread.
 
-        The scan runs in a threadpool thread that cannot be interrupted
-        mid-target: in-flight site checks drain in the background while the
-        worker stops ticking progress at the next target boundary.
+        Two layers, because one is not enough:
+
+        * `_thread_cancel` makes the worker stop starting new targets and
+          the collector stop recording per-site results.
+        * `_cancel_handle.cancel()` cancels the maigret task itself on the
+          worker's own loop. That is the only thing that aborts the HTTP
+          checks already in flight: maigret's `executors.run()` finally
+          cancels its queue workers and each worker cancels its live
+          request (`.venv/maigret/executors.py:60-69, 99-110`).
+
+        An earlier version of this method claimed the scan "cannot be
+        interrupted" and only set the flag — which for a single target over
+        5,200 sites meant a cancelled scan ran to completion in the
+        background while the UI said it had stopped.
         """
         self._thread_cancel.set()
+        self._cancel_handle.cancel()
 
         from core.state import state
 

@@ -168,11 +168,13 @@ class AppController:
         the task also means the old search's results/history tail can
         never run and clobber the new search's state.
 
-        Note: the sherlock scan runs on a worker thread whose queued
-        HTTP requests cannot be interrupted (sherlock-project submits all
-        site checks upfront) — the drain continues in background, but the
-        collector stops ticking the moment the cancel event is set, so
-        no state or UI is affected.
+        Note: `sherlock_service.cancel()` reaches into the worker's own
+        event loop and cancels the running maigret task, which aborts the
+        site checks in flight — maigret's executor cancels its queue workers
+        and each worker cancels its live request
+        (.venv/maigret/executors.py:60-69, 99-110). An earlier comment here
+        claimed those requests "cannot be interrupted"; that was wrong, and
+        it was why a cancelled username scan kept running to completion.
         """
         try:
             current = asyncio.current_task()
@@ -1194,8 +1196,16 @@ class AppController:
         late callbacks (e.g. its finally-block tick) must never clobber
         the current search's progress slot. Cross-mode ticks are always
         dropped; same-mode ticks are dropped when their target is not
-        the active search's target.
+        the active search's target, or when the scan that produced them has
+        already been cancelled.
         """
+        if getattr(progress, "is_cancelled", False):
+            # The user stopped this scan. A bare cancel leaves the target
+            # matching, so the scope check below would admit the cancel
+            # path's own trailing tick and repaint a scan the UI has already
+            # reported as stopped.
+            logger.debug("Dropping tick from a cancelled scan")
+            return
         is_email_progress = hasattr(progress, "checked_modules")
         if is_email_progress and state.search_mode != MODE_EMAIL:
             logger.debug(

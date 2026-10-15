@@ -47,9 +47,6 @@ jni = "1.1.0"
 [tool.flet.android]
 bundle_id = "ng.kiri.sherlock"
 target_arch = ["arm64-v8a", "x86_64"]
-# Branded adaptive-icon backdrop (app dark tone) — also drives the
-# Android 12+ splash background behind the launcher icon.
-adaptive_icon_background = "#1c1a14"
 
 [tool.flet.android.manifest_application]
 usesCleartextTraffic = "true"

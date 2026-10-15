@@ -251,3 +251,70 @@ def test_engine_logs_switch_receives_a_bool_not_the_event():
     finally:
         state.log_engine_logs = prev
         set_engine_logs(prev)
+
+
+def test_mute_covers_every_engine_noise_source():
+    """One toggle must silence all three kinds of engine chatter.
+
+    A field log showed three separate floods surviving the mute:
+
+    * `sherlock.engine` WARNINGs — per-site 403/bot-wall/rate-limit
+      outcomes, thousands per scan. Each is already rendered as a badge on
+      its result card, so logging it again only buries everything else.
+    * `httpx` INFO — one line per HTTP request, i.e. the email engine's
+      entire traffic.
+    * bare `logging.info(...)` from `socid_extractor`, which lands on the
+      ROOT logger and so has no name to quiet (a root filter is the only
+      lever).
+    """
+    from core.logger_handler import MemoryLogHandler, set_engine_logs
+
+    handler = MemoryLogHandler(level=logging.DEBUG)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    saved = {name: logging.getLogger(name).level for name, _lv in _quiet_targets()}
+    root_level = root.level
+    root.setLevel(logging.DEBUG)
+    set_engine_logs(True)
+    try:
+        set_engine_logs(False)
+        logging.getLogger("sherlock.engine").warning("Access denied error: 403")
+        logging.getLogger("httpx").info("HTTP Request: GET https://example.com")
+        # Mimic socid_extractor's bare root-logger call.
+        record = logging.LogRecord(
+            name="root",
+            level=logging.INFO,
+            pathname="C:/x/site-packages/socid_extractor/main.py",
+            lineno=80,
+            msg="Telegram has been detected",
+            args=(),
+            exc_info=None,
+        )
+        root.handle(record)
+        assert handler.get_logs() == [], (
+            "engine noise still reached the terminal: " + repr(handler.get_logs())
+        )
+
+        # Our own messages and real errors must survive.
+        logging.getLogger("services.sherlock_service").info("our own line")
+        logging.getLogger("sherlock.engine").error("a real engine error")
+        logged = handler.get_logs()
+        assert any("our own line" in line for line in logged)
+        assert any("a real engine error" in line for line in logged)
+
+        set_engine_logs(True)
+        logging.getLogger("sherlock.engine").warning("verbose 403 detail")
+        assert any("verbose 403 detail" in line for line in handler.get_logs())
+    finally:
+        set_engine_logs(True)
+        for name, level in saved.items():
+            logging.getLogger(name).setLevel(level)
+        root.setLevel(root_level)
+        root.removeHandler(handler)
+        handler.clear_logs()
+
+
+def _quiet_targets():
+    from core.logger_handler import _QUIET_WHEN_MUTED
+
+    return _QUIET_WHEN_MUTED

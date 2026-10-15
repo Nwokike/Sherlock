@@ -51,26 +51,66 @@ class MemoryLogHandler(logging.Handler):
 
 in_memory_log_handler = MemoryLogHandler()
 
-# Loggers that speak on every site-check of a 5,200-site scan. Their volume
-# buries real warnings in both the console and the in-app terminal, so the
-# default keeps them at WARNING and a Settings toggle restores verbosity.
+# Engine noise, by logger, with the level it drops to when muted. A 5,200-site
+# scan emits thousands of these and they bury everything else in both the
+# console and the in-app terminal.
 #
 # `sherlock.engine` is the child logger handed to maigret — it reports every
 # check through whatever logger it is given, and it used to be handed OUR
 # module logger, so those records arrived as "services.sherlock_service" and
-# muting `maigret` by name did nothing at all.
-_NOISY_LOGGERS = ("sherlock.engine",)
+# muting `maigret` by name did nothing at all. Muted to ERROR rather than
+# WARNING because its WARNINGs are per-site outcomes (403, bot wall, rate
+# limit) repeated thousands of times — each one is already classified onto
+# the result card as a badge, so nothing is lost by not logging it, while a
+# WARNING level still drowned the terminal.
+#
+# `httpx` logs one INFO line per HTTP request, which is the email engine's
+# entire traffic. Real transport problems come through at WARNING and up.
+_QUIET_WHEN_MUTED: tuple[tuple[str, int], ...] = (
+    ("sherlock.engine", logging.ERROR),
+    ("httpx", logging.WARNING),
+)
+
+# Bare `logging.info(...)` calls land on the ROOT logger, so there is no name
+# to quiet — `socid_extractor` does this once per detection
+# (.venv/socid_extractor/main.py:80). A root-level filter is the only lever,
+# and root filters apply exactly to records logged directly on root.
+_BARE_LOGGING_SOURCES = ("socid_extractor",)
+
+
+class _EngineNoiseFilter(logging.Filter):
+    """Drop bare-root records emitted by engine dependencies when muted."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.muted = True
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not self.muted:
+            return True
+        pathname = getattr(record, "pathname", "") or ""
+        return not any(source in pathname for source in _BARE_LOGGING_SOURCES)
+
+
+_engine_noise_filter = _EngineNoiseFilter()
 
 
 def set_engine_logs(verbose: bool) -> None:
     """Mute or restore the OSINT engine's own log noise.
 
-    Off (the default) raises these loggers to WARNING, so the terminal still
-    shows real errors but not per-check chatter. On restores them to NOTSET,
-    i.e. inherit the root level.
+    Off (the default) quiets the engine loggers and drops bare-root chatter
+    from its dependencies, so the console and the in-app terminal show our
+    own messages and real errors instead of per-site traffic. On restores
+    everything to NOTSET, i.e. inherit the root level.
     """
-    for name in _NOISY_LOGGERS:
-        logging.getLogger(name).setLevel(logging.NOTSET if verbose else logging.WARNING)
+    for name, quiet_level in _QUIET_WHEN_MUTED:
+        logging.getLogger(name).setLevel(logging.NOTSET if verbose else quiet_level)
+    _engine_noise_filter.muted = not verbose
+    root = logging.getLogger()
+    if _engine_noise_filter not in root.filters:
+        # Logger filters apply to records logged directly on that logger,
+        # which is what bare `logging.info(...)` produces.
+        root.addFilter(_engine_noise_filter)
 
 
 def get_telemetry_snapshot() -> str:

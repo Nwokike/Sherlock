@@ -19,7 +19,6 @@ org = "ng.kiri"
 product = "Sherlock"
 description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
 company = "Kiri"
-copyright = "Copyright © 2026 Kiri. All rights reserved."
 build_number = 13
 icon = "src/assets/icon.png"
 

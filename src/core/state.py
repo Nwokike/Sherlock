@@ -1,0 +1,214 @@
+"""Observable application state."""
+
+from __future__ import annotations
+
+import flet as ft
+
+from core.constants import MODE_USERNAME
+
+
+@ft.observable
+class AppState:
+    # --- Top-level flags ---
+    is_searching: bool = False
+    is_first_launch: bool = True
+    has_accepted_terms: bool = False
+    # Device connectivity (ft.Connectivity service). Only the connectivity
+    # handlers in main.py mutate this — UI gates (offline banner, search
+    # gate) re-render reactively when it flips.
+    is_online: bool = True
+
+    # --- Search mode ---
+    # Username mode (sherlock-project engine) or email mode (holehe-v2 engine)
+    search_mode: str = MODE_USERNAME
+
+    # --- Current search ---
+    current_username: str = ""
+    search_targets: list[str] | None = None
+    target_results: dict | None = None  # {username: SearchProgress}
+    search_progress: object | None = None  # SearchProgress | None — keep untyped
+    progress_version: int = 0
+    search_error: str | None = None
+
+    # --- Theme ---
+    theme_mode: ft.ThemeMode = ft.ThemeMode.LIGHT
+
+    # --- Last results ---
+    last_results: dict | None = None
+    last_results_username: str = ""
+
+    # --- Email OSINT results ---
+    # Stores list of holehe result dicts for the last email search
+    email_results: list | None = None
+    email_results_address: str = ""
+    email_found_count: int = 0
+    email_not_found_count: int = 0
+    email_rate_limited_count: int = 0
+    email_unavailable_count: int = 0
+    email_total_modules: int = 0
+
+    # --- Phone OSINT results (phonsint) ---
+    phone_results: list | None = None
+    phone_results_address: str = ""
+    phone_found_count: int = 0
+    phone_not_found_count: int = 0
+    phone_error_count: int = 0
+    phone_total_modules: int = 0
+
+    # --- M3 scan-option parity ---
+    allow_loud: bool = False
+    show_all_results: bool = False
+    verbose_output: bool = False
+    cross_scan_enabled: bool = False
+    cross_links: str = "all"
+    cross_emails: str = "verified"
+    cross_depth: int = 1
+    cross_sweep: int = 3
+    email_domains: str = ""
+    hudson_enabled: bool = False
+    proxy_file: str = ""
+    phone_concurrency: int = 15
+
+    # --- History & Result Cache ---
+    # Entries added to history since the user last opened the History tab.
+    # Drives the nav badge (zero-dep alternative to OS notifications);
+    # cleared on mount and on open.
+    history_unseen: int = 0
+    history: list | None = None
+    # {f"{mode}:{query.lower()}": {found: [...], not_found: [...], errors: [...], ...}}
+    results_cache: dict | None = None
+
+    # --- Settings state ---
+    nsfw_enabled: bool = True
+    ignore_exclusions: bool = False
+    timeout: int = 15
+    email_timeout: int = 10
+    email_concurrency: int = 12
+    email_only_found: bool = False
+    proxy_url: str = ""
+    no_password_recovery: bool = False
+    # P3-3/P3-9 scan enrichment knobs
+    search_keywords: str = ""
+    deep_enrich: bool = False
+    # P3-7 stealth fields (Tor removed by owner — it breaks on Android)
+    cookies_path: str = ""
+    i2p_proxy: str = ""
+    check_domains: bool = False
+    # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
+    unhealthy_sites: list[str] | None = None
+    selected_sites: list[str] | None = None
+    use_local_db: bool = True
+    custom_manifest: str = ""
+    scan_depth: str = "all"
+    # Owner rule: features users want default ON; trade-offs default OFF.
+    # Recursive search is the headline feature — on unless the user opts out
+    # (stored values are still honored on load).
+    recursive_search: bool = True
+    # Scan separator variants of the handle (john.doe -> john_doe, ...) —
+    # multiplies scan length; deliberate opt-in.
+    permute_enabled: bool = False
+    # Engine log verbosity. False (default) keeps the engines at WARNING:
+    # they speak on every site-check and bury real errors. The Settings
+    # troubleshooting toggle restores full verbosity.
+    log_engine_logs: bool = False
+    extract_info: bool = True
+    max_connections: int = 50
+    retries: int = 0
+    dns_resolver: str = "threaded"
+    use_curl_cffi: bool = True
+    safe_search: bool = False
+
+    # --- Site database ---
+    # Total sites in the active site database (0 until first load lands).
+    sites_total: int = 0
+    # Bumped after every successful site-database load so screens
+    # subscribed to it (e.g. SitesScreen) re-render when names arrive.
+    sites_version: int = 0
+    # Warm copy of site names persisted to storage — lets the Sites
+    # screen render before (or if) a fresh load finishes.
+    sites_cache: list | None = None
+    # Map of site_name -> list of category/country tags
+    sites_tags_map: dict | None = None
+    # Inverted index {tag -> [site names]} built after each DB load —
+    # powers O(1) category chip filtering in SitesScreen.
+    sites_tag_index: dict | None = None
+
+    # --- Update & Announcement ---
+    update_available: bool = False
+    update_data: dict | None = None
+
+    def __init__(self):
+        # Collections must be assigned in __init__ so the Observable
+        # __setattr__ auto-wraps them into ObservableList / ObservableDict
+        # (use_state initial values wouldn't trigger wrapping otherwise).
+        self.history = []
+        self.results_cache = {}
+        self.last_results = {}
+        self.selected_sites = []
+        self.search_targets = []
+        self.target_results = {}
+        self.sites_cache = []
+        self.sites_tags_map = {}
+        self.email_results = []
+        self.phone_results = []
+        self.update_data = None
+        self.search_error = None
+
+    def set_cached_result(self, mode: str, query: str, data: dict) -> None:
+        """Store search results with an LRU cap of 30 queries."""
+        key = f"{mode}:{query.strip().lower()}"
+        if len(self.results_cache) >= 30:
+            oldest = next(iter(self.results_cache))
+            del self.results_cache[oldest]
+        self.results_cache[key] = data
+
+    def get_cached_result(self, mode: str, query: str) -> dict | None:
+        """Get cached search results for a specific query and mode."""
+        key = f"{mode}:{query.strip().lower()}"
+        return self.results_cache.get(key)
+
+    def reset_search(self) -> None:
+        """Clear all search-related state. Called on app start, cancel, etc.
+
+        Mutates assigned collections in place so existing
+        ObservableList/ObservableDict wrappers stay attached to this state
+        and downstream subscribers keep working.
+        """
+        self.is_searching = False
+        self.search_progress = None
+        self.progress_version = 0
+        self.search_error = None
+        self.history_unseen = 0
+        # The identity and result fields belong to the reset too: without
+        # them a cleared search left the previous target's name and its
+        # result set behind (current_username plus empty email_results with
+        # stale counts), which the next render would show as the target's.
+        self.current_username = ""
+        self.last_results.clear()
+        self.last_results_username = ""
+        self.email_results_address = ""
+        self.email_found_count = 0
+        self.email_not_found_count = 0
+        self.email_rate_limited_count = 0
+        self.email_unavailable_count = 0
+        self.email_total_modules = 0
+        # NOTE: is_online is owned solely by the connectivity handlers in
+        # main.py — resetting a search (e.g. cancel while offline) must not
+        # flip the device online and hide the offline banner. search_mode is
+        # likewise left alone: it is user intent, not scan residue.
+        self.search_targets.clear()
+        self.target_results.clear()
+        self.email_results.clear()
+        # Phone-mode results are separate from email results; without this a
+        # phone scan's rows survived a cancel and the next phone render
+        # showed the previous target's.
+        if self.phone_results is not None:
+            self.phone_results.clear()
+        self.phone_results_address = ""
+        self.phone_found_count = 0
+        self.phone_not_found_count = 0
+        self.phone_error_count = 0
+        self.phone_total_modules = 0
+
+
+state = AppState()

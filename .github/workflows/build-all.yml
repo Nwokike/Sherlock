@@ -1,0 +1,486 @@
+name: Build Multi-Platform & Create Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_version:
+        description: "Build version"
+        required: true
+        default: "2.3.0"
+      build_number:
+        description: "Build number"
+        required: true
+        default: "13"
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"
+  FLET_CLI_NO_RICH_OUTPUT: "1"
+  UV_PYTHON: "3.14"
+  BUILD_VERSION: ${{ inputs.build_version || '2.3.0' }}
+  BUILD_NUMBER: ${{ inputs.build_number || '13' }}
+
+jobs:
+  # ─── 0. Quality Gate: lint + tests + version consistency ───
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install dependencies (frozen lockfile, includes dev group)
+        run: uv sync --frozen
+      - name: Version consistency (pyproject vs workflow; version.json may be held back)
+        run: |
+          uv run python - <<'PY'
+          import json, os, sys, tomllib
+
+          py = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          felb = str(tomllib.load(open("pyproject.toml", "rb"))["tool"]["flet"]["build_number"])
+          sys.path.insert(0, "src")
+          from core.constants import APP_BUILD_NUMBER, APP_VERSION
+
+          vj = None
+          if os.path.exists("version.json"):
+              with open("version.json") as f:
+                  vj = json.load(f)
+          env_v, env_b = os.environ["BUILD_VERSION"], os.environ["BUILD_NUMBER"]
+          errs = []
+
+          # Hard: the artifact is built with the project's own version, and
+          # the APP's own constants (shown in About + update dialogs) match.
+          if env_v != py:
+              errs.append(f"BUILD_VERSION {env_v!r} != pyproject {py!r}")
+          if APP_VERSION != py:
+              errs.append(f"core.constants.APP_VERSION {APP_VERSION!r} != pyproject {py!r}")
+          if str(APP_BUILD_NUMBER) != env_b:
+              errs.append(f"APP_BUILD_NUMBER {APP_BUILD_NUMBER} != BUILD_NUMBER {env_b}")
+          if felb != env_b:
+              errs.append(f"tool.flet.build_number {felb} != BUILD_NUMBER {env_b}")
+
+          def vt(s):
+              return tuple(int(x) for x in s.split("."))
+
+          vj_v, py_v = (vj or {}).get("version"), py
+          if vj_v is None:
+              # Absent entirely: the update-notes file is gitignored and
+              # untracked, so nothing is published from the repo until the
+              # Play Store upload ships. Nothing to compare.
+              print(
+                  f"NOTICE: version.json absent from the repo — held back "
+                  f"entirely while app is {py} (build {env_b}). Expected "
+                  "until the Play Store upload; no update notes published."
+              )
+          elif vj_v == py_v:
+              # Fully-synced state must agree on the build number too.
+              if str(vj["build_number"]) != env_b:
+                  errs.append(
+                      f"version.json synced to {vj_v} but build_number "
+                      f"{vj['build_number']} != BUILD_NUMBER {env_b}"
+                  )
+              else:
+                  print(f"versions synced: {py} (build {env_b})")
+          elif vt(vj_v) < vt(py_v):
+              # Owner release policy: version.json (in-app update notes) is
+              # held back from the repo until the Play Store upload ships —
+              # allowed state, reported loudly.
+              print(
+                  f"NOTICE: version.json held back at {vj_v} "
+                  f"(build {vj['build_number']}) while app is {py} — "
+                  "expected until Play Store upload, then commit version.json."
+              )
+          else:
+              errs.append(
+                  f"version.json {vj_v} is AHEAD of pyproject {py} — update notes "
+                  "point at an app version that doesn't exist"
+              )
+
+          if errs:
+              print("Version drift:", file=sys.stderr)
+              print("\n".join(f"  - {e}" for e in errs), file=sys.stderr)
+              sys.exit(1)
+          PY
+      - name: Lint (ruff)
+        run: uv run ruff check . --statistics
+      - name: Tests (offline only — live-network tests are marked 'live')
+        run: uv run pytest -m "not live"
+
+  # ─── 1. Create Release Tag & Placeholder ───────────────
+  prepare-release:
+    needs: [quality]
+    runs-on: ubuntu-latest
+    outputs:
+      TAG_NAME: ${{ steps.tag_info.outputs.TAG_NAME }}
+      RELEASE_NAME: ${{ steps.tag_info.outputs.RELEASE_NAME }}
+      IS_PRERELEASE: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
+      MAKE_LATEST: ${{ steps.tag_info.outputs.MAKE_LATEST }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Generate Release Tag & Name
+        id: tag_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "RELEASE_NAME=Sherlock ${{ github.ref_name }} (pre-release, pending approval)" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+            echo "MAKE_LATEST=false" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            echo "TAG_NAME=build-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            echo "RELEASE_NAME=Automated Build (${SHORT_SHA})" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+            echo "MAKE_LATEST=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Create GitHub Release Placeholder
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag_info.outputs.TAG_NAME }}
+          name: ${{ steps.tag_info.outputs.RELEASE_NAME }}
+          prerelease: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
+          make_latest: ${{ steps.tag_info.outputs.MAKE_LATEST }}
+          body: |
+            Automated multi-platform build generated from commit `${{ github.sha }}`.
+
+            *This is a pre-release placeholder. Feel free to edit this title and description with your release notes right from the GitHub Releases UI.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Android APK (split per ABI) ───────────────────────
+  build-apk-split:
+    needs: [prepare-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Decode Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
+      # ── Notifications: the generated project needs things pyproject cannot
+      # express. `flet build apk` runs its own Gradle build, which stops at
+      # :app:checkReleaseAarMetadata because flutter_local_notifications (via
+      # flet_notifications' Dart half) requires core-library desugaring. So
+      # this is three phases, not one:
+      #   1. flet build generates the project (its Gradle run is expected to
+      #      stop at the desugaring check — the step only fails hard if the
+      #      project was never written)
+      #   2. the patcher injects the desugaring flags, the notification
+      #      receivers/permissions, AND the ForegroundService manifest entry
+      #      that start_foreground_service needs (a scan must outlive the app)
+      #   3. flet build runs again — the template hash is unchanged so the patch
+      #      survives, and --split-per-abi is honoured (a bare
+      #      `gradlew assembleRelease` produces a universal APK instead)
+      - name: Generate the Android project
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set +e
+          uv run flet build apk --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "flet build apk completed on the first pass; no patch required."
+          elif [ -f build/flutter/android/app/build.gradle.kts ]; then
+            echo "::warning::flet build apk stopped at its Gradle run (expected: core library desugaring missing). Project generated; patching and re-running."
+          else
+            echo "::error::flet build apk failed before generating the Android project"
+            exit 1
+          fi
+      - name: Patch the generated Android project (notifications)
+        # V3 does not ship the flet-notifications extension (docs/roadmap.md
+        # defers native notifications), so the patcher binary may be absent
+        # from `uv run`. Only patch when the patcher is available.
+        run: |
+          if uv run flet-notifications-patch --help >/dev/null 2>&1; then
+            uv run flet-notifications-patch --project-root build/flutter --foreground-service-type dataSync
+          else
+            echo "::notice::flet-notifications-patch not installed — V3 has no flet-notifications extension; nothing to patch."
+          fi
+      - name: Build APK (split per ABI)
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: uv run flet build apk --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+      - name: Size report + prune verification
+        if: always()
+        run: |
+          ls -l build/apk/*.apk
+          for a in build/apk/*.apk; do
+            echo "== $a prune check:"
+            if unzip -l "$a" | grep -qE "LC_MESSAGES|/oauthlib/|/flask/|/werkzeug/|/pytest/|/jedi/"; then
+              echo "   FLAGGED DIRS PRESENT — prune did not land"
+              unzip -l "$a" | grep -E "LC_MESSAGES|/oauthlib/|/flask/|/werkzeug/|/pytest/|/jedi/" | head -20
+            else
+              echo "   prunes verified absent"
+            fi
+          done
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/apk/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Android AAB (Play Store) ──────────────────────────
+  build-aab:
+    needs: [prepare-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Decode Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
+      # Three phases for the same reason as the APK job — see the comment
+      # there. scan_notify.start_foreground_service needs the manifest entry
+      # the patcher's --foreground-service-type injects.
+      - name: Generate the Android project
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set +e
+          uv run flet build aab --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "flet build aab completed on the first pass; no patch required."
+          elif [ -f build/flutter/android/app/build.gradle.kts ]; then
+            echo "::warning::flet build aab stopped at its Gradle run (expected: core library desugaring missing). Project generated; patching and re-running."
+          else
+            echo "::error::flet build aab failed before generating the Android project"
+            exit 1
+          fi
+      - name: Patch the generated Android project (notifications)
+        # See the APK job: V3 has no flet-notifications extension, so patch
+        # only when the patcher is available in the uv environment.
+        run: |
+          if uv run flet-notifications-patch --help >/dev/null 2>&1; then
+            uv run flet-notifications-patch --project-root build/flutter --foreground-service-type dataSync
+          else
+            echo "::notice::flet-notifications-patch not installed — V3 has no flet-notifications extension; nothing to patch."
+          fi
+      - name: Build AAB
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: uv run flet build aab --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+      - name: Size report
+        if: always()
+        run: ls -l build/aab/*.aab
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/aab/*.aab
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Windows (Automated .exe Setup Installer) ──────────────
+  build-windows:
+    needs: [prepare-release]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Build Windows Portable
+        run: uv run flet build windows --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+
+      - name: Size report
+        if: always()
+        shell: bash
+        run: du -sh build/windows 2>/dev/null || true; ls -l build/windows/sherlock.exe 2>/dev/null || true
+
+      - name: Generate Icon for Installer
+        run: |
+          uv pip install pillow
+          uv run python -c "from PIL import Image; Image.open('src/assets/icon.png').save('src/assets/icon.ico', format='ICO', sizes=[(256, 256)])"
+
+      - name: Build Windows Installer (Inno Setup)
+        run: |
+          $IssContent = @"
+          [Setup]
+          AppId={{00B37D31-0BA4-4DAD-88C1-2F53F1154BBE}}
+          AppName=Sherlock
+          AppVersion=${{ env.BUILD_VERSION }}
+          AppPublisher=Kiri
+          AppPublisherURL=https://kiri.ng
+          AppSupportURL=https://kiri.ng/support
+          AppUpdatesURL=https://kiri.ng/updates
+          AppCopyright=Copyright (C) 2026 Kiri
+          DefaultDirName={autopf}\Sherlock
+          DefaultGroupName=Sherlock
+          OutputDir=.\build\installer
+          OutputBaseFilename=Sherlock_Setup
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          ArchitecturesAllowed=x64
+          ArchitecturesInstallIn64BitMode=x64
+          PrivilegesRequired=lowest
+          SetupIconFile=.\src\assets\icon.ico
+          UninstallDisplayIcon={app}\sherlock.exe
+          CloseApplications=yes
+          AppMutex=Sherlock_Mutex
+
+          [Files]
+          Source: "build\windows\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\Sherlock"; Filename: "{app}\sherlock.exe"
+          Name: "{autodesktop}\Sherlock"; Filename: "{app}\sherlock.exe"; Tasks: desktopicon
+
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+          "@
+          Set-Content -Path "installer.iss" -Value $IssContent -Encoding UTF8
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/installer/Sherlock_Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Linux (.deb, .rpm & Universal .tar.gz) ────────────────
+  build-linux:
+    needs: [prepare-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      - name: Install Linux Build Dependencies & Packaging Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev rpm ruby ruby-dev
+          sudo gem install --no-document fpm
+      - name: Build Linux Bundle
+        run: uv run flet build linux --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+      - name: Size report
+        if: always()
+        run: du -sh build/linux 2>/dev/null || true; ls -l build/linux/sherlock 2>/dev/null || true
+      - name: Create Linux Packages (.deb, .rpm, .tar.gz)
+        run: |
+          mkdir -p build/dist
+
+          # 1. Universal Portable .tar.gz
+          tar -czf build/dist/Sherlock_linux_x86_64.tar.gz -C build/linux .
+
+          # 2. Stage filesystem tree for rich .deb and .rpm packages
+          mkdir -p pkg_root/usr/lib/sherlock pkg_root/usr/bin pkg_root/usr/share/applications pkg_root/usr/share/icons/hicolor/256x256/apps pkg_root/usr/share/pixmaps pkg_root/usr/share/metainfo
+          cp -a build/linux/* pkg_root/usr/lib/sherlock/
+          chmod +x pkg_root/usr/lib/sherlock/sherlock
+          ln -s /usr/lib/sherlock/sherlock pkg_root/usr/bin/sherlock
+
+          # Icons (both hicolor and pixmaps ensure instant icon display when opening .deb file in Ubuntu App Center before installation)
+          cp src/assets/icon.png pkg_root/usr/share/icons/hicolor/256x256/apps/sherlock.png
+          cp src/assets/icon.png pkg_root/usr/share/pixmaps/sherlock.png
+
+          # Desktop entry
+          cat <<EOF > pkg_root/usr/share/applications/sherlock.desktop
+          [Desktop Entry]
+          Version=1.0
+          Name=Sherlock
+          GenericName=OSINT Username Search
+          Comment=Hunt down social media profiles by username across 5,200+ networks
+          Exec=/usr/bin/sherlock
+          Icon=sherlock
+          Terminal=false
+          Type=Application
+          Categories=Utility;Development;Network;
+          Keywords=OSINT;Username;Social Media;Investigation;Search;
+          StartupNotify=true
+          StartupWMClass=sherlock
+          EOF
+
+          # AppStream / AppData metainfo XML (rich preview information in Ubuntu App Center & GNOME Software)
+          cat <<EOF > pkg_root/usr/share/metainfo/ng.kiri.sherlock.metainfo.xml
+          <?xml version="1.0" encoding="UTF-8"?>
+          <component type="desktop-application">
+            <id>ng.kiri.sherlock</id>
+            <metadata_license>MIT</metadata_license>
+            <project_license>MIT</project_license>
+            <name>Sherlock</name>
+            <summary>Hunt down social media accounts by username across 5,200+ networks</summary>
+            <description>
+              <p>Sherlock hunts down social media profiles across the internet, providing:</p>
+              <ul>
+                <li>Simultaneous username scans across 5,200+ international, regional and specialized networks</li>
+                <li>Fast offline-first local database with Popular Only and custom target scopes</li>
+                <li>Live real-time result ticking, filtering and tap-to-open profile links</li>
+                <li>Gold PDF, XMind mind-map, CSV, JSON and plain-text report exports saved locally</li>
+              </ul>
+            </description>
+            <launchable type="desktop-id">sherlock.desktop</launchable>
+            <url type="homepage">https://kiri.ng</url>
+            <developer_name>Kiri</developer_name>
+          </component>
+          EOF
+
+          # Build rich .deb using fpm
+          fpm -s dir -t deb -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \
+              --architecture amd64 \
+              --description "Hunt down social media accounts by username across 5,200+ networks on your desktop and phone." \
+              --maintainer "Kiri <support@kiri.ng>" \
+              --url "https://kiri.ng" \
+              --category "utils" \
+              -p build/dist/Sherlock_amd64.deb \
+              -C pkg_root .
+
+          # Build rich .rpm using fpm
+          fpm -s dir -t rpm -n sherlock -v ${{ env.BUILD_VERSION }} --iteration ${{ env.BUILD_NUMBER }} \
+              --architecture x86_64 \
+              --description "Hunt down social media accounts by username across 5,200+ networks on your desktop and phone." \
+              --maintainer "Kiri <support@kiri.ng>" \
+              --url "https://kiri.ng" \
+              --category "Utility" \
+              -p build/dist/Sherlock_x86_64.rpm \
+              -C pkg_root .
+
+      - name: Upload directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.TAG_NAME }}
+          files: build/dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

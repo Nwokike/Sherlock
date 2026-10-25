@@ -1,0 +1,45 @@
+"""Bundled changelog shown by the update dialog when the app is up to
+date — works fully offline. One line per release; keep the entry for the
+current APP_VERSION in sync when bumping (guarded by tests)."""
+
+CHANGELOG: dict[str, str] = {
+    "2.3.0": (
+        "• Username permutations: scan separator variants with one toggle\n"
+        "• Profile dates humanized everywhere: cards, dossier, reports\n"
+        "• Paste a profile URL into search — the handle is pulled out for you\n"
+        "• Email scans retry once through rate limits; cancels now always land\n"
+        "• Gravatar fallback avatars, database stats header\n"
+        "• 386 tests, full lint-rule suite, ad subsystem untouched"
+    ),
+    "2.2.0": (
+        "• 5,200+ platforms: Maigret 0.6.6 database doubled\n"
+        "• Recursive search on by default, category presets, scope-to-filter\n"
+        "• Email rebuilt on holehe-v2: 181 validators, honest results, new exports\n"
+        "• Bot-protection badges, tappable PDF links, interactive graph viewer\n"
+        "• Biometric History lock, offline font, 21MB smaller, 229 tests + CI gates"
+    ),
+    "2.1.0": (
+        "• Full dependency squeeze and 3,300+ platform polish\n"
+        "• Full ecosystem integration on 3,300+ sites engine\n"
+        "• Username engine upgraded to Maigret with 3,300+ platforms\n"
+        "• Fix: msgpack-safe site selection (list instead of set)"
+    ),
+    "2.0.0": (
+        "• Dual-Mode OSINT: Username & Email search\n"
+        "• 120+ platforms email check via holehe\n"
+        "• Profile enrichment (bio, location, followers)\n"
+        "• Redesigned results with recovery hints\n"
+        "• Privacy-first: 100% on-device OSINT"
+    ),
+}
+
+
+def notes_for(version: str) -> str:
+    """Changelog entry for a version, falling back to the latest entry."""
+    return CHANGELOG.get(version) or next(iter(CHANGELOG.values()), "")
+
+
+def latest_release() -> tuple[str, str]:
+    """Return (version, notes) for the newest entry in the changelog."""
+    version = next(iter(CHANGELOG.keys()), "2.3.0")
+    return version, CHANGELOG[version]

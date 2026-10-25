@@ -1,0 +1,1492 @@
+"""HomeScreen — compact search-first dashboard (DDGS style).
+
+Search bar above the fold, category chips, search tools, recent searches,
+feature cards, how it works, and trust banner.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+import flet as ft
+from flet import Control
+
+from components.app_header import AppHeader
+from components.banner_ad import pooled_banner_ad
+from components.targets_card import TargetsCard
+from core import tokens
+from core.constants import (
+    APP_NAME,
+    ERR_INVALID_EMAIL,
+    MODE_EMAIL,
+    MODE_PHONE,
+    MODE_USERNAME,
+    MSG_OFFLINE,
+    MSG_SEARCH_OFFLINE,
+    STORAGE_ALLOW_LOUD,
+    STORAGE_CROSS_SCAN,
+    STORAGE_EMAIL_TIMEOUT,
+    STORAGE_EXCLUSIONS,
+    STORAGE_HISTORY,
+    STORAGE_HUDSON,
+    STORAGE_NO_PASSWORD_RECOVERY,
+    STORAGE_NSFW,
+    STORAGE_PHONE_CONCURRENCY,
+    STORAGE_RECURSIVE_SEARCH,
+    STORAGE_SAFE_SEARCH,
+    STORAGE_SCAN_DEPTH,
+    STORAGE_SEARCH_MODE,
+    STORAGE_TIMEOUT,
+    STORAGE_USE_CURL_CFFI,
+    test_id,
+)
+from core.notify import show_snack
+from core.tasks import spawn
+from core.theme import (
+    AppColors,
+    AppStyles,
+    adaptive_glass_bg,
+    adaptive_glass_border,
+    is_dark_mode,
+)
+from state.app_state import AppStateCtx
+from state.controller_ctx import ControllerMethodsCtx
+
+logger = logging.getLogger("HomeScreen")
+
+
+# ── Feature cards data ─────────────────────────────────────────────────
+
+_FEATURES_USERNAME = [
+    {
+        "icon": ft.Icons.PERSON_SEARCH_ROUNDED,
+        "title": "Hunt Across 2,500+ Networks",
+        "desc": "Scan GitHub, X, Instagram, TikTok, Reddit, Spotify, and more — simultaneously.",
+        "color": AppColors.PRIMARY,
+    },
+    {
+        "icon": ft.Icons.SPEED_ROUNDED,
+        "title": "Ultra-Fast Offline Scans",
+        "desc": "Scan from the local offline database — no site-list download first. A connection is still needed to reach each site.",
+        "color": AppColors.PRIMARY_DARK,
+    },
+    {
+        "icon": ft.Icons.DOWNLOAD_ROUNDED,
+        "title": "Premium Data Exports",
+        "desc": "Export reports as PDF dossiers, CSV/JSON, Markdown, HTML, or Text lists.",
+        "color": AppColors.PRIMARY_LIGHT,
+    },
+]
+
+_FEATURES_EMAIL = [
+    {
+        "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+        "title": "Check 120+ Platforms",
+        "desc": "Discover where an email is registered — social media, shopping, forums, CRM, and more.",
+        "color": AppColors.PRIMARY,
+    },
+    {
+        "icon": ft.Icons.SECURITY_ROUNDED,
+        "title": "Recovery Data & Leaked Hints",
+        "desc": "Uncover masked recovery emails, phone numbers, full names, and account creation dates.",
+        "color": AppColors.PRIMARY_DARK,
+    },
+    {
+        "icon": ft.Icons.CATEGORY_ROUNDED,
+        "title": "23 Categories Covered",
+        "desc": "Social media, mail providers, programming, music, shopping, forums, jobs, and more.",
+        "color": AppColors.PRIMARY_LIGHT,
+    },
+]
+
+_STEPS_USERNAME = [
+    ("1", "Enter", "Type a username to hunt across social networks"),
+    ("2", "Scan", "Sherlock checks 2,500+ platforms simultaneously"),
+    ("3", "Done", "View results, export reports, or open profiles in browser"),
+]
+
+_STEPS_EMAIL = [
+    ("1", "Enter", "Type an email address to investigate"),
+    ("2", "Scan", "Checks 120+ platforms for registrations"),
+    ("3", "Done", "View where the email is used, recovery hints, and more"),
+]
+
+
+# ── Compact components ─────────────────────────────────────────────────
+
+
+def _category_chip(
+    icon: str,
+    label: str,
+    color: str,
+    is_active: bool,
+    on_click=None,
+) -> ft.Control:
+    """Material 3 Chip — replaces hand-rolled Container pill."""
+    if on_click is not None:
+        return ft.Chip(
+            label=ft.Text(
+                label,
+                size=12,
+                weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.W_400,
+                font_family="Outfit",
+            ),
+            leading=ft.Icon(
+                icon,
+                size=15,
+                color=color if is_active else ft.Colors.ON_SURFACE_VARIANT,
+            ),
+            selected=is_active,
+            selected_color=ft.Colors.with_opacity(0.14, color),
+            bgcolor=ft.Colors.with_opacity(0.08, color)
+            if is_active
+            else ft.Colors.TRANSPARENT,
+            show_checkmark=False,
+            on_select=on_click,
+        )
+    # Informational — stay enabled with explicit styling (never disabled grey on grey)
+    return ft.Chip(
+        label=ft.Text(
+            label,
+            size=12,
+            color=ft.Colors.ON_SURFACE,
+            font_family="Outfit",
+        ),
+        leading=ft.Icon(icon, size=15, color=ft.Colors.ON_SURFACE_VARIANT),
+        bgcolor=ft.Colors.TRANSPARENT,
+        border_side=ft.BorderSide(
+            1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)
+        ),
+        show_checkmark=False,
+        on_select=lambda e: None,
+    )
+
+
+def _is_email_like(query: str, mode: str) -> bool:
+    """Icon/mode helper for rows that may predate strict validation."""
+    if mode == MODE_EMAIL:
+        return True
+    from services.email_service import validate_email
+
+    return validate_email((query or "").strip())
+
+
+def _history_row(
+    query: str,
+    found: int,
+    total: int,
+    timestamp: str,
+    mode: str = MODE_USERNAME,
+    on_click=None,
+) -> ft.Container:
+    """Compact recent search row with mode icon.
+
+    NOTE: deliberately not @ft.memo — callers pass a fresh on_click
+    lambda per row, so memoization could never hit.
+    """
+    is_email = _is_email_like(query, mode)
+    icon = (
+        ft.Icons.ALTERNATE_EMAIL_ROUNDED if is_email else ft.Icons.PERSON_SEARCH_ROUNDED
+    )
+    return ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(icon, size=16, color=AppColors.PRIMARY),
+                ft.Text(
+                    query,
+                    size=12,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    expand=True,
+                    font_family="Outfit",
+                    weight=ft.FontWeight.W_500,
+                ),
+                ft.Text(
+                    f"{found}/{total}",
+                    size=10,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    font_family="Outfit",
+                ),
+                ft.Text(
+                    timestamp,
+                    size=10,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    font_family="Outfit",
+                ),
+                ft.Icon(
+                    ft.Icons.ARROW_FORWARD_ROUNDED,
+                    size=14,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        padding=ft.Padding(12, 8, 12, 8),
+        border_radius=tokens.RADIUS_MD,
+        bgcolor=adaptive_glass_bg(),
+        border=ft.Border.all(1, adaptive_glass_border()),
+        ink=True,
+        on_click=on_click,
+    )
+
+
+def _feature_card(
+    icon: str,
+    title: str,
+    desc: str,
+    color: str,
+) -> ft.Container:
+    """Feature highlight card row."""
+    return ft.Container(
+        content=ft.Row(
+            controls=[
+                ft.Container(
+                    content=ft.Icon(icon, size=20, color=color),
+                    width=38,
+                    height=38,
+                    border_radius=10,
+                    bgcolor=ft.Colors.with_opacity(0.1, color),
+                    alignment=ft.Alignment.CENTER,
+                ),
+                ft.Column(
+                    controls=[
+                        ft.Text(
+                            title,
+                            size=tokens.FONT_SM,
+                            weight=ft.FontWeight.W_600,
+                            font_family="Outfit",
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                        ft.Text(
+                            desc,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            max_lines=2,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            font_family="Outfit",
+                        ),
+                    ],
+                    spacing=2,
+                    expand=True,
+                ),
+            ],
+            spacing=tokens.SPACE_MD,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        padding=12,
+        border_radius=12,
+        bgcolor=adaptive_glass_bg(),
+        border=ft.Border.all(1, adaptive_glass_border()),
+    )
+
+
+def _step_row(number: str, title: str, desc: str) -> ft.Row:
+    """Numbered step row."""
+    return ft.Row(
+        controls=[
+            ft.Container(
+                content=ft.Text(
+                    number,
+                    size=tokens.FONT_SM,
+                    weight=ft.FontWeight.W_700,
+                    color=ft.Colors.WHITE,
+                    text_align=ft.TextAlign.CENTER,
+                    font_family="Outfit",
+                ),
+                width=26,
+                height=26,
+                border_radius=13,
+                bgcolor=AppColors.PRIMARY,
+                alignment=ft.Alignment.CENTER,
+            ),
+            ft.Column(
+                controls=[
+                    ft.Text(
+                        title,
+                        size=tokens.FONT_SM,
+                        weight=ft.FontWeight.W_600,
+                        font_family="Outfit",
+                    ),
+                    ft.Text(
+                        desc,
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                        font_family="Outfit",
+                    ),
+                ],
+                spacing=tokens.SPACE_XXS,
+                expand=True,
+            ),
+        ],
+        spacing=tokens.SPACE_MD,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+
+def _normalize_pasted_query(value: str) -> str:
+    """Extract the handle from a pasted profile URL.
+
+    "https://github.com/torvalds" -> "torvalds" (last non-empty path
+    segment, URL-decoded). Plain usernames pass through untouched; URLs
+    without a path come back as-is and fail the shape guard with the
+    normal message.
+    """
+    v = (value or "").strip().lstrip("@")
+    if not v:
+        return v
+    if "://" not in v and not v.lower().startswith("www."):
+        return v
+    try:
+        from urllib.parse import unquote, urlparse
+
+        parts = urlparse(v if "://" in v else f"https://{v}")
+        segments = [seg for seg in parts.path.split("/") if seg]
+        if segments:
+            return unquote(segments[-1])[:64]
+    except ValueError:
+        pass
+    return v
+
+
+# ── Main screen ───────────────────────────────────────────────────────
+
+
+@ft.component
+def HomeScreen(banner: Control | None = None) -> Control:
+    """Compact search-first home dashboard (DDGS style)."""
+    state = ft.use_context(AppStateCtx)
+    controller = ft.use_context(ControllerMethodsCtx)
+
+    search_query, set_search_query = ft.use_state("")
+
+    # Mode is driven by observable state so it persists across screens
+
+    # While a scan is genuinely ticking, `search_mode` is that scan's
+    # IDENTITY (see `_switch_mode`): flipping it would freeze the live
+    # progress. The pills go visibly inert instead of silently ignoring taps.
+    _mode_locked = bool(
+        state.is_searching and getattr(state.search_progress, "is_running", False)
+    )
+
+    from flet import context as flet_context
+
+    def _get_page():
+        try:
+            return flet_context.page
+        except Exception:
+            return None
+
+    def _is_dark():
+        return is_dark_mode(_get_page())
+
+    # ── Mode switcher ──
+
+    def _switch_mode(new_mode: str, keep_query: bool = False):
+        # `search_mode` is not only UI intent — it is the running scan's
+        # IDENTITY: `_apply_progress` drops ticks whose mode disagrees with it
+        # and the completion guards discard results on a mismatch. A chip tap
+        # mid-scan would flip that identity, so the live scan's progress would
+        # stop repainting until it finished. While a scan is genuinely ticking,
+        # start_search/start_email_search own the mode; the switch applies to
+        # the next request instead.
+        prog = state.search_progress
+        if (
+            state.is_searching
+            and getattr(prog, "is_running", False)
+            and new_mode != state.search_mode
+        ):
+            logger.info(
+                "Mode switch to %s ignored — a live scan owns the mode", new_mode
+            )
+            return
+        state.search_mode = new_mode
+        # Manual chip taps clear a stale query (a username fails email
+        # validation and vice versa). Auto-switches keep it — the input
+        # is what triggered the switch, so it already matches.
+        if not keep_query:
+            set_search_query("")
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_SEARCH_MODE, new_mode)
+            except Exception:
+                pass
+
+        spawn(_save())
+
+    # ── Quick Setting Toggles ──
+
+    def _persist(key: str, value: str, after=None):
+        """Single persist helper for all home toggles (fire-and-forget)."""
+
+        async def _save():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(key, value)
+                if after is not None:
+                    await after()
+            except Exception as exc:
+                logger.debug("Home persist failed for %s: %s", key, exc)
+
+        spawn(_save())
+
+    def _cycle_scan_depth(e):
+        depths = ["all", "1000", "500"]
+        curr = state.scan_depth or "all"
+        next_val = (
+            depths[(depths.index(curr) + 1) % len(depths)] if curr in depths else "all"
+        )
+        state.scan_depth = next_val
+        state.progress_version += 1
+        _persist(
+            STORAGE_SCAN_DEPTH,
+            next_val,
+            after=controller.refresh_sites if controller.refresh_sites else None,
+        )
+
+    def _cycle_timeout(e):
+        timeouts = [5, 10, 15, 30, 60]
+        curr = state.timeout
+        next_val = (
+            timeouts[(timeouts.index(curr) + 1) % len(timeouts)]
+            if curr in timeouts
+            else 10
+        )
+        state.timeout = next_val
+        state.progress_version += 1
+        _persist(STORAGE_TIMEOUT, str(next_val))
+
+    def _cycle_phone_concurrency(e):
+        steps = [5, 10, 15, 20, 30]
+        curr = getattr(state, "phone_concurrency", 15)
+        next_val = (
+            steps[(steps.index(curr) + 1) % len(steps)] if curr in steps else 15
+        )
+        state.phone_concurrency = next_val
+        state.progress_version += 1
+        _persist(STORAGE_PHONE_CONCURRENCY, str(next_val))
+
+    def _cycle_phone_region(e):
+        regions = [None, "US", "GB", "CA", "AU", "DE", "FR"]
+        curr = getattr(state, "phone_region", None)
+        next_val = regions[(regions.index(curr) + 1) % len(regions)] if curr in regions else "US"
+        state.phone_region = next_val
+        state.progress_version += 1
+
+    def _toggle_recursive_search(e):
+        new_val = not getattr(state, "recursive_search", False)
+        state.recursive_search = new_val
+        state.progress_version += 1
+        _persist(STORAGE_RECURSIVE_SEARCH, "true" if new_val else "false")
+
+    def _toggle_nsfw(e):
+        new_val = not state.nsfw_enabled
+        state.nsfw_enabled = new_val
+        state.safe_search = not new_val
+        state.progress_version += 1
+        # Persist BOTH keys (single-writer contract with Settings:
+        # nsfw_enabled is engine truth, safe_search its mirror).
+
+        async def _save_both():
+            try:
+                from services.storage_service import StorageService
+
+                storage = StorageService(_get_page())
+                await storage.set(STORAGE_NSFW, "true" if new_val else "false")
+                await storage.set(STORAGE_SAFE_SEARCH, "false" if new_val else "true")
+                if controller.refresh_sites:
+                    await controller.refresh_sites()
+            except Exception as exc:
+                logger.debug("Home persist failed: %s", exc)
+
+        spawn(_save_both())
+
+    def _toggle_exclusions(e):
+        new_val = not state.ignore_exclusions
+        state.ignore_exclusions = new_val
+        state.progress_version += 1
+        _persist(
+            STORAGE_EXCLUSIONS,
+            "true" if new_val else "false",
+            after=controller.refresh_sites if controller.refresh_sites else None,
+        )
+
+    def _cycle_email_timeout(e):
+        timeouts = [5, 10, 15, 30]
+        curr = state.email_timeout
+        next_val = (
+            timeouts[(timeouts.index(curr) + 1) % len(timeouts)]
+            if curr in timeouts
+            else 30
+        )
+        state.email_timeout = next_val
+        state.progress_version += 1
+        _persist(STORAGE_EMAIL_TIMEOUT, str(next_val))
+
+    def _toggle_password_recovery(e):
+        new_val = not state.no_password_recovery
+        state.no_password_recovery = new_val
+        state.progress_version += 1
+        _persist(STORAGE_NO_PASSWORD_RECOVERY, "true" if new_val else "false")
+
+    def _toggle_use_curl_cffi(e):
+        new_val = not getattr(state, "use_curl_cffi", True)
+        state.use_curl_cffi = new_val
+        state.progress_version += 1
+        _persist(STORAGE_USE_CURL_CFFI, "true" if new_val else "false")
+
+    def _toggle_allow_loud(e):
+        new_val = not getattr(state, "allow_loud", False)
+        state.allow_loud = new_val
+        _persist(STORAGE_ALLOW_LOUD, "true" if new_val else "false")
+        state.progress_version += 1
+
+    async def _validate_proxy(e=None):
+        proxy = (getattr(state, "proxy_url", "") or "").strip()
+        if not proxy:
+            from core.notify import show_snack
+            pg = _get_page()
+            if pg:
+                show_snack(pg, "Set a proxy URL in settings first", bgcolor=AppColors.WARNING)
+            return
+        from user_scanner.core.helpers import validate_proxies
+        working = await asyncio.to_thread(validate_proxies, [proxy])
+        pg = _get_page()
+        if pg:
+            from core.notify import show_snack
+            if working:
+                show_snack(pg, f"Proxy OK: {len(working)}/{1} working", bgcolor=AppColors.SUCCESS)
+            else:
+                show_snack(pg, "Proxy failed validation", bgcolor=AppColors.ERROR)
+
+    def _toggle_hudson(e):
+        new_val = not getattr(state, "hudson_enabled", False)
+        state.hudson_enabled = new_val
+        _persist(STORAGE_HUDSON, "true" if new_val else "false")
+        state.progress_version += 1
+
+    def _toggle_cross_scan(e):
+        new_val = not getattr(state, "cross_scan_enabled", False)
+        state.cross_scan_enabled = new_val
+        _persist(STORAGE_CROSS_SCAN, "true" if new_val else "false")
+        state.progress_version += 1
+
+    # ── Search logic ──
+
+    def _is_email_query(value: str) -> bool:
+        """Single email detector for icons, modes, suggestions, gates."""
+        from services.email_service import validate_email
+
+        return validate_email((value or "").strip())
+
+    def _check_username_shape(query: str) -> str | None:
+        """Error reason when a username can't start a scan, else None."""
+        import re
+
+        collapsed = re.sub(r"\s+", "", query)
+        if len(collapsed) > 64:
+            return "Usernames are capped at 64 characters"
+        if not re.fullmatch(r"[A-Za-z0-9_.\-]+", collapsed):
+            return "Usernames may only contain letters, numbers, _ . -"
+        return None
+
+    def _submit_guards(query: str, mode: str) -> bool:
+        """Shared offline/scan-busy/empty/email gates for all submit paths.
+
+        Returns True when the search may proceed.
+        """
+        page = _get_page()
+        if not query:
+            if page:
+                show_snack(page, "Enter a username or email", bgcolor=AppColors.ERROR)
+            return False
+        # Offline gate on client submit
+        if not state.is_online:
+            if page:
+                show_snack(page, MSG_SEARCH_OFFLINE, bgcolor=AppColors.ERROR)
+            return False
+        # A scan is already running — starting another would launch a
+        # parallel engine pass that clobbers the live one.
+        if state.is_searching or getattr(state.search_progress, "is_running", False):
+            if page:
+                show_snack(page, "A scan is already running", bgcolor=AppColors.ERROR)
+            return False
+        if mode == MODE_EMAIL:
+            if not _is_email_query(query):
+                if page:
+                    show_snack(page, ERR_INVALID_EMAIL, bgcolor=AppColors.ERROR)
+                return False
+        elif mode == MODE_PHONE:
+            # phone numbers: accept anything non-empty; engine validates
+            pass
+        else:
+            shape_err = _check_username_shape(query)
+            if shape_err is not None:
+                if page:
+                    show_snack(page, shape_err, bgcolor=AppColors.ERROR)
+                return False
+        return True
+
+    def _on_search(e=None):
+        query = _normalize_pasted_query(search_query.strip() if search_query else "")
+        if query != (search_query or "").strip():
+            set_search_query(query)  # show what is actually searched
+        if not _submit_guards(query, state.search_mode):
+            return
+
+        try:
+            from core.shared_services import shared_haptics
+
+            spawn(shared_haptics().medium_impact())
+        except Exception:
+            pass
+
+        target_mode = state.search_mode
+
+        async def _run():
+            controller.show_results()
+            if target_mode == MODE_EMAIL:
+                await controller.start_email_search(query)
+            elif target_mode == MODE_PHONE:
+                await controller.start_phone_search(query)
+            else:
+                await controller.start_search(query)
+
+        spawn(_run())
+
+    async def _load_bulk_file(e=None):
+        from flet import context
+
+        page = context.page
+        if not page:
+            return
+        picker = ft.FilePicker()
+        files = await picker.pick_files(allow_multiple=False)
+        if not files:
+            return
+        path = files[0].path
+        if not path:
+            from core.notify import show_snack
+            show_snack(page, "File selection not supported on this platform", bgcolor=AppColors.WARNING)
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+        except Exception as exc:
+            from core.notify import show_snack
+            show_snack(page, f"Failed to read file: {exc}", bgcolor=AppColors.ERROR)
+            return
+        if not lines:
+            from core.notify import show_snack
+            show_snack(page, "File contains no valid targets", bgcolor=AppColors.WARNING)
+            return
+        set_search_query(", ".join(lines))
+        from core.notify import show_snack
+        show_snack(page, f"Loaded {len(lines)} target(s) from file", bgcolor=AppColors.SUCCESS)
+
+    def _on_input_change(e):
+        value = e.control.value or ""
+        set_search_query(value)
+        # Forward direction only: typing a complete address flips to Email.
+        # The reverse is deliberately not run here — see _maybe_switch_mode.
+        _maybe_switch_mode(value, allow_username_flip=False)
+
+    def _maybe_switch_mode(value: str, *, allow_username_flip: bool = True):
+        """Auto-switch mode on paste or typing: email <-> username.
+
+        `allow_username_flip` exists because Email -> Username is only safe
+        when the whole value is known. On a single keystroke `"@" not in val`
+        is true for the FIRST character, so running it per-keystroke made
+        Email mode snap back to Username before the user could type
+        anything (owner report). `_on_input_change` therefore passes
+        False; `_on_paste` (whole value known) leaves it True. The
+        username -> email direction is unaffected either way: it requires a
+        full `validate_email()` match, never a partial.
+        """
+        val = value.strip()
+        if not val:
+            return
+        if state.search_mode == MODE_USERNAME and _is_email_query(val):
+            _switch_mode(MODE_EMAIL, keep_query=True)
+        elif allow_username_flip and state.search_mode == MODE_EMAIL and "@" not in val:
+            _switch_mode(MODE_USERNAME, keep_query=True)
+
+    def _on_paste(e):
+        async def _paste():
+            try:
+                from core.shared_services import shared_clipboard
+
+                clipboard = shared_clipboard()
+                text = await clipboard.get()
+                if text:
+                    value = _normalize_pasted_query(text.strip())
+                    set_search_query(value)
+                    _maybe_switch_mode(value)
+            except Exception:
+                pass
+
+        spawn(_paste())
+
+    def _on_history_click(entry: dict):
+        query = entry.get("query") or entry.get("username") or ""
+        mode = entry.get("mode") or (
+            MODE_EMAIL if _is_email_query(query) else MODE_USERNAME
+        )
+        if not _submit_guards(query, mode):
+            return
+        if state.search_mode != mode:
+            _switch_mode(mode, keep_query=True)
+        set_search_query(query)
+
+        # 1. Try instant load from cache
+        if controller.open_cached_result and controller.open_cached_result(query, mode):
+            return
+
+        # 2. Fallback to fresh scan if not in cache
+        controller.show_results()
+
+        async def _run_hist():
+            if mode == MODE_EMAIL:
+                await controller.start_email_search(query)
+            elif mode == MODE_PHONE:
+                await controller.start_phone_search(query)
+            else:
+                await controller.start_search(query)
+
+        spawn(_run_hist())
+
+    # ── Load history on mount ──
+    def _load_history():
+        async def _fetch():
+            try:
+                from services.storage_service import (
+                    StorageService,
+                    load_history_entries,
+                )
+
+                storage = StorageService(_get_page())
+                raw = await storage.get(STORAGE_HISTORY)
+                entries = load_history_entries(raw)
+                if entries:
+                    state.history.clear()
+                    state.history.extend(entries)
+                    state.progress_version += 1
+            except Exception:
+                pass
+
+        spawn(_fetch())
+
+    ft.use_effect(_load_history, [])
+
+    # ── Build UI ──
+
+    is_dark = _is_dark()
+
+    # Mode-aware category / quick settings chips
+    if state.search_mode == MODE_PHONE:
+        chips = [
+            _category_chip(
+                icon=ft.Icons.PUBLIC_ROUNDED,
+                label=f"Region: {getattr(state, 'phone_region', None) or 'Auto'}",
+                color=AppColors.PRIMARY,
+                is_active=bool(getattr(state, "phone_region", None)),
+                on_click=_cycle_phone_region,
+            ),
+            _category_chip(
+                icon=ft.Icons.SPEED_ROUNDED,
+                label=f"Concurrency: {getattr(state, 'phone_concurrency', 15)}",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_phone_concurrency,
+            ),
+            _category_chip(
+                icon=ft.Icons.TIMER_OUTLINED,
+                label=f"{state.timeout}s Timeout",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_timeout,
+            ),
+            _category_chip(
+                icon=ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED,
+                label="Loud: ON" if getattr(state, "allow_loud", False) else "Loud: OFF",
+                color=AppColors.WARNING if getattr(state, "allow_loud", False) else AppColors.GREY,
+                is_active=getattr(state, "allow_loud", False),
+                on_click=_toggle_allow_loud,
+            ),
+            _category_chip(
+                icon=ft.Icons.VERIFIED_ROUNDED,
+                label="Silent by default",
+                color=AppColors.SUCCESS,
+                is_active=True,
+                on_click=None,
+            ),
+        ]
+    elif state.search_mode == MODE_EMAIL:
+        chips = [
+            _category_chip(
+                icon=ft.Icons.TIMER_OUTLINED,
+                label=f"{state.email_timeout}s Timeout",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_email_timeout,
+            ),
+            _category_chip(
+                icon=ft.Icons.LOCK_RESET_ROUNDED
+                if not state.no_password_recovery
+                else ft.Icons.LOCK_OUTLINE_ROUNDED,
+                label="PW Recovery: ON"
+                if not state.no_password_recovery
+                else "PW Recovery: OFF",
+                color=AppColors.PRIMARY
+                if not state.no_password_recovery
+                else AppColors.GREY,
+                is_active=not state.no_password_recovery,
+                on_click=_toggle_password_recovery,
+            ),
+            _category_chip(
+                icon=ft.Icons.SECURITY_ROUNDED,
+                label="Stealth: Chrome 131"
+                if getattr(state, "use_curl_cffi", True)
+                else "Stealth: Standard",
+                color=AppColors.PRIMARY_LIGHT
+                if getattr(state, "use_curl_cffi", True)
+                else AppColors.GREY,
+                is_active=getattr(state, "use_curl_cffi", True),
+                on_click=_toggle_use_curl_cffi,
+            ),
+        ]
+    else:
+        depth_labels = {
+            "all": "Scope: All modules",
+            "1000": "Scope: Top 1k",
+            "500": "Scope: Top 500",
+        }
+        curr_depth = getattr(state, "scan_depth", "all")
+        chips = [
+            _category_chip(
+                icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED,
+                label=depth_labels.get(curr_depth, "Scope: All modules"),
+                color=AppColors.PRIMARY,
+                is_active=curr_depth != "all",
+                on_click=_cycle_scan_depth,
+            ),
+            _category_chip(
+                icon=ft.Icons.TIMER_OUTLINED,
+                label=f"{state.timeout}s Timeout",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_timeout,
+            ),
+            _category_chip(
+                icon=ft.Icons.UPLOAD_FILE_ROUNDED,
+                label="Load from file",
+                color=AppColors.PRIMARY,
+                is_active=False,
+                on_click=lambda e: spawn(_load_bulk_file(e)),
+            ),
+            _category_chip(
+                icon=ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED,
+                label="Loud: ON" if getattr(state, "allow_loud", False) else "Loud: OFF",
+                color=AppColors.WARNING if getattr(state, "allow_loud", False) else AppColors.GREY,
+                is_active=getattr(state, "allow_loud", False),
+                on_click=_toggle_allow_loud,
+            ),
+            _category_chip(
+                icon=ft.Icons.VERIFIED_ROUNDED,
+                label="Validate proxy",
+                color=AppColors.PRIMARY,
+                is_active=False,
+                on_click=lambda e: spawn(_validate_proxy(e)),
+            ),
+            _category_chip(
+                icon=ft.Icons.SECURITY_ROUNDED,
+                label="Hudson: ON" if getattr(state, "hudson_enabled", False) else "Hudson: OFF",
+                color=AppColors.PRIMARY if getattr(state, "hudson_enabled", False) else AppColors.GREY,
+                is_active=getattr(state, "hudson_enabled", False),
+                on_click=_toggle_hudson,
+            ),
+            _category_chip(
+                icon=ft.Icons.SAVED_SEARCH_ROUNDED,
+                label="Recursive: ON"
+                if getattr(state, "recursive_search", False)
+                else "Recursive: OFF",
+                color=AppColors.PRIMARY_LIGHT
+                if getattr(state, "recursive_search", False)
+                else AppColors.GREY,
+                is_active=getattr(state, "recursive_search", False),
+                on_click=_toggle_recursive_search,
+            ),
+            _category_chip(
+                icon=ft.Icons.ALL_INCLUSIVE_ROUNDED,
+                label="Cross-Scan: ON"
+                if getattr(state, "cross_scan_enabled", False)
+                else "Cross-Scan: OFF",
+                color=AppColors.PRIMARY_LIGHT
+                if getattr(state, "cross_scan_enabled", False)
+                else AppColors.GREY,
+                is_active=getattr(state, "cross_scan_enabled", False),
+                on_click=_toggle_cross_scan,
+            ),
+            _category_chip(
+                icon=ft.Icons.BLOCK_ROUNDED,
+                label="Adult Sites: ON" if state.nsfw_enabled else "Adult Sites: OFF",
+                color=AppColors.PRIMARY if state.nsfw_enabled else AppColors.GREY,
+                is_active=state.nsfw_enabled,
+                on_click=_toggle_nsfw,
+            ),
+            _category_chip(
+                icon=ft.Icons.SHIELD_ROUNDED,
+                label="Disabled Sites: ON"
+                if state.ignore_exclusions
+                else "Disabled Sites: OFF",
+                color=AppColors.WARNING if state.ignore_exclusions else AppColors.GREY,
+                is_active=state.ignore_exclusions,
+                on_click=_toggle_exclusions,
+            ),
+        ]
+
+    # Recent searches — read observable state directly (reactive), so
+    # the three most recent sit on top.
+    recent_rows = []
+    if state.history:
+        for entry in list(state.history[:3]):
+            q = entry.get("query") or entry.get("username", "")
+            found = entry.get("found", 0)
+            total = entry.get("total", 0)
+            ts = entry.get("timestamp", "")
+            m = entry.get("mode", MODE_USERNAME)
+            recent_rows.append(
+                _history_row(
+                    query=q,
+                    found=found,
+                    total=total,
+                    timestamp=ts,
+                    mode=m,
+                    on_click=lambda _, e=entry: _on_history_click(e),
+                )
+            )
+
+    # ── Assemble ──
+
+    header_controls: list[Control] = [
+        # Compact header
+        AppHeader(
+            _get_page(),
+            title=APP_NAME,
+            on_settings=lambda e: (
+                controller.show_settings() if controller.show_settings else None
+            ),
+        ),
+    ]
+    if banner:
+        header_controls.append(banner)
+
+    content = ft.Column(
+        controls=[
+            *header_controls,
+            # Offline — subtle inline banner (visible only when offline)
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.WIFI_OFF_ROUNDED,
+                            size=14,
+                            color=ft.Colors.ON_ERROR_CONTAINER,
+                        ),
+                        ft.Text(
+                            MSG_OFFLINE,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_ERROR_CONTAINER,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+                padding=ft.Padding(tokens.SPACE_LG, 6, tokens.SPACE_LG, 6),
+                bgcolor=ft.Colors.ERROR_CONTAINER,
+                visible=not state.is_online,
+            ),
+            # ── Mode Switcher (Username / Email) — KTV Player pill style ──
+            ft.Container(
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
+                ),
+                content=ft.Container(
+                    padding=ft.Padding(4, 4, 4, 4),
+                    border_radius=12,
+                    bgcolor=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE),
+                    border=ft.Border.all(
+                        1, ft.Colors.with_opacity(0.15, ft.Colors.ON_SURFACE)
+                    ),
+                    content=ft.Row(
+                        controls=[
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.PERSON_SEARCH_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if state.search_mode == MODE_USERNAME
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Username",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if state.search_mode == MODE_USERNAME
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if state.search_mode == MODE_USERNAME
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=not _mode_locked,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                opacity=0.45 if _mode_locked else 1.0,
+                                on_click=(
+                                    None
+                                    if _mode_locked
+                                    else lambda e: _switch_mode(MODE_USERNAME)
+                                ),
+                            ),
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if state.search_mode == MODE_EMAIL
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Email",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if state.search_mode == MODE_EMAIL
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if state.search_mode == MODE_EMAIL
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=not _mode_locked,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                opacity=0.45 if _mode_locked else 1.0,
+                                on_click=(
+                                    None
+                                    if _mode_locked
+                                    else lambda e: _switch_mode(MODE_EMAIL)
+                                ),
+                            ),
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.PHONE_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if state.search_mode == MODE_PHONE
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Phone",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if state.search_mode == MODE_PHONE
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                    ],
+                                    spacing=6,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if state.search_mode == MODE_PHONE
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(12, 6, 12, 6),
+                                ink=not _mode_locked,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                opacity=0.45 if _mode_locked else 1.0,
+                                on_click=(
+                                    None
+                                    if _mode_locked
+                                    else lambda e: _switch_mode(MODE_PHONE)
+                                ),
+                            ),
+                        ],
+                        spacing=4,
+                    ),
+                ),
+            ),
+            # Search field — modern SearchBar
+            ft.Container(
+                alignment=ft.Alignment.CENTER,
+                content=ft.SearchBar(
+                    value=search_query,
+                    bar_hint_text=(
+                        "Enter email to check 120+ platforms..."
+                        if state.search_mode == MODE_EMAIL
+                        else "Enter username to scan across platforms..."
+                    ),
+                    bar_leading=ft.Icon(
+                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                        if state.search_mode == MODE_EMAIL
+                        else ft.Icons.SEARCH_ROUNDED,
+                        color=AppColors.PRIMARY,
+                    ),
+                    bar_trailing=[
+                        *(
+                            [
+                                ft.IconButton(
+                                    icon=ft.Icons.CLEAR_ROUNDED,
+                                    icon_size=18,
+                                    icon_color=ft.Colors.ON_SURFACE_VARIANT,
+                                    tooltip="Clear",
+                                    on_click=lambda e: set_search_query(""),
+                                )
+                            ]
+                            if search_query
+                            else []
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.PASTE_ROUNDED,
+                            icon_size=18,
+                            icon_color=AppColors.PRIMARY,
+                            tooltip="Paste from clipboard",
+                            on_click=_on_paste,
+                        ),
+                    ],
+                    bar_bgcolor=(
+                        AppColors.DARK_SURFACE if is_dark else AppColors.LIGHT_SURFACE
+                    ),
+                    bar_border_side=ft.BorderSide(
+                        1,
+                        ft.Colors.with_opacity(
+                            0.12,
+                            AppColors.DARK_TEXT if is_dark else AppColors.LIGHT_TEXT,
+                        ),
+                    ),
+                    bar_shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_MD),
+                    bar_text_style=ft.TextStyle(
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.W_500,
+                    ),
+                    bar_hint_text_style=ft.TextStyle(
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.W_400,
+                        color=ft.Colors.with_opacity(
+                            0.4,
+                            AppColors.DARK_TEXT if is_dark else AppColors.LIGHT_TEXT,
+                        ),
+                    ),
+                    full_screen=False,
+                    key=test_id("home-search-bar"),
+                    on_submit=lambda e: _on_search(),
+                    on_change=_on_input_change,
+                    autofocus=False,
+                    controls=[
+                        ft.ListTile(
+                            title=ft.Text(
+                                item.get("query", ""),
+                                size=tokens.FONT_SM,
+                                font_family="Outfit",
+                            ),
+                            leading=ft.Icon(
+                                ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                if state.search_mode == MODE_EMAIL
+                                else ft.Icons.HISTORY_ROUNDED,
+                                size=16,
+                                color=AppColors.PRIMARY,
+                            ),
+                            on_click=lambda _, entry=item: _on_history_click(entry),
+                        )
+                        for item in (
+                            [
+                                h
+                                for h in (state.history or [])
+                                if (
+                                    (
+                                        h.get("mode")
+                                        or (
+                                            MODE_EMAIL
+                                            if _is_email_query(h.get("query", ""))
+                                            else MODE_USERNAME
+                                        )
+                                    )
+                                    == state.search_mode
+                                ) and (
+                                    not search_query.strip()
+                                    or search_query.strip().lower()
+                                    in (h.get("query", "") or "").lower()
+                                )
+                            ][:5]
+                        )
+                    ],
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
+                ),
+            ),
+            # ── Targets card — live network-scope summary (username mode only) ──
+            ft.Container(
+                content=TargetsCard(
+                    selected_count=len(state.selected_sites)
+                    if state.selected_sites
+                    else 0,
+                    total_count=state.sites_total,
+                    on_open=lambda e: controller.show_sites(),
+                    page=_get_page(),
+                ),
+                visible=state.search_mode == MODE_USERNAME,
+            ),
+            # Category / Quick Setting Chips — single horizontal track that
+            # scrolls on narrow screens (never wraps to a second line).
+            ft.Container(
+                content=ft.Row(
+                    chips,
+                    wrap=False,
+                    scroll=ft.ScrollMode.AUTO,
+                    spacing=tokens.SPACE_SM,
+                    # START, not CENTER: a centered scrollable row clips
+                    # the leading chips on narrow screens.
+                    alignment=ft.MainAxisAlignment.START,
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, 0
+                ),
+            ),
+            # Search button
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.FilledButton(
+                            content=ft.Row(
+                                [
+                                    ft.Icon(
+                                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                        if state.search_mode == MODE_EMAIL
+                                        else ft.Icons.SEARCH_ROUNDED,
+                                        size=tokens.ICON_MD,
+                                        color=ft.Colors.WHITE,
+                                    ),
+                                    ft.Text(
+                                        "Search Emails"
+                                        if state.search_mode == MODE_EMAIL
+                                        else "Search Networks",
+                                        size=tokens.FONT_MD,
+                                        weight=ft.FontWeight.W_600,
+                                        color=ft.Colors.WHITE,
+                                        font_family="Outfit",
+                                    ),
+                                ],
+                                spacing=8,
+                                tight=True,
+                            ),
+                            key=test_id("home-search-button"),
+                            on_click=lambda _: _on_search(),
+                            disabled=bool(state.is_searching or getattr(state.search_progress, "is_running", False)),
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(
+                                    radius=tokens.RADIUS_FULL,
+                                ),
+                                bgcolor=AppColors.PRIMARY,
+                                padding=ft.Padding(32, 14, 32, 14),
+                            ),
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM
+                ),
+            ),
+            # Recent searches
+            *(
+                [
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Text(
+                                            "Recent",
+                                            size=tokens.FONT_SM,
+                                            weight=ft.FontWeight.W_600,
+                                            color=ft.Colors.ON_SURFACE_VARIANT,
+                                            font_family="Outfit",
+                                        ),
+                                        ft.Container(expand=True),
+                                        ft.Container(
+                                            content=ft.Icon(
+                                                ft.Icons.ARROW_FORWARD_ROUNDED,
+                                                size=tokens.ICON_SM,
+                                                color=ft.Colors.ON_SURFACE_VARIANT,
+                                            ),
+                                            padding=6,
+                                            border_radius=tokens.RADIUS_SM,
+                                            ink=True,
+                                            tooltip="View all history",
+                                            on_click=lambda _: (
+                                                controller.show_history()
+                                            ),
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                ),
+                                *recent_rows,
+                            ],
+                            spacing=tokens.SPACE_SM,
+                        ),
+                        padding=ft.Padding(
+                            tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_SM
+                        ),
+                    )
+                ]
+                if recent_rows
+                else []
+            ),
+            # Banner ad (after recent searches) — DDGS placement
+            pooled_banner_ad("home-1"),
+            # What Sherlock Can Do / Email Intelligence
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "What Sherlock Can Do"
+                            if state.search_mode == MODE_USERNAME
+                            else "Email Intelligence",
+                            size=tokens.FONT_SM,
+                            weight=ft.FontWeight.W_600,
+                            font_family="Outfit",
+                        ),
+                        ft.Container(height=tokens.SPACE_SM),
+                        *[
+                            ft.Container(
+                                content=_feature_card(
+                                    f["icon"], f["title"], f["desc"], f["color"]
+                                ),
+                                margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
+                            )
+                            for f in (
+                                _FEATURES_EMAIL if state.search_mode == MODE_EMAIL else _FEATURES_USERNAME
+                            )
+                        ],
+                    ],
+                    spacing=0,
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_LG
+                ),
+            ),
+            # Banner ad (after features) — DDGS placement
+            pooled_banner_ad("home-2"),
+            # How It Works
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "How It Works",
+                            size=tokens.FONT_SM,
+                            weight=ft.FontWeight.W_600,
+                            font_family="Outfit",
+                        ),
+                        ft.Container(height=tokens.SPACE_SM),
+                        *[
+                            _step_row(n, t, d)
+                            for n, t, d in (
+                                _STEPS_EMAIL if state.search_mode == MODE_EMAIL else _STEPS_USERNAME
+                            )
+                        ],
+                    ],
+                    spacing=tokens.SPACE_SM,
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_LG
+                ),
+            ),
+            # Trust banner
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.SHIELD_ROUNDED,
+                            size=20,
+                            color=AppColors.PRIMARY,
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    "100% Privacy-First",
+                                    size=tokens.FONT_SM,
+                                    weight=ft.FontWeight.W_600,
+                                    font_family="Outfit",
+                                ),
+                                ft.Text(
+                                    "Your searches are never tracked or stored. "
+                                    "Results come directly from public profiles.",
+                                    size=tokens.FONT_XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                    font_family="Outfit",
+                                    style=ft.TextStyle(height=1.3),
+                                ),
+                            ],
+                            spacing=tokens.SPACE_XXS,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=tokens.SPACE_MD,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD
+                ),
+                margin=ft.Margin(tokens.SPACE_LG, 0, tokens.SPACE_LG, tokens.SPACE_LG),
+                border_radius=tokens.RADIUS_LG,
+                bgcolor=ft.Colors.with_opacity(0.06, AppColors.PRIMARY),
+                border=ft.Border.all(
+                    1, ft.Colors.with_opacity(0.15, AppColors.PRIMARY)
+                ),
+            ),
+            ft.Container(height=80),  # Bottom nav bar spacing
+        ],
+        scroll=ft.ScrollMode.AUTO,
+        expand=True,
+    )
+
+    # NOTE: the scrollable Column goes straight into the Container. An extra
+    # wrapper Column here gives it unbounded height (expand is a no-op on
+    # Column children in flet 1.0.4), so it shrink-wraps to full content and
+    # the wrapper — which has no scroll of its own — clips everything below
+    # the fold. Container keeps the constraints bounded, so the inner scroll
+    # works.
+    return ft.Container(
+        content=content,
+        gradient=AppStyles.brand_gradient(_get_page()),
+        expand=True,
+    )

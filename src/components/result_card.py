@@ -1,0 +1,687 @@
+"""ResultCard — single result row for both username and email OSINT results.
+
+Supports rich profile previews:
+- Avatar image (from socid-extractor) or stylized status icon
+- Display name & platform label
+- Profile bio / description snippet
+- Follower count, location, recovery email & phone hints
+- Method badge (register / login / password recovery)
+- Tapping opens the ProfileDetailDialog for complete OSINT inspection
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import flet as ft
+from flet import Control
+
+from core import tokens
+from core.geo_utils import first_country_tag, flag_for_alpha2
+from core.theme import AppColors
+
+# Cross-scan confidence ratings (user-scanner Confidence enum) rendered as
+# colored chips on discovered accounts.
+_CONFIDENCE_COLORS = {
+    "confirmed": ft.Colors.GREEN,
+    "likely": ft.Colors.CYAN,
+    "candidate": ft.Colors.BLUE_GREY,
+    "conflicting": ft.Colors.AMBER,
+}
+
+# Fields the card renders as styled rows (bio/location/followers) — kept
+# out of the dynamic generic rows so nothing prints twice.
+_CARD_STYLED_KEYS = frozenset(
+    {
+        "bio",
+        "description",
+        "location",
+        "follower_count",
+        "followers",
+        "followerCount",
+        "following_count",
+        "following",
+        "followingCount",
+        "posts_count",
+        "posts",
+        "image",
+        "avatar",
+        "photo",
+        "company",
+        "occupation",
+        "is_verified",
+        "links",
+        "website",
+        "url",
+    }
+)
+_CARD_MAX_EXTRA_ROWS = 6
+
+
+def _status_icon_and_color(status: str) -> tuple[str, str]:
+    """Map a Sherlock status string to (icon, color)."""
+    if status == "Claimed":
+        return ft.Icons.CHECK_CIRCLE_ROUNDED, AppColors.SUCCESS
+    if status == "Available":
+        return ft.Icons.CANCEL_ROUNDED, ft.Colors.with_opacity(
+            tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
+        )
+    if status == "Skipped":
+        return ft.Icons.FAST_FORWARD_ROUNDED, ft.Colors.with_opacity(
+            tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
+        )
+    if status == "WAF":
+        return ft.Icons.SHIELD_ROUNDED, AppColors.WARNING
+    if status == "Unavailable":
+        return ft.Icons.HIDE_SOURCE_ROUNDED, ft.Colors.with_opacity(
+            tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
+        )
+    return ft.Icons.ERROR_OUTLINE_ROUNDED, AppColors.WARNING
+
+
+def _chip(label: str, color: str, bg: str) -> ft.Container:
+    return ft.Container(
+        content=ft.Text(
+            label,
+            size=tokens.FONT_XS,
+            weight=ft.FontWeight.W_700,
+            color=color,
+        ),
+        padding=ft.Padding(
+            tokens.SPACE_SM, tokens.SPACE_XS, tokens.SPACE_SM, tokens.SPACE_XS
+        ),
+        border_radius=tokens.RADIUS_SM,
+        bgcolor=bg,
+    )
+
+
+def _first_present(mapping: dict, keys: tuple[str, ...]):
+    """First non-None value for keys — preserves real 0/False (no falsy-or)."""
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def ResultCard(
+    site_name: str,
+    status: str,
+    url_user: str | None = None,
+    url_main: str | None = None,
+    query_time: float | None = None,
+    on_open: Callable[[str], None] | None = None,
+    on_tap: Callable[[], None] | None = None,
+    # Email-mode extras (holehe fields)
+    email_recovery: str | None = None,
+    phone_number: str | None = None,
+    others: dict | None = None,
+    method: str | None = None,
+    rate_limit: bool = False,
+    frequent_rate_limit: bool = False,
+    # Enrichment extras (socid-extractor fields)
+    enrichment: dict | None = None,
+    tags: list[str] | tuple[str, ...] | None = None,
+    # Typed maigret error + protection metadata (badge bridge)
+    error_type: str | None = None,
+    error_hint: str = "",
+    protection: list[str] | tuple[str, ...] | None = None,
+    badge: str = "",
+    keyword_hit: bool = False,
+) -> Control:
+    """Build a single result tile for the results tabs."""
+    icon, icon_color = _status_icon_and_color(status)
+
+    # ── Status chip ────────────────────────────────────────────────────
+    chip_label = "WAF BLOCKED" if status == "WAF" else status
+    chip_color = (
+        AppColors.SUCCESS
+        if status == "Claimed"
+        else AppColors.WARNING
+        if status in ("WAF", "Error")
+        else ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)
+    )
+    chip_bg = (
+        ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.SUCCESS)
+        if status == "Claimed"
+        else (
+            ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.WARNING)
+            if status in ("WAF", "Error")
+            else ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE)
+        )
+    )
+
+    display_url = url_user or url_main or site_name
+    click_target = url_user or url_main
+
+    def _handle_click(e):
+        if on_tap:
+            on_tap()
+        elif on_open and click_target:
+            on_open(click_target)
+
+    # ── Extras / Enriched lines ────────────────────────────────────────
+    extra_lines: list[ft.Control] = []
+    # Avatar sources: socid enrichment (username mode) or holehe-v2
+    # Result.media (email mode) — resolved before either block runs.
+    avatar_url: str | None = None
+
+    # Recovery email hint
+    if email_recovery:
+        extra_lines.append(
+            ft.Row(
+                [
+                    ft.Icon(
+                        ft.Icons.MAIL_OUTLINE_ROUNDED, size=12, color=AppColors.PRIMARY
+                    ),
+                    ft.Text(
+                        email_recovery,
+                        size=tokens.FONT_XS,
+                        color=AppColors.PRIMARY,
+                        italic=True,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        expand=True,
+                    ),
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        )
+
+    # Phone number hint
+    if phone_number:
+        extra_lines.append(
+            ft.Row(
+                [
+                    ft.Icon(ft.Icons.PHONE_OUTLINED, size=12, color=AppColors.PRIMARY),
+                    ft.Text(
+                        phone_number,
+                        size=tokens.FONT_XS,
+                        color=AppColors.PRIMARY,
+                        italic=True,
+                    ),
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        )
+
+    # Full name, creation date & holehe-v2 extras from others dict.
+    # v2_extra starts as {} so the styled/dynamic blocks below work for
+    # cards built without `others` at all.
+    v2_extra = {}
+    if others and isinstance(others, dict):
+        v2_extra = others.get("extra")
+        if not isinstance(v2_extra, dict):
+            v2_extra = {}
+        # v2 streams profile media in-band (avatar producers: gravatar,
+        # github, etsy, duolingo).
+        v2_media = others.get("media")
+        if not isinstance(v2_media, dict):
+            v2_media = {}
+        v2_avatar = v2_media.get("avatar") or v2_media.get("thumbnail_url")
+        if isinstance(v2_avatar, str) and v2_avatar.startswith("http"):
+            avatar_url = avatar_url or v2_avatar
+        if others.get("FullName"):
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.PERSON_OUTLINE_ROUNDED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            others["FullName"],
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+        if others.get("Date, time of the creation"):
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.CALENDAR_TODAY_ROUNDED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            f"Created: {others['Date, time of the creation']}",
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+
+        # holehe-v2 Result.extra + socid enrichment — every field rendered
+        # dynamically (core/enrich_view): no hardcoded key list, so
+        # platform-specific facts (payerId, locale, ambassador, …) reach
+        # the card instead of being dropped. Capped so one card can't flood
+        # the list; the profile dialog shows every field.
+        from core.enrich_view import enrichment_rows
+
+        card_rows = enrichment_rows(
+            enrichment if isinstance(enrichment, dict) else None,
+            v2_extra,
+            skip=_CARD_STYLED_KEYS,
+        )
+        for _key, _label, _value in card_rows[:_CARD_MAX_EXTRA_ROWS]:
+            _text = _value if len(_value) <= 90 else _value[:87] + "…"
+            extra_lines.append(
+                ft.Text(
+                    f"{_label}: {_text}",
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    italic=True,
+                )
+            )
+        _remaining = len(card_rows) - _CARD_MAX_EXTRA_ROWS
+        if _remaining > 0:
+            extra_lines.append(
+                ft.Text(
+                    f"+{_remaining} more field"
+                    f"{'s' if _remaining != 1 else ''} — tap for the full profile",
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.PRIMARY,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    italic=True,
+                )
+            )
+
+    # Enrichment data from socid-extractor (plus same-named holehe extras —
+    # the styled lines below read the merged view so a holehe-only card
+    # keeps its bio/location instead of silently dropping them).
+    _merged_profile = {}
+    for _src in (v2_extra, enrichment if isinstance(enrichment, dict) else {}):
+        if isinstance(_src, dict):
+            _merged_profile.update(_src)
+    if _merged_profile:
+        avatar_url = (
+            _merged_profile.get("image")
+            or _merged_profile.get("avatar")
+            or _merged_profile.get("photo")
+            or avatar_url
+        )
+        bio = _merged_profile.get("bio") or _merged_profile.get("description")
+        if bio:
+            bio_text = str(bio).strip()
+            if not bio_text.lower().startswith("bio:"):
+                bio_text = f"Bio: {bio_text}"
+            extra_lines.append(
+                ft.Text(
+                    bio_text,
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    max_lines=2,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    italic=True,
+                )
+            )
+        location = _merged_profile.get("location")
+        if location:
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.LOCATION_ON_OUTLINED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            str(location),
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+        followers = _first_present(
+            _merged_profile,
+            ("follower_count", "followers", "followerCount"),
+        )
+        following = _first_present(
+            _merged_profile,
+            ("following_count", "following", "followingCount"),
+        )
+        if followers is not None or following is not None:
+            parts = []
+            if followers is not None:
+                parts.append(f"{followers} followers")
+            if following is not None:
+                parts.append(f"{following} following")
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.PEOPLE_OUTLINE_ROUNDED,
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            " · ".join(parts),
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+        # Extra socid fields — company, verified, links, website
+        company = _merged_profile.get("company") or _merged_profile.get("occupation")
+        if company:
+            extra_lines.append(
+                ft.Text(
+                    str(company),
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                )
+            )
+        if _merged_profile.get("is_verified"):
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.VERIFIED_ROUNDED, size=12, color=ft.Colors.BLUE
+                        ),
+                        ft.Text(
+                            "Verified",
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.BLUE,
+                            weight=ft.FontWeight.W_600,
+                        ),
+                    ],
+                    spacing=4,
+                )
+            )
+        links = _merged_profile.get("links")
+        if links and isinstance(links, list) and links[0]:
+            first_link = links[0] if isinstance(links[0], str) else str(links[0])
+            if first_link.startswith("http"):
+                extra_lines.append(
+                    ft.Text(
+                        first_link,
+                        size=tokens.FONT_XS,
+                        color=AppColors.PRIMARY,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    )
+                )
+
+    # Frequently rate-limited notice
+    if rate_limit and frequent_rate_limit:
+        extra_lines.append(
+            ft.Text(
+                "⚡ Frequently rate limited — result may be unreliable",
+                size=tokens.FONT_XS,
+                color=AppColors.WARNING,
+                italic=True,
+            )
+        )
+
+    # Typed error advice (maigret solution_of) + bot-wall protection notice
+    if status in ("WAF", "Error") and (error_hint or protection):
+        if error_hint:
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.INFO_OUTLINE_ROUNDED,
+                            size=12,
+                            color=AppColors.PRIMARY,
+                        ),
+                        ft.Text(
+                            error_hint,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            italic=True,
+                            max_lines=2,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                )
+            )
+        if isinstance(protection, str):
+            protection = [protection]
+        if protection:
+            extra_lines.append(
+                ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.SHIELD_ROUNDED,
+                            size=12,
+                            color=AppColors.WARNING,
+                        ),
+                        ft.Text(
+                            "Protected: " + ", ".join(str(p) for p in protection),
+                            size=tokens.FONT_XS,
+                            color=AppColors.WARNING,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+
+    # Method badge for email mode
+    method_badge = None
+    if method:
+        method_color = (
+            AppColors.PRIMARY
+            if method == "register"
+            else AppColors.WARNING
+            if method == "password recovery"
+            else ft.Colors.ON_SURFACE_VARIANT
+        )
+        method_badge = ft.Container(
+            content=ft.Text(
+                method, size=9, color=method_color, weight=ft.FontWeight.W_600
+            ),
+            padding=ft.Padding(6, 2, 6, 2),
+            border_radius=tokens.RADIUS_SM,
+            bgcolor=ft.Colors.with_opacity(0.1, method_color),
+        )
+
+    # ── Avatar / Leading Icon ─────────────────────────────────────────
+    # Guard against relative/non-http avatar URLs from socid-extractor.
+    has_valid_avatar = bool(
+        avatar_url and isinstance(avatar_url, str) and avatar_url.startswith("http")
+    )
+    if has_valid_avatar:
+        from services.cache_service import ensure_cached_avatar
+
+        # NOTE: no background download here — this renders per card per
+        # progress tick; spawning an httpx task per render was a task storm
+        # contributing to the scan freeze. The cache is warmed by the
+        # dossier dialog when the user opens details.
+        leading_control = ft.Image(
+            src=ensure_cached_avatar(avatar_url),
+            width=36,
+            height=36,
+            border_radius=18,
+            fit=ft.BoxFit.COVER,
+            error_content=ft.Container(
+                content=ft.Icon(icon, size=tokens.RESULT_ICON, color=icon_color),
+                width=36,
+                height=36,
+                border_radius=18,
+                bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, icon_color),
+                alignment=ft.Alignment.CENTER,
+            ),
+        )
+    else:
+        leading_control = ft.Container(
+            content=ft.Icon(icon, size=tokens.RESULT_ICON, color=icon_color),
+            width=36,
+            height=36,
+            border_radius=18,
+            bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, icon_color),
+            alignment=ft.Alignment.CENTER,
+        )
+
+    # ── Title / Name row ──────────────────────────────────────────────
+    display_title = site_name
+    if enrichment and (_merged_profile.get("name") or _merged_profile.get("fullname")):
+        display_title = f"{site_name} · {_merged_profile.get('name') or _merged_profile.get('fullname')}"
+    elif others and others.get("FullName"):
+        display_title = f"{site_name} · {others['FullName']}"
+
+    name_row_controls: list[ft.Control] = [
+        ft.Text(
+            display_title,
+            size=tokens.FONT_MD,
+            weight=ft.FontWeight.W_600,
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            expand=True,
+        ),
+    ]
+
+    site_tag = first_country_tag(tuple(tags)) if tags else ""
+    if site_tag:
+        site_flag = flag_for_alpha2(site_tag)
+        if site_flag:
+            name_row_controls.append(
+                ft.Text(
+                    site_flag,
+                    size=tokens.FONT_SM,
+                    tooltip=f"{site_flag} {site_tag.upper()}",
+                )
+            )
+
+    if query_time is not None:
+        name_row_controls.append(
+            ft.Text(
+                f"({query_time:.2f}s)",
+                size=tokens.FONT_XS,
+                color=ft.Colors.with_opacity(
+                    tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
+                ),
+            )
+        )
+    if method_badge:
+        name_row_controls.append(method_badge)
+    if keyword_hit:
+        # maigret KeywordMatchStatus.KEYWORD_FOUND — the scanned page
+        # contained one of the keywords= terms.
+        name_row_controls.append(
+            _chip(
+                "KEYWORD",
+                AppColors.PRIMARY,
+                ft.Colors.with_opacity(0.1, AppColors.PRIMARY),
+            )
+        )
+
+    # Cross-scan confidence (user-scanner Confidence enum) — how well this
+    # discovered account is tied back to the original target's anchors.
+    _confidence = ""
+    if isinstance(others, dict):
+        _confidence = str(others.get("confidence") or "")
+    if _confidence and _confidence.lower() in _CONFIDENCE_COLORS:
+        _conf_color = _CONFIDENCE_COLORS[_confidence.lower()]
+        name_row_controls.append(
+            _chip(
+                _confidence.upper(),
+                _conf_color,
+                ft.Colors.with_opacity(0.12, _conf_color),
+            )
+        )
+
+    # Typed-error chip shown beside the status chip on failed checks
+    # (e.g. "BOT PROTECTION", "CONNECTING FAILURE").
+    error_chip: ft.Container | None = None
+    if status in ("WAF", "Error") and error_type:
+        err_label = str(error_type).upper()
+        if len(err_label) > 18:
+            err_label = err_label[:17] + "…"
+        if badge in ("bot", "rate"):
+            err_chip_color: str = AppColors.WARNING
+        elif badge == "dead":
+            err_chip_color = ft.Colors.with_opacity(
+                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+            )
+        else:
+            err_chip_color = ft.Colors.ON_SURFACE_VARIANT
+        error_chip = _chip(
+            err_label,
+            err_chip_color,
+            ft.Colors.with_opacity(tokens.OPACITY_LIGHT, err_chip_color),
+        )
+
+    detail_column = ft.Column(
+        controls=[
+            ft.Row(
+                controls=name_row_controls,
+                spacing=tokens.SPACE_SM,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Text(
+                display_url,
+                size=tokens.FONT_XS,
+                color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                no_wrap=False,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            ),
+            *extra_lines,
+        ],
+        spacing=tokens.SPACE_XXS,
+        expand=True,
+    )
+
+    is_clickable = (on_tap is not None) or (
+        on_open is not None and click_target is not None
+    )
+
+    return ft.Container(
+        content=ft.Row(
+            controls=[
+                leading_control,
+                detail_column,
+                *([error_chip] if error_chip is not None else []),
+                _chip(chip_label, chip_color, chip_bg),
+            ],
+            spacing=tokens.SPACE_MD,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        ),
+        padding=ft.Padding(
+            left=tokens.SPACE_LG,
+            right=tokens.SPACE_LG,
+            top=12,
+            bottom=12,
+        ),
+        border=ft.Border.only(
+            bottom=ft.BorderSide(
+                width=0.5,
+                color=ft.Colors.with_opacity(
+                    tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE
+                ),
+            )
+        ),
+        on_click=_handle_click if is_clickable else None,
+        ink=is_clickable,
+    )

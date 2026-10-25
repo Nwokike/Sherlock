@@ -1,0 +1,1156 @@
+"""ProfileDetailDialog — rich inspection modals for OSINT results.
+
+Extracted helpers: EmailDossier + UsernameDossier share DossierRow.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+import flet as ft
+
+from core import tokens
+from core.constants import ERR_OPEN_URL
+from core.tasks import spawn
+from core.theme import AppColors
+
+logger = logging.getLogger("ProfileDetailDialog")
+
+
+def _stringify(value) -> str:
+    """Render any enrichment value as display text.
+
+    socid-extractor's extract() can return non-string values (its final dict
+    keeps lists/dicts as-is), so a plain `str()`/`join()` explodes on shapes
+    like a list of link dicts — which killed the dossier modal mid-build on
+    rich results.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                for key in ("url", "link", "href", "value"):
+                    if isinstance(item.get(key), str):
+                        parts.append(item[key])
+                        break
+                else:
+                    parts.append(str(item))
+            else:
+                parts.append(str(item))
+        return ", ".join(parts)
+    return str(value)
+
+
+def _extract_pivot_handles(enrich: dict, others: dict) -> list[str]:
+    """Cross-platform handles worth pivoting a new search into (cap 3).
+
+    socid schemes surface `twitter_username`-style keys plus @mentions in
+    bios; holehe extras carry github/duolingo usernames. Deduped, order of
+    discovery.
+    """
+    import re
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: object):
+        if isinstance(value, str) and value.strip():
+            handle = value.strip().lstrip("@")
+            key = handle.lower()
+            if handle and key not in seen and len(handle) <= 39:
+                seen.add(key)
+                found.append(handle)
+
+    sources = [enrich or {}, others.get("extra") if isinstance(others, dict) else {}]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for k, v in source.items():
+            kl = str(k).lower()
+            if kl.endswith("_username") or kl in (
+                "username",
+                "login",
+                "handle",
+                "screen_name",
+            ):
+                if isinstance(v, (list, tuple)):
+                    for item in v:
+                        _add(item)
+                else:
+                    _add(v)
+        bio = source.get("bio") or source.get("description")
+        if isinstance(bio, str):
+            for mention in re.findall(r"@([A-Za-z0-9_]{2,30})", bio):
+                _add(mention)
+        if len(found) >= 3:
+            break
+    return found[:3]
+
+
+def _dossier_row(
+    page: ft.Page,
+    icon: ft.IconData,
+    title: str,
+    value: str,
+    can_copy: bool = False,
+    link: str | None = None,
+    copy_text: str | None = None,
+) -> ft.Container:
+    """Shared detail row with optional copy, and an optional open-link
+    action when the value itself is a URL. `copy_text` defaults to `value`
+    so a truncated display value still copies in full.
+    """
+    text_for_copy = copy_text if copy_text is not None else value
+    actions = []
+    if link:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
+                icon_size=16,
+                tooltip=f"Open {title}",
+                on_click=lambda e, u=link: spawn(_open_value(page, u)),
+            )
+        )
+    if can_copy:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.CONTENT_COPY_ROUNDED,
+                icon_size=16,
+                tooltip=f"Copy {title}",
+                on_click=lambda e, v=text_for_copy, t=title: spawn(
+                    _copy_text(page, v, t)
+                ),
+            )
+        )
+    copy_btn = (
+        ft.Row(actions, spacing=0, tight=True) if actions else ft.Container(width=0)
+    )
+    return ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(icon, size=16, color=AppColors.PRIMARY),
+                ft.Column(
+                    [
+                        ft.Text(
+                            title,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            value,
+                            size=tokens.FONT_SM,
+                            weight=ft.FontWeight.W_500,
+                            color=ft.Colors.ON_SURFACE,
+                            selectable=True,
+                        ),
+                    ],
+                    spacing=0,
+                    expand=True,
+                ),
+                copy_btn,
+            ],
+            spacing=tokens.SPACE_SM,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        padding=ft.Padding(0, 4, 0, 4),
+    )
+
+
+async def _open_value(page: ft.Page, url: str):
+    try:
+        from core.shared_services import shared_url_launcher
+
+        await shared_url_launcher(page).launch_url(url)
+    except Exception as exc:
+        logger.warning("Failed to open %s: %s", url, exc)
+        from core.notify import show_snack
+
+        show_snack(page, "Could not open link", bgcolor=AppColors.ERROR)
+
+
+async def _copy_text(page: ft.Page, text: str, label: str):
+    try:
+        from core.shared_services import shared_clipboard
+
+        cb = shared_clipboard(page)
+        await cb.set(text)
+        from core.notify import show_snack
+
+        show_snack(page, f"{label} copied to clipboard", bgcolor=AppColors.SUCCESS)
+    except Exception as exc:
+        logger.warning("Copy failed: %s", exc)
+
+
+def _email_dossier(
+    page: ft.Page,
+    site_name: str,
+    status: str,
+    target_query: str | None,
+    url_main: str | None,
+    query_time: float | None,
+    email_recovery: str | None,
+    phone_number: str | None,
+    others: dict,
+    method: str | None,
+    rate_limit: bool,
+    frequent_rate_limit: bool,
+):
+    platform_url = url_main or (
+        f"https://{site_name.lower()}.com"
+        if "." not in site_name
+        else f"https://{site_name}"
+    )
+    if not platform_url.startswith("http"):
+        platform_url = f"https://{platform_url}"
+
+    async def _launch_platform_url():
+        page.pop_dialog()
+        try:
+            from core.shared_services import shared_url_launcher
+
+            await shared_url_launcher(page).launch_url(platform_url)
+        except Exception as exc:
+            logger.warning("Failed to launch platform URL %s: %s", platform_url, exc)
+            from core.notify import show_snack
+
+            show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
+
+    # P1-3: prefer the instant client-side open; fall back to the Python
+    # path only when no page context exists (test harness / early init).
+    from core.actions import open_url_action
+
+    platform_open = open_url_action(platform_url)
+
+    status_text = (
+        "Account Confirmed"
+        if status == "Claimed"
+        else "Rate Limited"
+        if rate_limit or status in ("Error", "WAF")
+        else "No Account Found"
+    )
+    status_color = (
+        AppColors.SUCCESS
+        if status == "Claimed"
+        else AppColors.WARNING
+        if rate_limit or status in ("Error", "WAF")
+        else ft.Colors.ON_SURFACE_VARIANT
+    )
+    status_bg = (
+        ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.SUCCESS)
+        if status == "Claimed"
+        else ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.WARNING)
+        if rate_limit or status in ("Error", "WAF")
+        else ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE)
+    )
+
+    header_row = ft.Row(
+        controls=[
+            ft.Container(
+                content=ft.Icon(
+                    ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                    if status == "Claimed"
+                    else ft.Icons.LANGUAGE_ROUNDED,
+                    size=28,
+                    color=status_color,
+                ),
+                width=56,
+                height=56,
+                border_radius=28,
+                bgcolor=ft.Colors.with_opacity(0.12, status_color),
+                alignment=ft.Alignment.CENTER,
+            ),
+            ft.Column(
+                controls=[
+                    ft.Row(
+                        [
+                            ft.Text(
+                                site_name.capitalize(),
+                                size=tokens.FONT_LG,
+                                weight=ft.FontWeight.BOLD,
+                                font_family="Outfit",
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                                expand=True,
+                            ),
+                            ft.Container(
+                                content=ft.Text(
+                                    status_text,
+                                    size=tokens.FONT_XS,
+                                    weight=ft.FontWeight.BOLD,
+                                    color=status_color,
+                                ),
+                                padding=ft.Padding(8, 3, 8, 3),
+                                border_radius=tokens.RADIUS_SM,
+                                bgcolor=status_bg,
+                            ),
+                        ],
+                        spacing=tokens.SPACE_SM,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Text(
+                        platform_url,
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.with_opacity(
+                            tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                        ),
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                ],
+                spacing=2,
+                expand=True,
+            ),
+        ],
+        spacing=tokens.SPACE_MD,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    items: list[ft.Control] = []
+    if target_query:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.MARK_EMAIL_READ_ROUNDED,
+                "Investigated Email",
+                target_query,
+                can_copy=True,
+            )
+        )
+    if method:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.SECURITY_ROUNDED,
+                "Detection Vector",
+                f"{method.capitalize()} API / Endpoint",
+            )
+        )
+    if email_recovery:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.MAIL_LOCK_OUTLINED,
+                "Masked Recovery Email",
+                email_recovery,
+                can_copy=True,
+            )
+        )
+    if phone_number:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.PHONE_ANDROID_ROUNDED,
+                "Recovery Phone Hint",
+                phone_number,
+                can_copy=True,
+            )
+        )
+    if others.get("FullName"):
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.PERSON_OUTLINE_ROUNDED,
+                "Disclosed Full Name",
+                str(others["FullName"]),
+                can_copy=True,
+            )
+        )
+    if others.get("Date, time of the creation"):
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.CALENDAR_TODAY_ROUNDED,
+                "Account Created Timestamp",
+                str(others["Date, time of the creation"]),
+            )
+        )
+    if query_time:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.TIMER_OUTLINED,
+                "Probe Response Time",
+                f"{query_time:.2f} seconds",
+            )
+        )
+    if frequent_rate_limit or rate_limit:
+        items.append(
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(
+                            ft.Icons.WARNING_AMBER_ROUNDED,
+                            color=AppColors.WARNING,
+                            size=16,
+                        ),
+                        ft.Text(
+                            "Platform endpoint enforces strict rate limits.",
+                            size=tokens.FONT_XS,
+                            color=AppColors.WARNING,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=tokens.SPACE_SM,
+                ),
+                padding=ft.Padding(8, 4, 8, 4),
+                border_radius=tokens.RADIUS_SM,
+                bgcolor=ft.Colors.with_opacity(0.1, AppColors.WARNING),
+                margin=ft.Margin(0, tokens.SPACE_XS, 0, tokens.SPACE_XS),
+            )
+        )
+
+    def _dismiss(e):
+        page.pop_dialog()
+
+    dlg = ft.AlertDialog(
+        modal=False,
+        title=ft.Text(
+            "Email Intelligence Dossier",
+            size=tokens.FONT_MD,
+            weight=ft.FontWeight.BOLD,
+            font_family="Outfit",
+            color=AppColors.PRIMARY,
+        ),
+        content=ft.Container(
+            content=ft.Column(
+                controls=[
+                    header_row,
+                    ft.Divider(
+                        height=tokens.SPACE_MD,
+                        color=ft.Colors.with_opacity(0.1, ft.Colors.OUTLINE),
+                    ),
+                    # Explicit height, not `expand`: expand is a no-op on a
+                    # Column child in flet 1.0.4, so the list got unbounded
+                    # height, laid out every enrichment row, and a long
+                    # profile overflowed out of this fixed 380x420 dialog.
+                    ft.ListView(
+                        controls=items,
+                        spacing=tokens.SPACE_XS,
+                        height=300,
+                        padding=0,
+                    ),
+                ],
+                spacing=0,
+                expand=True,
+            ),
+            width=380,
+            height=420,
+        ),
+        actions=[
+            ft.TextButton(
+                "Copy Platform URL",
+                icon=ft.Icons.LINK_ROUNDED,
+                on_click=lambda e: spawn(
+                    _copy_text(page, platform_url, "Platform website link")
+                ),
+            ),
+            ft.FilledButton(
+                content=ft.Text(
+                    "Visit Website", weight=ft.FontWeight.W_600, color=ft.Colors.WHITE
+                ),
+                icon=ft.Icons.OPEN_IN_BROWSER_ROUNDED,
+                action=platform_open,
+                on_click=(
+                    (lambda e: page.pop_dialog())
+                    if platform_open
+                    else lambda e: spawn(_launch_platform_url())
+                ),
+            ),
+            ft.TextButton("Close", on_click=_dismiss),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.show_dialog(dlg)
+
+
+def _username_dossier(
+    page: ft.Page,
+    site_name: str,
+    status: str,
+    target_query: str | None,
+    url_user: str | None,
+    url_main: str | None,
+    query_time: float | None,
+    others: dict,
+    enrichment: dict,
+    on_pivot=None,
+):
+    profile_url = (
+        url_user
+        or url_main
+        or (
+            f"https://{site_name.lower()}.com"
+            if "." not in site_name
+            else f"https://{site_name}"
+        )
+    )
+    if not str(profile_url).startswith("http"):
+        profile_url = f"https://{profile_url}"
+
+    async def _launch_profile_url():
+        page.pop_dialog()
+        try:
+            from core.shared_services import shared_url_launcher
+
+            await shared_url_launcher(page).launch_url(profile_url)
+        except Exception as exc:
+            logger.warning("Failed to launch profile URL %s: %s", profile_url, exc)
+            from core.notify import show_snack
+
+            show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
+
+    # P1-3: instant client-side open with Python fallback (see _email_dossier).
+    from core.actions import open_url_action
+
+    profile_open = open_url_action(profile_url)
+
+    # A corrupt state.enrichments entry can be a non-dict (list/str); .get()
+    # on that raises and the dialog never opens. Guard like ResultCard does.
+    enrich = enrichment if isinstance(enrichment, dict) else {}
+    others = others if isinstance(others, dict) else {}
+    pivot_handles = _extract_pivot_handles(enrich, others) if on_pivot else []
+    avatar_url = enrich.get("image") or enrich.get("avatar") or enrich.get("photo")
+    display_name = _stringify(
+        enrich.get("name")
+        or enrich.get("fullname")
+        or others.get("FullName")
+        or target_query
+        or site_name
+    )
+    bio = enrich.get("bio") or enrich.get("description")
+    location = enrich.get("location")
+    uid = enrich.get("uid") or enrich.get("id")
+    followers = enrich.get("follower_count") if enrich.get("follower_count") is not None else enrich.get("followers")
+    following = enrich.get("following_count") if enrich.get("following_count") is not None else enrich.get("following")
+    posts = enrich.get("posts_count") if enrich.get("posts_count") is not None else enrich.get("posts")
+    join_date = (
+        others.get("Date, time of the creation")
+        or enrich.get("joined")
+        or enrich.get("created_at")
+    )
+    links = enrich.get("links") or enrich.get("url")
+
+    # Validate avatar is http(s) — socid may return relative paths.
+    has_valid_avatar = bool(
+        avatar_url and isinstance(avatar_url, str) and avatar_url.startswith("http")
+    )
+
+    is_claimed = status == "Claimed"
+    is_available = status == "Available"
+    is_error = not is_claimed and not is_available
+
+    status_color = (
+        AppColors.SUCCESS
+        if is_claimed
+        else AppColors.WARNING
+        if is_error
+        else ft.Colors.ON_SURFACE_VARIANT
+    )
+
+    if has_valid_avatar:
+        from services.cache_service import (
+            ensure_cached_avatar,
+            schedule_avatar_download,
+        )
+
+        avatar_control = ft.Image(
+            src=ensure_cached_avatar(avatar_url),
+            width=56,
+            height=56,
+            border_radius=28,
+            fit=ft.BoxFit.COVER,
+            error_content=ft.Container(
+                content=ft.Icon(
+                    ft.Icons.PERSON_ROUNDED, size=28, color=AppColors.PRIMARY
+                ),
+                width=56,
+                height=56,
+                border_radius=28,
+                bgcolor=ft.Colors.with_opacity(0.15, AppColors.PRIMARY),
+                alignment=ft.Alignment.CENTER,
+            ),
+        )
+        # Populate the on-device avatar cache in the background so the
+        # next open of this dossier renders with zero network latency.
+        spawn(schedule_avatar_download(avatar_url))
+    else:
+        avatar_control = ft.Container(
+            content=ft.Icon(
+                ft.Icons.CHECK_CIRCLE_ROUNDED
+                if is_claimed
+                else (
+                    ft.Icons.INFO_OUTLINE_ROUNDED
+                    if is_available
+                    else ft.Icons.LANGUAGE_ROUNDED
+                ),
+                size=28,
+                color=status_color,
+            ),
+            width=56,
+            height=56,
+            border_radius=28,
+            bgcolor=ft.Colors.with_opacity(0.12, status_color),
+            alignment=ft.Alignment.CENTER,
+        )
+
+    chip_color = (
+        AppColors.SUCCESS
+        if is_claimed
+        else AppColors.WARNING
+        if is_error
+        else ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE)
+    )
+    chip_bg = (
+        ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.SUCCESS)
+        if is_claimed
+        else ft.Colors.with_opacity(tokens.OPACITY_LIGHT, AppColors.WARNING)
+        if is_error
+        else ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE)
+    )
+
+    header_row = ft.Row(
+        controls=[
+            avatar_control,
+            ft.Column(
+                controls=[
+                    ft.Row(
+                        [
+                            ft.Text(
+                                display_name,
+                                size=tokens.FONT_LG,
+                                weight=ft.FontWeight.BOLD,
+                                font_family="Outfit",
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                                expand=True,
+                            ),
+                            ft.Container(
+                                content=ft.Text(
+                                    status,
+                                    size=tokens.FONT_XS,
+                                    weight=ft.FontWeight.BOLD,
+                                    color=chip_color,
+                                ),
+                                padding=ft.Padding(8, 3, 8, 3),
+                                border_radius=tokens.RADIUS_SM,
+                                bgcolor=chip_bg,
+                            ),
+                        ],
+                        spacing=tokens.SPACE_SM,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Text(
+                        site_name,
+                        size=tokens.FONT_SM,
+                        color=AppColors.PRIMARY,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Text(
+                        profile_url,
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.with_opacity(
+                            tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                        ),
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                ],
+                spacing=2,
+                expand=True,
+            ),
+        ],
+        spacing=tokens.SPACE_MD,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    items: list[ft.Control] = []
+    if bio:
+        items.append(
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "Biography / About",
+                            size=tokens.FONT_XS,
+                            weight=ft.FontWeight.BOLD,
+                            color=AppColors.PRIMARY,
+                            font_family="Outfit",
+                        ),
+                        ft.Text(
+                            str(bio),
+                            size=tokens.FONT_SM,
+                            color=ft.Colors.ON_SURFACE,
+                            selectable=True,
+                        ),
+                    ],
+                    spacing=4,
+                ),
+                padding=tokens.SPACE_MD,
+                border_radius=tokens.RADIUS_MD,
+                bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.ON_SURFACE),
+                border=ft.Border.all(
+                    1, ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE)
+                ),
+                margin=ft.Margin(0, tokens.SPACE_SM, 0, tokens.SPACE_SM),
+            )
+        )
+
+    metric_cols = []
+    if followers is not None:
+        metric_cols.append(
+            ft.Column(
+                [
+                    ft.Text(
+                        str(followers),
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.BOLD,
+                        color=AppColors.PRIMARY,
+                        font_family="Outfit",
+                    ),
+                    ft.Text(
+                        "Followers",
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=0,
+            )
+        )
+    if following is not None:
+        metric_cols.append(
+            ft.Column(
+                [
+                    ft.Text(
+                        str(following),
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.BOLD,
+                        color=AppColors.PRIMARY,
+                        font_family="Outfit",
+                    ),
+                    ft.Text(
+                        "Following",
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=0,
+            )
+        )
+    if posts is not None:
+        metric_cols.append(
+            ft.Column(
+                [
+                    ft.Text(
+                        str(posts),
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.BOLD,
+                        color=AppColors.PRIMARY,
+                        font_family="Outfit",
+                    ),
+                    ft.Text(
+                        "Posts", size=tokens.FONT_XS, color=ft.Colors.ON_SURFACE_VARIANT
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=0,
+            )
+        )
+    if metric_cols:
+        items.append(
+            ft.Container(
+                content=ft.Row(
+                    metric_cols, alignment=ft.MainAxisAlignment.SPACE_EVENLY
+                ),
+                padding=tokens.SPACE_MD,
+                border_radius=tokens.RADIUS_MD,
+                bgcolor=ft.Colors.with_opacity(0.06, AppColors.PRIMARY),
+                margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
+            )
+        )
+    if location:
+        loc_text = _stringify(location)
+        items.append(
+            _dossier_row(page, ft.Icons.LOCATION_ON_OUTLINED, "Location", loc_text)
+        )
+    if uid:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.BADGE_OUTLINED,
+                "Account UID / ID",
+                _stringify(uid),
+                can_copy=True,
+            )
+        )
+    if join_date:
+        raw_date = _stringify(join_date)
+        from core.format import human_date
+
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.CALENDAR_TODAY_ROUNDED,
+                "Account Created / Joined",
+                human_date(raw_date) or raw_date,
+            )
+        )
+    if links:
+        link_str = _stringify(links)
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.LINK_ROUNDED,
+                "External Links / Websites",
+                link_str,
+                can_copy=True,
+            )
+        )
+    if query_time:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.TIMER_OUTLINED,
+                "Response Time",
+                f"{query_time:.2f} seconds",
+            )
+        )
+
+    # Dynamic catch-all: every remaining field the extractor returned,
+    # rendered without a hardcoded key list — that is how platform-specific
+    # facts (payerId, locale, ambassador, follower counts…) reach the user
+    # instead of being dropped on the floor.
+    from core.enrich_view import (
+        enrichment_rows,
+        is_link_value,
+        truncate_value,
+    )
+
+    specially_rendered = {
+        "location",
+        "uid",
+        "id",
+        "joined",
+        "created_at",
+        "links",
+        "url",
+        "bio",
+        "name",
+        "fullname",
+        "username",
+        "image",
+        "avatar",
+        "photo",
+        # Rendered as the metric strip / identity block above, so they must
+        # not also appear as generic rows below (every fact printed twice).
+        "follower_count",
+        "followers",
+        "following_count",
+        "following",
+        "posts_count",
+        "posts",
+    }
+    extra_rows = [
+        (label, value)
+        for _key, label, value in enrichment_rows(
+            enrich,
+            others.get("extra") if isinstance(others, dict) else None,
+            skip=specially_rendered,
+        )
+    ]
+    if extra_rows:
+        items.append(
+            ft.Container(
+                content=ft.Text(
+                    "All Profile Fields",
+                    size=tokens.FONT_SM,
+                    weight=ft.FontWeight.W_700,
+                    color=AppColors.PRIMARY,
+                ),
+                padding=ft.Padding(
+                    left=tokens.SPACE_MD,
+                    right=tokens.SPACE_MD,
+                    top=tokens.SPACE_MD,
+                    bottom=tokens.SPACE_XS,
+                ),
+            )
+        )
+        for label, value in extra_rows:
+            # URLs get their own tappable row — a profile website shown as
+            # dead text is the one field most worth being able to open.
+            if is_link_value(value):
+                items.append(
+                    _dossier_row(
+                        page,
+                        ft.Icons.LINK_ROUNDED,
+                        label,
+                        value,
+                        can_copy=True,
+                        link=value,
+                    )
+                )
+                continue
+            # Long values are truncated for display; _dossier_row's copy
+            # action keeps the full text.
+            items.append(
+                _dossier_row(
+                    page,
+                    ft.Icons.LABEL_OUTLINE,
+                    label,
+                    truncate_value(value),
+                    can_copy=bool(value) and value != "—",
+                    copy_text=value,
+                )
+            )
+
+    # Raw OSINT metadata payload preview
+    raw_payload = {}
+    if enrich:
+        raw_payload["enrichment"] = enrich
+    if others:
+        raw_payload["others"] = others
+    if raw_payload:
+        json_str = json.dumps(raw_payload, indent=2, ensure_ascii=False, default=str)
+        if len(json_str) > 20_000:
+            json_str = json_str[:20_000] + "\n… (truncated)"
+        items.append(
+            ft.ExpansionTile(
+                title=ft.Text(
+                    "Raw OSINT Indicators / JSON",
+                    size=tokens.FONT_SM,
+                    weight=ft.FontWeight.W_600,
+                    color=AppColors.PRIMARY,
+                ),
+                leading=ft.Icon(
+                    ft.Icons.CODE_ROUNDED, size=16, color=AppColors.PRIMARY
+                ),
+                controls=[
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    json_str,
+                                    size=10,
+                                    font_family="Courier New",
+                                    color=AppColors.TERMINAL_GREEN,
+                                    selectable=True,
+                                )
+                            ],
+                            scroll=ft.ScrollMode.AUTO,
+                        ),
+                        bgcolor=AppColors.TERMINAL_BG,
+                        border=ft.Border.all(
+                            1,
+                            ft.Colors.with_opacity(
+                                tokens.OPACITY_LIGHT, ft.Colors.WHITE
+                            ),
+                        ),
+                        border_radius=tokens.RADIUS_SM,
+                        padding=tokens.SPACE_SM,
+                        margin=ft.Margin(0, tokens.SPACE_XS, 0, tokens.SPACE_SM),
+                        height=160,
+                    )
+                ],
+            )
+        )
+
+    def _dismiss(e):
+        page.pop_dialog()
+
+    dialog_title = (
+        "Confirmed Profile Dossier"
+        if is_claimed
+        else ("Target Unregistered" if is_available else "Inspection Inconclusive")
+    )
+
+    empty_fallback_text = (
+        "Profile confirmed on platform. Tap Open Profile to view."
+        if is_claimed
+        else (
+            "Username is available or not registered on this platform."
+            if is_available
+            else "Verification was blocked by anti-bot challenge (Cloudflare/Captcha) or network error."
+        )
+    )
+
+    action_button_text = "Open Profile" if is_claimed else "Visit Website"
+    action_button_icon = (
+        ft.Icons.OPEN_IN_BROWSER_ROUNDED if is_claimed else ft.Icons.LANGUAGE_ROUNDED
+    )
+    copy_button_text = "Copy Profile Link" if is_claimed else "Copy Website Link"
+
+    dlg = ft.AlertDialog(
+        modal=False,
+        title=ft.Text(
+            dialog_title,
+            size=tokens.FONT_MD,
+            weight=ft.FontWeight.BOLD,
+            font_family="Outfit",
+            color=AppColors.PRIMARY,
+        ),
+        content=ft.Container(
+            content=ft.Column(
+                controls=[
+                    header_row,
+                    ft.Divider(
+                        height=tokens.SPACE_MD,
+                        color=ft.Colors.with_opacity(0.1, ft.Colors.OUTLINE),
+                    ),
+                    ft.ListView(
+                        controls=items
+                        if items
+                        else [
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.CHECK_CIRCLE_OUTLINE_ROUNDED
+                                            if is_claimed
+                                            else (
+                                                ft.Icons.INFO_OUTLINE_ROUNDED
+                                                if is_available
+                                                else ft.Icons.WARNING_AMBER_ROUNDED
+                                            ),
+                                            size=16,
+                                            color=status_color,
+                                        ),
+                                        ft.Text(
+                                            empty_fallback_text,
+                                            size=tokens.FONT_SM,
+                                            color=ft.Colors.ON_SURFACE_VARIANT,
+                                            italic=True,
+                                            expand=True,
+                                        ),
+                                    ],
+                                    spacing=tokens.SPACE_SM,
+                                ),
+                                padding=tokens.SPACE_SM,
+                            )
+                        ],
+                        spacing=tokens.SPACE_XS,
+                        # Explicit height, not `expand` (see the username
+                        # dialog above): expand is a no-op on a Column child
+                        # in flet 1.0.4, so the list took unbounded height
+                        # and a long result overflowed the fixed dialog.
+                        height=300,
+                        padding=0,
+                    ),
+                ],
+                spacing=0,
+                expand=True,
+            ),
+            width=380,
+            height=420,
+        ),
+        actions=[
+            *[
+                ft.TextButton(
+                    f"Pivot: @{h}",
+                    icon=ft.Icons.PERSON_SEARCH_ROUNDED,
+                    on_click=lambda e, _h=h: (page.pop_dialog(), on_pivot(_h)),
+                )
+                for h in pivot_handles
+            ],
+            ft.TextButton(
+                copy_button_text,
+                icon=ft.Icons.LINK_ROUNDED,
+                on_click=lambda e: spawn(
+                    _copy_text(page, profile_url, "Platform link")
+                ),
+            ),
+            ft.FilledButton(
+                content=ft.Text(
+                    action_button_text,
+                    weight=ft.FontWeight.W_600,
+                    color=ft.Colors.WHITE,
+                ),
+                icon=action_button_icon,
+                action=profile_open,
+                on_click=(
+                    (lambda e: page.pop_dialog())
+                    if profile_open
+                    else lambda e: spawn(_launch_profile_url())
+                ),
+            ),
+            ft.TextButton("Close", on_click=_dismiss),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.show_dialog(dlg)
+
+
+def show_profile_detail_dialog(
+    page: ft.Page,
+    site_name: str,
+    status: str,
+    mode: str = "username",
+    target_query: str | None = None,
+    url_user: str | None = None,
+    url_main: str | None = None,
+    query_time: float | None = None,
+    email_recovery: str | None = None,
+    phone_number: str | None = None,
+    others: dict | None = None,
+    method: str | None = None,
+    rate_limit: bool = False,
+    frequent_rate_limit: bool = False,
+    enrichment: dict | None = None,
+    on_pivot=None,
+) -> None:
+    """Display rich intelligence modal tailored for Username or Email OSINT.
+
+    `on_pivot(handle)` — optional callback fired when the user taps a
+    discovered cross-platform handle, so the caller can start a new search.
+    """
+    if not page:
+        return
+    others = others or {}
+    enrichment = enrichment or {}
+    try:
+        if mode == "email":
+            _email_dossier(
+                page,
+                site_name,
+                status,
+                target_query,
+                url_main,
+                query_time,
+                email_recovery,
+                phone_number,
+                others,
+                method,
+                rate_limit,
+                frequent_rate_limit,
+            )
+        else:
+            _username_dossier(
+                page,
+                site_name,
+                status,
+                target_query,
+                url_user,
+                url_main,
+                query_time,
+                others,
+                enrichment,
+                on_pivot,
+            )
+    except Exception:
+        # Never fail silently — a mid-build crash here leaves the tap doing
+        # nothing on device. Log the full traceback and tell the user.
+        logger.exception(
+            "Dossier dialog failed to build (mode=%s, site=%s)", mode, site_name
+        )
+        from core.notify import show_snack
+
+        show_snack(
+            page,
+            "Couldn't open details. The error was logged.",
+            bgcolor=AppColors.ERROR,
+        )

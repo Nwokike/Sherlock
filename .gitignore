@@ -1,0 +1,29 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Flet build artifacts & runtime storage tiers
+.flet/
+build/
+*.tmp
+installer.iss
+kiri_keystore.jks
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Agent/session scratch
+.zcode/
+
+# OS noise
+.DS_Store
+Thumbs.db

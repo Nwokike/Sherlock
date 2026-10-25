@@ -1,0 +1,104 @@
+[project]
+name = "sherlock"
+version = "2.3.0"
+description = "Sherlock V3: one-to-one Flet wrap of user-scanner (+ phonsint for phone OSINT)."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "flet>=1.0.4",
+    "flet-ads>=1.0.4",
+    "user-scanner>=1.5.2.3",
+    "phonsint>=0.1.0",
+]
+
+[tool.flet]
+org = "ng.kiri"
+product = "Sherlock"
+description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
+company = "Kiri"
+build_number = 13
+icon = "src/assets/icon.png"
+
+[tool.flet.app]
+path = "src"
+
+[tool.flet.boot_screen]
+name = "flet"
+
+[tool.flet.boot_screen.flet]
+startup_message = "Initializing Sherlock..."
+
+[tool.flet.flutter.pubspec.dependency_overrides]
+jni = "1.1.0"
+
+[tool.flet.android]
+bundle_id = "ng.kiri.sherlock"
+target_arch = ["arm64-v8a", "x86_64"]
+
+[tool.flet.android.manifest_application]
+usesCleartextTraffic = "true"
+requestLegacyExternalStorage = "true"
+
+[tool.flet.android.meta_data]
+"com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~1261089274"
+
+[tool.flet.android.permission]
+"android.permission.INTERNET" = true
+"android.permission.ACCESS_NETWORK_STATE" = true
+"android.permission.WAKE_LOCK" = true
+"android.permission.USE_BIOMETRIC" = true
+
+[tool.flet.android.feature]
+"android.software.leanback" = false
+"android.hardware.touchscreen" = true
+
+[tool.flet.cleanup]
+package_files = [
+    "oauthlib/**",
+    "flask/**",
+    "werkzeug/**",
+    "click/**",
+    "blinker/**",
+    "itsdangerous/**",
+    "asgiref/**",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = ["-ra", "-q"]
+timeout = 60
+strict_markers = true
+strict_config = true
+markers = [
+    "live: hits the real network (run explicitly with -m live; CI uses -m 'not live')",
+    "asyncio: run the test in an asyncio event loop",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-timeout>=2.4",
+    "ruff>=0.17.1",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "UP", "B", "Q", "C4", "PERF", "ERA", "I", "T20", "DTZ", "RUF",
+    "S", "TRY", "BLE", "EM", "A", "SIM", "RET", "RSE",
+]
+ignore = [
+    "E501",
+    "EM101", "EM102", "EM103", "TRY003",
+    "BLE001", "S110", "SIM105",
+    "TRY300", "TRY301",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = false

@@ -44,6 +44,9 @@ startup_message = "Initializing Sherlock..."
 jni = "1.1.0"
 
 [tool.flet.android]
+# Compress native libs in the APK (pre-0.86 behaviour): since 0.86 flet stores
+# them uncompressed by default, which doubled APK download size.
+legacy_packaging = true
 bundle_id = "ng.kiri.sherlock"
 target_arch = ["arm64-v8a", "x86_64"]
 

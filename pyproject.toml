@@ -1,13 +1,13 @@
 [project]
 name = "sherlock"
-version = "2.2.0"
+version = "2.3.0"
 description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "flet>=1.0.1",
-    "flet-ads>=1.0.1",
-    "flet-local-auth>=1.0.1",
+    "flet>=1.0.4",
+    "flet-ads>=1.0.4",
+    "flet-notifications>=0.1.4",
     "holehe-v2>=1.0.3",
     "httpx[http2,socks]>=0.28.1",
     "maigret>=0.6.6",
@@ -17,10 +17,17 @@ dependencies = [
 [tool.flet]
 org = "ng.kiri"
 product = "Sherlock"
-build_number = 12
+description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
+company = "Kiri"
+build_number = 13
+icon = "src/assets/icon.png"
 
 [tool.flet.app]
 path = "src"
+# No `assets_dir` here on purpose: the CLI resolves it relative to `path`,
+# so any value produces src/src/assets under `flet run`. main() passes
+# `assets_dir="src/assets"` to ft.run() directly, which is the only place it
+# is needed.
 
 [tool.flet.boot_screen]
 name = "flet"
@@ -28,7 +35,18 @@ name = "flet"
 [tool.flet.boot_screen.flet]
 startup_message = "Initializing Sherlock..."
 
+# Merged into the generated Flutter pubspec by flet build (upstream drift
+# guard): jni_flutter 1.0.3+ asserts package:jni ^1.1.0 at compile time, but
+# an older transitive pin keeps 1.0.0 on the resolve path — which broke every
+# platform build with "Constant evaluation error" (jni_flutter-1.0.4+1
+# vs jni-1.0.0). Pin jni here; nothing in the app depends on the old ABI.
+[tool.flet.flutter.pubspec.dependency_overrides]
+jni = "1.1.0"
+
 [tool.flet.android]
+# Compress native libs in the APK (pre-0.86 behaviour): since 0.86 flet stores
+# them uncompressed by default, which doubled APK download size.
+legacy_packaging = true
 bundle_id = "ng.kiri.sherlock"
 target_arch = ["arm64-v8a", "x86_64"]
 
@@ -56,6 +74,9 @@ key_alias = "upload"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 addopts = ["-ra", "-q"]
+# Hard per-test ceiling: a hang (network stub regression, worker deadlock)
+# fails that test instead of stalling CI for the default 0 (no limit).
+timeout = 60
 strict_markers = true
 strict_config = true
 markers = [
@@ -78,8 +99,32 @@ dev = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "UP", "B", "Q", "C4", "PERF", "ERA", "I", "T20", "DTZ"]
-ignore = ["E501"]
+select = [
+    "E", "F", "W", "UP", "B", "Q", "C4", "PERF", "ERA", "I", "T20", "DTZ", "RUF",
+    "S", "TRY", "BLE", "EM", "A", "SIM", "RET", "RSE",
+]
+ignore = [
+    "E501",
+    # Message-string style: this app raises with inline human messages on
+    # purpose (owner rule: visible, specific errors); classes-per-message
+    # would be churn with no behavioral gain.
+    "EM101", "EM102", "EM103", "TRY003",
+    # Wide-except + log (BLE001) and silent best-effort no-ops (S110,
+    # SIM105) are the documented owner pattern across services/UI: cleanup,
+    # restore, and persist paths intentionally pass on failure while every
+    # load-bearing path logs. Narrowing 200+ sites is regression churn.
+    "BLE001", "S110", "SIM105",
+    # TRY300/TRY301 are style-only reshuffles inside engine hot paths
+    # (email/sherlock) — churn risk with zero behavioral gain.
+    "TRY300", "TRY301",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert by design (pytest); S105 is a storage-KEY name, not a secret.
+"tests/**" = ["S101"]
+# `id` mirrors the flet_notifications.show/cancel signature it stands in
+# for; renaming it would hide the correspondence.
+"src/services/scan_notify.py" = ["A002"]
 
 # Build-time pruning: serious_python cleanup globs — the ONLY channel that
 # shrinks artifacts (post-build rm cannot; deps are re-packaged from

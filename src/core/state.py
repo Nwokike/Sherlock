@@ -61,6 +61,10 @@ class AppState:
     enrichments: dict | None = None
 
     # --- History & Result Cache ---
+    # Entries added to history since the user last opened the History tab.
+    # Drives the nav badge (zero-dep alternative to OS notifications);
+    # cleared on mount and on open.
+    history_unseen: int = 0
     history: list | None = None
     # {f"{mode}:{query.lower()}": {found: [...], not_found: [...], errors: [...], ...}}
     results_cache: dict | None = None
@@ -84,11 +88,6 @@ class AppState:
     check_domains: bool = False
     # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
     unhealthy_sites: list[str] | None = None
-    # Owner tested the biometric History lock and chose it as the default:
-    # ON (stored user choices still honored; devices without biometrics
-    # bypass via biometric_service, so nobody gets stranded).
-    biometric_lock: bool = True
-    history_unlocked: bool = False
     selected_sites: list[str] | None = None
     use_local_db: bool = True
     custom_manifest: str = ""
@@ -97,6 +96,13 @@ class AppState:
     # Recursive search is the headline feature — on unless the user opts out
     # (stored values are still honored on load).
     recursive_search: bool = True
+    # Scan separator variants of the handle (john.doe -> john_doe, ...) —
+    # multiplies scan length; deliberate opt-in.
+    permute_enabled: bool = False
+    # Engine log verbosity. False (default) keeps maigret at WARNING: it speaks
+    # on every site-check and buries real errors. The Settings troubleshooting
+    # toggle restores full verbosity.
+    log_engine_logs: bool = False
     extract_info: bool = True
     max_connections: int = 50
     retries: int = 0
@@ -173,7 +179,24 @@ class AppState:
         self.progress_version = 0
         self.search_error = None
         self.active_username = ""
-        self.is_online = True
+        self.history_unseen = 0
+        # The identity and result fields belong to the reset too: without
+        # them a cleared search left the previous target's name and its
+        # result set behind (current_username plus empty email_results with
+        # stale counts), which the next render would show as the target's.
+        self.current_username = ""
+        self.last_results.clear()
+        self.last_results_username = ""
+        self.email_results_address = ""
+        self.email_found_count = 0
+        self.email_not_found_count = 0
+        self.email_rate_limited_count = 0
+        self.email_unavailable_count = 0
+        self.email_total_modules = 0
+        # NOTE: is_online is owned solely by the connectivity handlers in
+        # main.py — resetting a search (e.g. cancel while offline) must not
+        # flip the device online and hide the offline banner. search_mode is
+        # likewise left alone: it is user intent, not scan residue.
         self.search_targets.clear()
         self.target_results.clear()
         self.email_results.clear()

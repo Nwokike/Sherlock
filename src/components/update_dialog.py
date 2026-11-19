@@ -34,7 +34,9 @@ logger = logging.getLogger("UpdateDialog")
 def _launch(page: ft.Page, url: str):
     async def _run():
         try:
-            await ft.UrlLauncher().launch_url(url)
+            from core.shared_services import shared_url_launcher
+
+            await shared_url_launcher(page).launch_url(url)
         except Exception as ex:
             logger.debug("Update URL launch failed: %s", ex)
             from core.notify import show_snack
@@ -50,8 +52,8 @@ def _pop_and_launch(page: ft.Page, url: str):
     (no live page context — see core.actions.open_url_action)."""
     try:
         page.pop_dialog()
-    except Exception:
-        logger.exception("Failed to close update dialog")
+    except Exception as exc:
+        logger.debug("Update dialog already closed: %s", exc)
     _launch(page, url)
 
 
@@ -62,8 +64,8 @@ async def check_from_dialog(page: ft.Page):
 
     try:
         page.pop_dialog()
-    except Exception:
-        logger.exception("Suppressed exception")
+    except Exception as exc:
+        logger.debug("Re-check with no dialog open: %s", exc)
     result = await UpdateService().check_for_update()
     if result:
         state.update_available = True
@@ -216,6 +218,17 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
         actions = _build_current_buttons(page)
         modal = False
 
+    # v2.2.0 sized this to content (`Container(width=380)`) and the inner
+    # Column already scrolls. A fixed `height=420` was added later and clips
+    # the action buttons on short viewports — the Actions sit outside the
+    # scroll area, so they get cut off with no way to reach them. The width
+    # is derived from the page so it also fits a narrow phone.
+    try:
+        page_width = int(getattr(page, "width", 0) or 0)
+    except TypeError, ValueError:
+        page_width = 0
+    content_width = min(380, max(300, page_width - 48)) if page_width else 380
+
     dlg = ft.AlertDialog(
         modal=modal,
         title=ft.Row(
@@ -225,7 +238,7 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
             ],
             spacing=8,
         ),
-        content=ft.Container(content=body, width=380),
+        content=ft.Container(content=body, width=content_width),
         actions=actions,
         actions_alignment=ft.MainAxisAlignment.END,
     )

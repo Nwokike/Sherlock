@@ -11,6 +11,7 @@ import json
 import pickle
 import time
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -189,24 +190,34 @@ def test_avatar_download_populates_cache(cache_dir, monkeypatch):
     class FakeResp:
         status_code = 200
         content = b"\x89PNG-fake"
+        headers: ClassVar[dict] = {}
 
-    class FakeClient:
-        def __init__(self, *a, **k):
-            pass
+        async def aiter_bytes(self, chunk_size=65536):
+            yield self.content
+
+    class _FakeStream:
+        def __init__(self, resp):
+            self._resp = resp
 
         async def __aenter__(self):
-            return self
+            return self._resp
 
         async def __aexit__(self, *a):
             return False
 
+    class FakeClient:
         async def get(self, u, **kwargs):
             assert u == url
             return FakeResp()
 
-    import httpx
+        def stream(self, method, u, **kwargs):
+            assert u == url
+            return _FakeStream(FakeResp())
 
-    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    # Patch the definition site: schedule_avatar_download calls
+    # get_client() from services.http_client (function-local import), so
+    # patching httpx.AsyncClient here would hit real network.
+    monkeypatch.setattr("services.http_client.get_client", lambda: FakeClient())
 
     asyncio.run(schedule_avatar_download(url))
     assert dest.is_file()
@@ -220,12 +231,13 @@ def test_avatar_download_silent_on_failure(cache_dir, monkeypatch):
     url = "https://dead.example.com/me.png"
 
     class BoomClient:
-        def __init__(self, *a, **k):
+        async def get(self, u, **kwargs):
             raise OSError("no network")
 
-    import httpx
+        def stream(self, method, u, **kwargs):
+            raise OSError("no network")
 
-    monkeypatch.setattr(httpx, "AsyncClient", BoomClient)
+    monkeypatch.setattr("services.http_client.get_client", lambda: BoomClient())
 
     # Must not raise.
     asyncio.run(schedule_avatar_download(url))
@@ -312,14 +324,17 @@ def test_geo_cache_rejects_oversized_and_malformed(cache_dir):
     (cache_dir / "geo_cache.json").write_text("{not json")
     assert load_geo_cache() == {}
 
-    # Oversized entries dict is dropped (bounded memory).
+    # Oversized entries dict is trimmed to the cap (usable prefix survives),
+    # not dropped wholesale.
     big = {f"loc{i}": ["x"] for i in range(cache_service._GEO_MAX_ENTRIES + 1)}
     payload = {
         cache_service._GEO_MIN_TS_KEY: __import__("pycountry").__version__,
         "entries": big,
     }
     (cache_dir / "geo_cache.json").write_text(json.dumps(payload))
-    assert load_geo_cache() == {}
+    loaded = load_geo_cache()
+    assert len(loaded) == cache_service._GEO_MAX_ENTRIES
+    assert loaded["loc0"] == ["x"]
 
 
 def test_resolve_location_uses_disk_cache(cache_dir, monkeypatch):
@@ -453,19 +468,34 @@ def test_dns_cache_ttl_expiry(cache_dir):
 
     assert get_dns_record("old.example.com") is None
 
-    # Dead flags never expire (a dead domain stays dead until proven alive).
+    # Dead flags expire on a short negative-cache TTL (not never): a stale
+    # dead record older than _DNS_DEAD_TTL_SEC is retried next time, while a
+    # recent one still counts as dead.
     expired_dead = {
         "entries": {
             "gone.example.com": {
                 "ips": [],
-                "ts": time.time() - (cache_service._DNS_TTL_SEC + 100),
+                "ts": time.time() - (cache_service._DNS_DEAD_TTL_SEC + 100),
                 "dead": True,
             }
         }
     }
     (cache_dir / "dns_cache.json").write_text(json.dumps(expired_dead))
     cache_service._dns_store = None
-    assert is_domain_dead("gone.example.com")
+    assert not is_domain_dead("gone.example.com")
+
+    fresh_dead = {
+        "entries": {
+            "still.example.com": {
+                "ips": [],
+                "ts": time.time(),
+                "dead": True,
+            }
+        }
+    }
+    (cache_dir / "dns_cache.json").write_text(json.dumps(fresh_dead))
+    cache_service._dns_store = None
+    assert is_domain_dead("still.example.com")
 
 
 def test_dns_prewarm_resolves_and_skips_dead(cache_dir, monkeypatch):
@@ -537,3 +567,73 @@ def test_clear_all_caches_wipes_every_layer(cache_dir):
     assert list(cache_dir.iterdir()) == []
     # In-memory DNS store reset too.
     assert cache_service._dns_store is None
+
+
+def test_sites_indices_hash_gate(cache_dir):
+    """Batch 14: stale hash mismatches rebuild; matching hash hits."""
+    from services.cache_service import load_sites_indices
+
+    idx = build_sites_indices(_fake_sites_dict())
+    save_sites_indices(idx)
+    assert load_sites_indices(idx["db_hash"]) == idx
+    assert load_sites_indices("0" * 64) is None
+    assert load_sites_indices() == idx  # no gate = cold-start fast path
+
+
+def test_prewarm_skips_fresh_records(cache_dir, monkeypatch):
+    """Batch 14: warm hosts are not re-resolved."""
+    import socket as socket_mod
+
+    import services.cache_service as cache_service
+
+    set_dns_record("warm.example.com", ["1.2.3.4"])
+    flush_dns_cache()
+    cache_service._dns_store = None  # force reload path
+
+    calls = []
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        calls.append(host)
+        return [(2, 1, 6, "", ("9.9.9.9", 443))]
+
+    monkeypatch.setattr(socket_mod, "getaddrinfo", fake_getaddrinfo)
+
+    async def run():
+        return await cache_service.prewarm_dns(
+            [("S", "https://warm.example.com/u"), ("S2", "https://new.example.com/u")]
+        )
+
+    import asyncio
+
+    warmed = asyncio.run(run())
+    assert "warm.example.com" not in calls
+    assert "new.example.com" in calls
+    assert warmed == 1
+
+
+def test_fingerprint_dict_rows_and_empty():
+    """Batch 14: dict rows participate; empty set hashes deterministically."""
+    from services.cache_service import results_fingerprint
+
+    dict_rows = [
+        {"url_user": "https://b.example/x", "url_main": ""},
+        {"url_user": "", "url_main": "https://a.example/y"},
+    ]
+
+    class _Obj:
+        def __init__(self, u, m):
+            self.url_user = u
+            self.url_main = m
+
+    obj_rows = [_Obj("https://b.example/x", ""), _Obj("", "https://a.example/y")]
+    assert results_fingerprint(dict_rows) == results_fingerprint(obj_rows)
+    empty_fp = results_fingerprint([])
+    assert isinstance(empty_fp, str) and len(empty_fp) == 16
+    assert results_fingerprint([{"url_user": "", "url_main": ""}]) == empty_fp
+
+
+def test_geo_version_fallback_no_crash(cache_dir, monkeypatch):
+    """Batch 14: missing pycountry __version__ degrades, never raises."""
+    import services.cache_service as cache_service
+
+    assert isinstance(cache_service._pycountry_version(), str)

@@ -20,23 +20,50 @@ from core import tokens
 from core.geo_utils import get_site_country, resolve_location
 from core.theme import AppColors
 
+# Fields the card renders as styled rows (bio/location/followers) — kept
+# out of the dynamic generic rows so nothing prints twice.
+_CARD_STYLED_KEYS = frozenset(
+    {
+        "bio",
+        "description",
+        "location",
+        "follower_count",
+        "followers",
+        "followerCount",
+        "following_count",
+        "following",
+        "followingCount",
+        "posts_count",
+        "posts",
+        "image",
+        "avatar",
+        "photo",
+        "company",
+        "occupation",
+        "is_verified",
+        "links",
+        "website",
+        "url",
+    }
+)
+_CARD_MAX_EXTRA_ROWS = 6
+
 
 def _status_icon_and_color(status: str) -> tuple[str, str]:
     """Map a Sherlock status string to (icon, color)."""
     if status == "Claimed":
         return ft.Icons.CHECK_CIRCLE_ROUNDED, AppColors.SUCCESS
-    elif status in ("Available", "Illegal"):
+    if status in ("Available", "Illegal"):
         return ft.Icons.CANCEL_ROUNDED, ft.Colors.with_opacity(
             tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
         )
-    elif status == "WAF":
+    if status == "WAF":
         return ft.Icons.SHIELD_ROUNDED, AppColors.WARNING
-    elif status == "Unavailable":
+    if status == "Unavailable":
         return ft.Icons.HIDE_SOURCE_ROUNDED, ft.Colors.with_opacity(
             tokens.OPACITY_MUTED, ft.Colors.ON_SURFACE
         )
-    else:
-        return ft.Icons.ERROR_OUTLINE_ROUNDED, AppColors.WARNING
+    return ft.Icons.ERROR_OUTLINE_ROUNDED, AppColors.WARNING
 
 
 def _chip(label: str, color: str, bg: str) -> ft.Container:
@@ -53,6 +80,15 @@ def _chip(label: str, color: str, bg: str) -> ft.Container:
         border_radius=tokens.RADIUS_SM,
         bgcolor=bg,
     )
+
+
+def _first_present(mapping: dict, keys: tuple[str, ...]):
+    """First non-None value for keys — preserves real 0/False (no falsy-or)."""
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def ResultCard(
@@ -103,12 +139,13 @@ def ResultCard(
     )
 
     display_url = url_user or url_main or site_name
+    click_target = url_user or url_main
 
     def _handle_click(e):
         if on_tap:
             on_tap()
-        elif on_open and url_user:
-            on_open(url_user)
+        elif on_open and click_target:
+            on_open(click_target)
 
     # ── Extras / Enriched lines ────────────────────────────────────────
     extra_lines: list[ft.Control] = []
@@ -157,11 +194,19 @@ def ResultCard(
             )
         )
 
-    # Full name, creation date & holehe-v2 extras from others dict
+    # Full name, creation date & holehe-v2 extras from others dict.
+    # v2_extra starts as {} so the styled/dynamic blocks below work for
+    # cards built without `others` at all.
+    v2_extra = {}
     if others and isinstance(others, dict):
+        v2_extra = others.get("extra")
+        if not isinstance(v2_extra, dict):
+            v2_extra = {}
         # v2 streams profile media in-band (avatar producers: gravatar,
         # github, etsy, duolingo).
-        v2_media = others.get("media") or {}
+        v2_media = others.get("media")
+        if not isinstance(v2_media, dict):
+            v2_media = {}
         v2_avatar = v2_media.get("avatar") or v2_media.get("thumbnail_url")
         if isinstance(v2_avatar, str) and v2_avatar.startswith("http"):
             avatar_url = avatar_url or v2_avatar
@@ -207,57 +252,66 @@ def ResultCard(
                 )
             )
 
-        # holehe-v2 Result.extra — rich per-platform facts (gravatar bio,
-        # github login, etsy stats, atlassian SSO type, …) rendered as
-        # scannable lines; capped so one card can't flood the list.
-        v2_extra = others.get("extra") or {}
-        _V2_SKIP = {
-            "profile_url",
-            "url",
-            "contact_info",
-            "crypto_addresses",
-            "timezone",
-            "languages",
-            "pronouns",
-        }
-        v2_shown = 0
-        for k, v in v2_extra.items():
-            if k in _V2_SKIP or v in (None, "", [], {}):
-                continue
-            if isinstance(v, (list, tuple)):
-                v2_text = f"{len(v)} linked"
-            elif isinstance(v, dict):
-                continue
-            else:
-                v2_text = str(v)
-            if len(v2_text) > 90:
-                v2_text = v2_text[:87] + "…"
+        # holehe-v2 Result.extra + socid enrichment — every field rendered
+        # dynamically (core/enrich_view): no hardcoded key list, so
+        # platform-specific facts (payerId, locale, ambassador, …) reach
+        # the card instead of being dropped. Capped so one card can't flood
+        # the list; the profile dialog shows every field.
+        from core.enrich_view import enrichment_rows
+
+        card_rows = enrichment_rows(
+            enrichment if isinstance(enrichment, dict) else None,
+            v2_extra,
+            skip=_CARD_STYLED_KEYS,
+        )
+        for _key, _label, _value in card_rows[:_CARD_MAX_EXTRA_ROWS]:
+            _text = _value if len(_value) <= 90 else _value[:87] + "…"
             extra_lines.append(
                 ft.Text(
-                    f"{k.replace('_', ' ').title()}: {v2_text}",
+                    f"{_label}: {_text}",
                     size=tokens.FONT_XS,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                     max_lines=1,
                     overflow=ft.TextOverflow.ELLIPSIS,
+                    italic=True,
                 )
             )
-            v2_shown += 1
-            if v2_shown >= 6:
-                break
-
-    # Enrichment data from socid-extractor
-    if enrichment and isinstance(enrichment, dict):
-        avatar_url = (
-            enrichment.get("image")
-            or enrichment.get("avatar")
-            or enrichment.get("photo")
-            or avatar_url
-        )
-        bio = enrichment.get("bio") or enrichment.get("description")
-        if bio:
+        _remaining = len(card_rows) - _CARD_MAX_EXTRA_ROWS
+        if _remaining > 0:
             extra_lines.append(
                 ft.Text(
-                    bio,
+                    f"+{_remaining} more field"
+                    f"{'s' if _remaining != 1 else ''} — tap for the full profile",
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.PRIMARY,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    italic=True,
+                )
+            )
+
+    # Enrichment data from socid-extractor (plus same-named holehe extras —
+    # the styled lines below read the merged view so a holehe-only card
+    # keeps its bio/location instead of silently dropping them).
+    _merged_profile = {}
+    for _src in (v2_extra, enrichment if isinstance(enrichment, dict) else {}):
+        if isinstance(_src, dict):
+            _merged_profile.update(_src)
+    if _merged_profile:
+        avatar_url = (
+            _merged_profile.get("image")
+            or _merged_profile.get("avatar")
+            or _merged_profile.get("photo")
+            or avatar_url
+        )
+        bio = _merged_profile.get("bio") or _merged_profile.get("description")
+        if bio:
+            bio_text = str(bio).strip()
+            if not bio_text.lower().startswith("bio:"):
+                bio_text = f"Bio: {bio_text}"
+            extra_lines.append(
+                ft.Text(
+                    bio_text,
                     size=tokens.FONT_XS,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                     max_lines=2,
@@ -265,7 +319,7 @@ def ResultCard(
                     italic=True,
                 )
             )
-        location = enrichment.get("location")
+        location = _merged_profile.get("location")
         if location:
             geo = resolve_location(str(location))
             loc_display = (
@@ -289,8 +343,14 @@ def ResultCard(
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
-        followers = enrichment.get("follower_count") or enrichment.get("followers")
-        following = enrichment.get("following_count") or enrichment.get("following")
+        followers = _first_present(
+            _merged_profile,
+            ("follower_count", "followers", "followerCount"),
+        )
+        following = _first_present(
+            _merged_profile,
+            ("following_count", "following", "followingCount"),
+        )
         if followers is not None or following is not None:
             parts = []
             if followers is not None:
@@ -316,7 +376,7 @@ def ResultCard(
                 )
             )
         # Extra socid fields — company, verified, links, website
-        company = enrichment.get("company") or enrichment.get("occupation")
+        company = _merged_profile.get("company") or _merged_profile.get("occupation")
         if company:
             extra_lines.append(
                 ft.Text(
@@ -327,7 +387,7 @@ def ResultCard(
                     overflow=ft.TextOverflow.ELLIPSIS,
                 )
             )
-        if enrichment.get("is_verified"):
+        if _merged_profile.get("is_verified"):
             extra_lines.append(
                 ft.Row(
                     [
@@ -344,7 +404,7 @@ def ResultCard(
                     spacing=4,
                 )
             )
-        links = enrichment.get("links")
+        links = _merged_profile.get("links")
         if links and isinstance(links, list) and links[0]:
             first_link = links[0] if isinstance(links[0], str) else str(links[0])
             if first_link.startswith("http"):
@@ -394,6 +454,8 @@ def ResultCard(
                     vertical_alignment=ft.CrossAxisAlignment.START,
                 )
             )
+        if isinstance(protection, str):
+            protection = [protection]
         if protection:
             extra_lines.append(
                 ft.Row(
@@ -474,10 +536,8 @@ def ResultCard(
 
     # ── Title / Name row ──────────────────────────────────────────────
     display_title = site_name
-    if enrichment and (enrichment.get("name") or enrichment.get("fullname")):
-        display_title = (
-            f"{site_name} · {enrichment.get('name') or enrichment.get('fullname')}"
-        )
+    if enrichment and (_merged_profile.get("name") or _merged_profile.get("fullname")):
+        display_title = f"{site_name} · {_merged_profile.get('name') or _merged_profile.get('fullname')}"
     elif others and others.get("FullName"):
         display_title = f"{site_name} · {others['FullName']}"
 
@@ -567,11 +627,8 @@ def ResultCard(
         expand=True,
     )
 
-    is_clickable = (
-        on_tap is not None
-        or on_open is not None
-        or url_user is not None
-        or url_main is not None
+    is_clickable = (on_tap is not None) or (
+        on_open is not None and click_target is not None
     )
 
     return ft.Container(
@@ -600,5 +657,5 @@ def ResultCard(
             )
         ),
         on_click=_handle_click if is_clickable else None,
-        ink=True if is_clickable else False,
+        ink=is_clickable,
     )

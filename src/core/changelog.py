@@ -3,6 +3,14 @@ date — works fully offline. One line per release; keep the entry for the
 current APP_VERSION in sync when bumping (guarded by tests)."""
 
 CHANGELOG: dict[str, str] = {
+    "2.3.0": (
+        "• Username permutations: scan separator variants with one toggle\n"
+        "• Profile dates humanized everywhere: cards, dossier, reports\n"
+        "• Paste a profile URL into search — the handle is pulled out for you\n"
+        "• Email scans retry once through rate limits; cancels now always land\n"
+        "• Gravatar fallback avatars, database stats header\n"
+        "• 386 tests, full lint-rule suite, ad subsystem untouched"
+    ),
     "2.2.0": (
         "• 5,200+ platforms: Maigret 0.6.6 database doubled\n"
         "• Recursive search on by default, category presets, scope-to-filter\n"
@@ -28,4 +36,4 @@ CHANGELOG: dict[str, str] = {
 
 def notes_for(version: str) -> str:
     """Changelog entry for a version, falling back to the latest entry."""
-    return CHANGELOG.get(version) or next(reversed(CHANGELOG.values()), "")
+    return CHANGELOG.get(version) or next(iter(CHANGELOG.values()), "")

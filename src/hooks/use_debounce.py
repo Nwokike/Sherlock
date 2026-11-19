@@ -11,6 +11,8 @@ import asyncio
 
 import flet as ft
 
+from core.tasks import spawn
+
 
 def use_debounce(value, delay_ms: int = 250):
     """Return the debounced version of value — updates only delay_ms
@@ -27,7 +29,7 @@ def use_debounce(value, delay_ms: int = 250):
             await asyncio.sleep(delay_ms / 1000.0)
             set_debounced(value)
 
-        timer.current = asyncio.create_task(_after_delay())
+        timer.current = spawn(_after_delay(), name="debounce")
 
     def _cleanup():
         old = timer.current

@@ -6,10 +6,13 @@ selection screen (SitesScreen) on tap. Plain function (no hooks) so it
 is unit-testable without a renderer.
 """
 
+from collections.abc import Callable
+
 import flet as ft
 from flet import Control
 
 from core import tokens
+from core.format import format_count
 from core.theme import AppColors, adaptive_glass_bg, adaptive_glass_border
 
 # Matches the marketing copy used by the search bar hint.
@@ -19,7 +22,7 @@ FALLBACK_TOTAL_LABEL = "5,200+"
 def TargetsCard(
     selected_count: int,
     total_count: int,
-    on_open: callable = None,
+    on_open: Callable[[], None] | None = None,
     page: ft.Page | None = None,
 ) -> Control:
     """Gold-tinted card summarising the current network scope.
@@ -33,12 +36,13 @@ def TargetsCard(
     custom_scope = selected_count > 0
 
     if custom_scope:
-        title = f"{selected_count} networks selected"
+        title = f"{format_count(selected_count)} networks selected"
         subtitle = "Scanning your custom network list"
         icon = ft.Icons.CHECK_CIRCLE_ROUNDED
     else:
+        total_label = format_count(total_count) if total_count else FALLBACK_TOTAL_LABEL
         title = "All networks selected"
-        subtitle = f"Scanning all {total_count or FALLBACK_TOTAL_LABEL} social networks"
+        subtitle = f"Scanning all {total_label} social networks"
         icon = ft.Icons.PUBLIC_ROUNDED
 
     return ft.Container(

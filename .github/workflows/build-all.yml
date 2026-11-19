@@ -9,11 +9,11 @@ on:
       build_version:
         description: "Build version"
         required: true
-        default: "2.2.0"
+        default: "2.3.0"
       build_number:
         description: "Build number"
         required: true
-        default: "12"
+        default: "13"
 
 permissions:
   contents: write
@@ -22,8 +22,8 @@ env:
   PYTHONUTF8: "1"
   FLET_CLI_NO_RICH_OUTPUT: "1"
   UV_PYTHON: "3.14"
-  BUILD_VERSION: ${{ inputs.build_version || '2.2.0' }}
-  BUILD_NUMBER: ${{ inputs.build_number || '12' }}
+  BUILD_VERSION: ${{ inputs.build_version || '2.3.0' }}
+  BUILD_NUMBER: ${{ inputs.build_number || '13' }}
 
 jobs:
   # ─── 0. Quality Gate: lint + tests + version consistency ───
@@ -47,7 +47,10 @@ jobs:
           sys.path.insert(0, "src")
           from core.constants import APP_BUILD_NUMBER, APP_VERSION
 
-          vj = json.load(open("version.json"))
+          vj = None
+          if os.path.exists("version.json"):
+              with open("version.json") as f:
+                  vj = json.load(f)
           env_v, env_b = os.environ["BUILD_VERSION"], os.environ["BUILD_NUMBER"]
           errs = []
 
@@ -65,8 +68,17 @@ jobs:
           def vt(s):
               return tuple(int(x) for x in s.split("."))
 
-          vj_v, py_v = vj["version"], py
-          if vj_v == py_v:
+          vj_v, py_v = (vj or {}).get("version"), py
+          if vj_v is None:
+              # Absent entirely: the update-notes file is gitignored and
+              # untracked, so nothing is published from the repo until the
+              # Play Store upload ships. Nothing to compare.
+              print(
+                  f"NOTICE: version.json absent from the repo — held back "
+                  f"entirely while app is {py} (build {env_b}). Expected "
+                  "until the Play Store upload; no update notes published."
+              )
+          elif vj_v == py_v:
               # Fully-synced state must agree on the build number too.
               if str(vj["build_number"]) != env_b:
                   errs.append(
@@ -108,6 +120,7 @@ jobs:
       TAG_NAME: ${{ steps.tag_info.outputs.TAG_NAME }}
       RELEASE_NAME: ${{ steps.tag_info.outputs.RELEASE_NAME }}
       IS_PRERELEASE: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
+      MAKE_LATEST: ${{ steps.tag_info.outputs.MAKE_LATEST }}
     steps:
       - uses: actions/checkout@v7
       - name: Generate Release Tag & Name
@@ -115,13 +128,15 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "RELEASE_NAME=Sherlock ${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+            echo "RELEASE_NAME=Sherlock ${{ github.ref_name }} (pre-release, pending approval)" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+            echo "MAKE_LATEST=false" >> $GITHUB_OUTPUT
           else
             SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
             echo "TAG_NAME=build-${SHORT_SHA}" >> $GITHUB_OUTPUT
             echo "RELEASE_NAME=Automated Build (${SHORT_SHA})" >> $GITHUB_OUTPUT
             echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+            echo "MAKE_LATEST=false" >> $GITHUB_OUTPUT
           fi
       - name: Create GitHub Release Placeholder
         if: github.event_name != 'pull_request'
@@ -130,7 +145,7 @@ jobs:
           tag_name: ${{ steps.tag_info.outputs.TAG_NAME }}
           name: ${{ steps.tag_info.outputs.RELEASE_NAME }}
           prerelease: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
-          make_latest: true
+          make_latest: ${{ steps.tag_info.outputs.MAKE_LATEST }}
           body: |
             Automated multi-platform build generated from commit `${{ github.sha }}`.
 
@@ -156,6 +171,41 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
+      # ── Notifications: the generated project needs things pyproject cannot
+      # express. `flet build apk` runs its own Gradle build, which stops at
+      # :app:checkReleaseAarMetadata because flutter_local_notifications (via
+      # flet_notifications' Dart half) requires core-library desugaring. So
+      # this is three phases, not one:
+      #   1. flet build generates the project (its Gradle run is expected to
+      #      stop at the desugaring check — the step only fails hard if the
+      #      project was never written)
+      #   2. the patcher injects the desugaring flags, the notification
+      #      receivers/permissions, AND the ForegroundService manifest entry
+      #      that start_foreground_service needs (a scan must outlive the app)
+      #   3. flet build runs again — the template hash is unchanged so the patch
+      #      survives, and --split-per-abi is honoured (a bare
+      #      `gradlew assembleRelease` produces a universal APK instead)
+      - name: Generate the Android project
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set +e
+          uv run flet build apk --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "flet build apk completed on the first pass; no patch required."
+          elif [ -f build/flutter/android/app/build.gradle.kts ]; then
+            echo "::warning::flet build apk stopped at its Gradle run (expected: core library desugaring missing). Project generated; patching and re-running."
+          else
+            echo "::error::flet build apk failed before generating the Android project"
+            exit 1
+          fi
+      - name: Patch the generated Android project (notifications)
+        run: uv run flet-notifications-patch --project-root build/flutter --foreground-service-type dataSync
       - name: Build APK (split per ABI)
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
@@ -203,6 +253,30 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 --decode > kiri_keystore.jks
+      # Three phases for the same reason as the APK job — see the comment
+      # there. scan_notify.start_foreground_service needs the manifest entry
+      # the patcher's --foreground-service-type injects.
+      - name: Generate the Android project
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks
+          FLET_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set +e
+          uv run flet build aab --python-version 3.14 --yes --project sherlock --product "Sherlock" --org ng.kiri --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "flet build aab completed on the first pass; no patch required."
+          elif [ -f build/flutter/android/app/build.gradle.kts ]; then
+            echo "::warning::flet build aab stopped at its Gradle run (expected: core library desugaring missing). Project generated; patching and re-running."
+          else
+            echo "::error::flet build aab failed before generating the Android project"
+            exit 1
+          fi
+      - name: Patch the generated Android project (notifications)
+        run: uv run flet-notifications-patch --project-root build/flutter --foreground-service-type dataSync
       - name: Build AAB
         env:
           FLET_ANDROID_SIGNING_KEY_STORE: ${{ github.workspace }}/kiri_keystore.jks

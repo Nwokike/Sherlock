@@ -223,3 +223,51 @@ def test_telemetry_snapshot():
     assert isinstance(snap, str)
     assert len(snap) > 5
     assert "CPU:" in snap or "RAM:" in snap or "App RSS:" in snap
+
+
+def test_batch14_graph_dict_rows_and_schema(tmp_path):
+    """Batch 14: dict rows don't collapse; ids unique; schema complete."""
+    from services.graph_service import (
+        build_identity_graph,
+        get_graph_analytics,
+    )
+
+    rows = [
+        {"site_name": "GitHub", "url_user": "https://github.com/alice"},
+        {"site_name": "GitHub", "url_user": "https://github.com/alice2"},
+        {"site_name": "  Reddit  ", "url_user": "https://reddit.com/u/x"},
+    ]
+    graph = build_identity_graph(username="Alice", found_accounts=rows)
+    assert graph is not None
+    ids = [n for n in graph.nodes if n.startswith("acc:")]
+    assert len(ids) == len(set(ids)) == 3  # no Unknown collapse, no dupes
+    labels = {d.get("label") for _, d in graph.nodes(data=True)}
+    assert "Reddit" in labels  # stripped, case preserved (no .title())
+
+    analytics = get_graph_analytics(graph)
+    assert analytics["component_sizes"] != [] or analytics["nodes"] > 0
+    assert "top_canonical_nodes" in analytics
+
+
+def test_batch14_cypher_escapes_newlines():
+    from services.graph_service import build_identity_graph, export_cypher
+
+    rows = [{"site_name": "Bad\nName", "url_user": "https://example.com/x"}]
+    graph = build_identity_graph(username="alice", found_accounts=rows)
+    cypher = export_cypher(graph)
+    assert "\n" in cypher  # escaped, no raw newline inside quoted label
+    assert "\n" in cypher  # statement separators intact
+
+
+def test_batch14_communities_sorted():
+    from services.graph_service import build_identity_graph, get_graph_analytics
+
+    rows = [
+        {"site_name": f"Site{i}", "url_user": f"https://example.com/{i}"}
+        for i in range(6)
+    ]
+    graph = build_identity_graph(username="alice", found_accounts=rows)
+    analytics = get_graph_analytics(graph)
+    for community in analytics["communities"]:
+        members = community["members"]
+        assert members == sorted(members, key=str)

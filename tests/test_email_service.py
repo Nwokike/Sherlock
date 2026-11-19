@@ -133,9 +133,7 @@ class TestHoleheV2Integration:
 
         service = EmailService()
         with pytest.raises(ValueError):
-            asyncio.run(
-                service.search("not-an-email", on_progress=lambda p: None)
-            )
+            asyncio.run(service.search("not-an-email", on_progress=lambda p: None))
 
 
 class TestErrorClassification:
@@ -361,9 +359,7 @@ class TestScanDriver:
             return Result.available()
 
         before = {k: os.environ.get(k) for k in ("HTTP_PROXY", "HTTPS_PROXY")}
-        progress, _ = self._run(
-            {"a": avail}, proxy="http://proxy.test:8080"
-        )
+        progress, _ = self._run({"a": avail}, proxy="http://proxy.test:8080")
         after = {k: os.environ.get(k) for k in ("HTTP_PROXY", "HTTPS_PROXY")}
         assert progress.checked_modules == 1
         assert after == before  # env restored after the scan

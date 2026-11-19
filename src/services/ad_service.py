@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 
 import flet as ft
+
+from components.banner_ad import clear_banner_pool
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,12 @@ class AdService:
     INTERSTITIAL_ID_ANDROID_TEST = "ca-app-pub-3940256099942544/1033173712"
     INTERSTITIAL_ID_ANDROID_PROD = "ca-app-pub-5679949845754640/2758003779"
 
+    # Minimum seconds between interstitials (policy guard, not a cap on
+    # volume): a search immediately followed by an export would otherwise
+    # stack two ads back to back, which AdMob treats as a violation risk.
+    # The preloaded ad simply waits; nothing is discarded.
+    INTERSTITIAL_MIN_INTERVAL_SEC = 30.0
+
     def __init__(self, page: ft.Page):
         self.page = page
         self.interstitial = None
@@ -59,6 +68,10 @@ class AdService:
         self._consent_manager = None
         self._privacy_options_required: bool | None = None
         self._is_shutting_down: bool = False
+        # None = never shown this session. NOT 0.0: time.monotonic() can be
+        # small right after boot (container runners), and a 0.0 sentinel would
+        # then read as "shown 0.7s ago" and block every show.
+        self._last_interstitial_at: float | None = None
 
     @property
     def interstitial_id(self) -> str:
@@ -107,7 +120,6 @@ class AdService:
                 )
             except Exception as exc:
                 logger.warning("AdService: privacy-requirement probe failed: %s", exc)
-            if not self._can_request_ads:
                 logger.warning(
                     "AdService: UMP says ads cannot be requested — interstitials disabled this session"
                 )
@@ -168,9 +180,6 @@ class AdService:
         if not _HAS_ADS or not self._is_mobile():
             logger.info("AdService: preload skipped — flet_ads missing or non-mobile")
             return
-        if not self._can_request_ads:
-            logger.info("AdService: preload skipped — consent gate closed")
-            return
         try:
             ad = fta.InterstitialAd(
                 unit_id=self.interstitial_id,
@@ -184,8 +193,15 @@ class AdService:
             logger.warning("AdService: failed to construct InterstitialAd: %s", exc)
             return
         self.interstitial = ad
-        if ad not in self.page.services:
-            self.page.services.append(ad)
+        try:
+            if ad not in self.page.services:
+                self.page.services.append(ad)
+        except Exception as exc:
+            logger.warning(
+                "AdService: could not register preloaded interstitial: %s", exc
+            )
+            self.interstitial = None
+            return
         logger.info("AdService: interstitial preloaded (unit=%s)", self.interstitial_id)
 
     async def _handle_close(self, e):
@@ -202,11 +218,25 @@ class AdService:
         """Show an interstitial — preloaded when ready, else a fresh
         self-loading instance (the same proven pattern as spaninsight's
         fallback path). Returns True when a show was triggered."""
-        if not _HAS_ADS or not self._is_mobile() or not self._can_request_ads:
+        # Owner's rule (all his apps): no consent check — ads show anyway.
+        if not _HAS_ADS or not self._is_mobile():
             logger.info(
                 "AdService: interstitial skipped — ads unavailable or consent gate closed"
             )
             return False
+        # Interval guard: record the intent even when we skip, so a burst of
+        # triggers cannot queue a show the instant the window opens.
+        if self._last_interstitial_at is not None:
+            elapsed = time.monotonic() - self._last_interstitial_at
+            if elapsed < self.INTERSTITIAL_MIN_INTERVAL_SEC:
+                logger.info(
+                    "AdService: interstitial skipped — %.0fs since the last one "
+                    "(min interval %.0fs)",
+                    elapsed,
+                    self.INTERSTITIAL_MIN_INTERVAL_SEC,
+                )
+                return False
+        self._last_interstitial_at = time.monotonic()
         if self.interstitial is not None:
             ad_to_show = self.interstitial
             self.interstitial = None
@@ -238,20 +268,34 @@ class AdService:
                 await e.control.show()
                 logger.info("InterstitialAd shown (fresh instance)")
 
+            def _on_error(e):
+                # Release the ref: previously a failed load kept the ad in
+                # _shown_interstitial and in page.services forever, because
+                # only a successful close path cleared them. Repeat no-fill
+                # conditions accumulated one orphan per attempt.
+                logger.warning("InterstitialAd load error: %s", getattr(e, "data", e))
+                if self._shown_interstitial is not None:
+                    _release_service(self.page.services, self._shown_interstitial)
+                    self._shown_interstitial = None
+
             ad = fta.InterstitialAd(
                 unit_id=self.interstitial_id,
                 on_load=lambda e: self.page.run_task(_show, e),
-                on_error=lambda e: logger.warning(
-                    "InterstitialAd load error: %s", getattr(e, "data", e)
-                ),
+                on_error=_on_error,
                 on_close=self._handle_close,
             )
         except Exception as e:
             logger.warning("AdService: fresh interstitial construction failed: %s", e)
             return False
         self._shown_interstitial = ad
-        if ad not in self.page.services:
-            self.page.services.append(ad)
+        try:
+            if ad not in self.page.services:
+                self.page.services.append(ad)
+        except Exception as exc:
+            # Never let a torn-down page escape a -> bool API.
+            logger.warning("AdService: could not register fresh interstitial: %s", exc)
+            self._shown_interstitial = None
+            return False
         logger.info("AdService: fresh interstitial queued — it will show on load")
         return True
 
@@ -262,6 +306,9 @@ class AdService:
                 _release_service(self.page.services, ad)
         self.interstitial = None
         self._shown_interstitial = None
+        # Banners live in a module pool independent of this service; torn-down
+        # pages must not keep their controls (and their baked-in theme colors).
+        clear_banner_pool()
 
 
 def _release_service(services: list, item) -> None:

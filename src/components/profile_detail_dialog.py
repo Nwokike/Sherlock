@@ -5,7 +5,6 @@ Extracted helpers: EmailDossier + UsernameDossier share DossierRow.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -14,6 +13,7 @@ import flet as ft
 from core import tokens
 from core.constants import ERR_OPEN_URL
 from core.geo_utils import resolve_location
+from core.tasks import spawn
 from core.theme import AppColors
 
 logger = logging.getLogger("ProfileDetailDialog")
@@ -47,25 +47,89 @@ def _stringify(value) -> str:
     return str(value)
 
 
+def _extract_pivot_handles(enrich: dict, others: dict) -> list[str]:
+    """Cross-platform handles worth pivoting a new search into (cap 3).
+
+    socid schemes surface `twitter_username`-style keys plus @mentions in
+    bios; holehe extras carry github/duolingo usernames. Deduped, order of
+    discovery.
+    """
+    import re
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: object):
+        if isinstance(value, str) and value.strip():
+            handle = value.strip().lstrip("@")
+            key = handle.lower()
+            if handle and key not in seen and len(handle) <= 39:
+                seen.add(key)
+                found.append(handle)
+
+    sources = [enrich or {}, others.get("extra") if isinstance(others, dict) else {}]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for k, v in source.items():
+            kl = str(k).lower()
+            if kl.endswith("_username") or kl in (
+                "username",
+                "login",
+                "handle",
+                "screen_name",
+            ):
+                if isinstance(v, (list, tuple)):
+                    for item in v:
+                        _add(item)
+                else:
+                    _add(v)
+        bio = source.get("bio") or source.get("description")
+        if isinstance(bio, str):
+            for mention in re.findall(r"@([A-Za-z0-9_]{2,30})", bio):
+                _add(mention)
+        if len(found) >= 3:
+            break
+    return found[:3]
+
+
 def _dossier_row(
     page: ft.Page,
     icon: ft.IconData,
     title: str,
     value: str,
     can_copy: bool = False,
+    link: str | None = None,
+    copy_text: str | None = None,
 ) -> ft.Container:
-    """Shared detail row with optional copy — used by both dossiers."""
-    copy_btn = (
-        ft.IconButton(
-            icon=ft.Icons.CONTENT_COPY_ROUNDED,
-            icon_size=16,
-            tooltip=f"Copy {title}",
-            on_click=lambda e, v=value, t=title: asyncio.create_task(
-                _copy_text(page, v, t)
-            ),
+    """Shared detail row with optional copy, and an optional open-link
+    action when the value itself is a URL. `copy_text` defaults to `value`
+    so a truncated display value still copies in full.
+    """
+    text_for_copy = copy_text if copy_text is not None else value
+    actions = []
+    if link:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
+                icon_size=16,
+                tooltip=f"Open {title}",
+                on_click=lambda e, u=link: spawn(_open_value(page, u)),
+            )
         )
-        if can_copy
-        else ft.Container(width=0)
+    if can_copy:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.CONTENT_COPY_ROUNDED,
+                icon_size=16,
+                tooltip=f"Copy {title}",
+                on_click=lambda e, v=text_for_copy, t=title: spawn(
+                    _copy_text(page, v, t)
+                ),
+            )
+        )
+    copy_btn = (
+        ft.Row(actions, spacing=0, tight=True) if actions else ft.Container(width=0)
     )
     return ft.Container(
         content=ft.Row(
@@ -98,9 +162,23 @@ def _dossier_row(
     )
 
 
+async def _open_value(page: ft.Page, url: str):
+    try:
+        from core.shared_services import shared_url_launcher
+
+        await shared_url_launcher(page).launch_url(url)
+    except Exception as exc:
+        logger.warning("Failed to open %s: %s", url, exc)
+        from core.notify import show_snack
+
+        show_snack(page, "Could not open link", bgcolor=AppColors.ERROR)
+
+
 async def _copy_text(page: ft.Page, text: str, label: str):
     try:
-        cb = ft.Clipboard()
+        from core.shared_services import shared_clipboard
+
+        cb = shared_clipboard(page)
         await cb.set(text)
         from core.notify import show_snack
 
@@ -134,7 +212,9 @@ def _email_dossier(
     async def _launch_platform_url():
         page.pop_dialog()
         try:
-            await ft.UrlLauncher().launch_url(platform_url)
+            from core.shared_services import shared_url_launcher
+
+            await shared_url_launcher(page).launch_url(platform_url)
         except Exception as exc:
             logger.warning("Failed to launch platform URL %s: %s", platform_url, exc)
             from core.notify import show_snack
@@ -345,10 +425,14 @@ def _email_dossier(
                         height=tokens.SPACE_MD,
                         color=ft.Colors.with_opacity(0.1, ft.Colors.OUTLINE),
                     ),
+                    # Explicit height, not `expand`: expand is a no-op on a
+                    # Column child in flet 1.0.4, so the list got unbounded
+                    # height, laid out every enrichment row, and a long
+                    # profile overflowed out of this fixed 380x420 dialog.
                     ft.ListView(
                         controls=items,
                         spacing=tokens.SPACE_XS,
-                        expand=True,
+                        height=300,
                         padding=0,
                     ),
                 ],
@@ -362,7 +446,7 @@ def _email_dossier(
             ft.TextButton(
                 "Copy Platform URL",
                 icon=ft.Icons.LINK_ROUNDED,
-                on_click=lambda e: asyncio.create_task(
+                on_click=lambda e: spawn(
                     _copy_text(page, platform_url, "Platform website link")
                 ),
             ),
@@ -375,7 +459,7 @@ def _email_dossier(
                 on_click=(
                     (lambda e: page.pop_dialog())
                     if platform_open
-                    else lambda e: asyncio.create_task(_launch_platform_url())
+                    else lambda e: spawn(_launch_platform_url())
                 ),
             ),
             ft.TextButton("Close", on_click=_dismiss),
@@ -395,6 +479,7 @@ def _username_dossier(
     query_time: float | None,
     others: dict,
     enrichment: dict,
+    on_pivot=None,
 ):
     profile_url = (
         url_user
@@ -411,7 +496,9 @@ def _username_dossier(
     async def _launch_profile_url():
         page.pop_dialog()
         try:
-            await ft.UrlLauncher().launch_url(profile_url)
+            from core.shared_services import shared_url_launcher
+
+            await shared_url_launcher(page).launch_url(profile_url)
         except Exception as exc:
             logger.warning("Failed to launch profile URL %s: %s", profile_url, exc)
             from core.notify import show_snack
@@ -423,7 +510,11 @@ def _username_dossier(
 
     profile_open = open_url_action(profile_url)
 
-    enrich = enrichment or {}
+    # A corrupt state.enrichments entry can be a non-dict (list/str); .get()
+    # on that raises and the dialog never opens. Guard like ResultCard does.
+    enrich = enrichment if isinstance(enrichment, dict) else {}
+    others = others if isinstance(others, dict) else {}
+    pivot_handles = _extract_pivot_handles(enrich, others) if on_pivot else []
     avatar_url = enrich.get("image") or enrich.get("avatar") or enrich.get("photo")
     display_name = _stringify(
         enrich.get("name")
@@ -454,6 +545,14 @@ def _username_dossier(
     is_available = status in ("Available", "Illegal")
     is_error = not is_claimed and not is_available
 
+    status_color = (
+        AppColors.SUCCESS
+        if is_claimed
+        else AppColors.WARNING
+        if is_error
+        else ft.Colors.ON_SURFACE_VARIANT
+    )
+
     if has_valid_avatar:
         from services.cache_service import (
             ensure_cached_avatar,
@@ -479,15 +578,8 @@ def _username_dossier(
         )
         # Populate the on-device avatar cache in the background so the
         # next open of this dossier renders with zero network latency.
-        asyncio.create_task(schedule_avatar_download(avatar_url))
+        spawn(schedule_avatar_download(avatar_url))
     else:
-        status_color = (
-            AppColors.SUCCESS
-            if is_claimed
-            else AppColors.WARNING
-            if is_error
-            else ft.Colors.ON_SURFACE_VARIANT
-        )
         avatar_control = ft.Container(
             content=ft.Icon(
                 ft.Icons.CHECK_CIRCLE_ROUNDED
@@ -701,12 +793,15 @@ def _username_dossier(
             )
         )
     if join_date:
+        raw_date = _stringify(join_date)
+        from core.format import human_date
+
         items.append(
             _dossier_row(
                 page,
                 ft.Icons.CALENDAR_TODAY_ROUNDED,
                 "Account Created / Joined",
-                _stringify(join_date),
+                human_date(raw_date) or raw_date,
             )
         )
     if links:
@@ -730,6 +825,96 @@ def _username_dossier(
             )
         )
 
+    # Dynamic catch-all: every remaining field the extractor returned,
+    # rendered without a hardcoded key list — that is how platform-specific
+    # facts (payerId, locale, ambassador, follower counts…) reach the user
+    # instead of being dropped on the floor.
+    from core.enrich_view import (
+        enrichment_rows,
+        is_link_value,
+        truncate_value,
+    )
+
+    specially_rendered = {
+        "location",
+        "uid",
+        "id",
+        "joined",
+        "created_at",
+        "links",
+        "url",
+        "bio",
+        "name",
+        "fullname",
+        "username",
+        "image",
+        "avatar",
+        "photo",
+        # Rendered as the metric strip / identity block above, so they must
+        # not also appear as generic rows below (every fact printed twice).
+        "follower_count",
+        "followers",
+        "following_count",
+        "following",
+        "posts_count",
+        "posts",
+        "company",
+        "occupation",
+        "is_verified",
+    }
+    extra_rows = [
+        (label, value)
+        for _key, label, value in enrichment_rows(
+            enrich,
+            others.get("extra") if isinstance(others, dict) else None,
+            skip=specially_rendered,
+        )
+    ]
+    if extra_rows:
+        items.append(
+            ft.Container(
+                content=ft.Text(
+                    "All Profile Fields",
+                    size=tokens.FONT_SM,
+                    weight=ft.FontWeight.W_700,
+                    color=AppColors.PRIMARY,
+                ),
+                padding=ft.Padding(
+                    left=tokens.SPACE_MD,
+                    right=tokens.SPACE_MD,
+                    top=tokens.SPACE_MD,
+                    bottom=tokens.SPACE_XS,
+                ),
+            )
+        )
+        for label, value in extra_rows:
+            # URLs get their own tappable row — a profile website shown as
+            # dead text is the one field most worth being able to open.
+            if is_link_value(value):
+                items.append(
+                    _dossier_row(
+                        page,
+                        ft.Icons.LINK_ROUNDED,
+                        label,
+                        value,
+                        can_copy=True,
+                        link=value,
+                    )
+                )
+                continue
+            # Long values are truncated for display; _dossier_row's copy
+            # action keeps the full text.
+            items.append(
+                _dossier_row(
+                    page,
+                    ft.Icons.LABEL_OUTLINE,
+                    label,
+                    truncate_value(value),
+                    can_copy=bool(value) and value != "—",
+                    copy_text=value,
+                )
+            )
+
     # Raw OSINT metadata payload preview
     raw_payload = {}
     if enrich:
@@ -737,7 +922,9 @@ def _username_dossier(
     if others:
         raw_payload["others"] = others
     if raw_payload:
-        json_str = json.dumps(raw_payload, indent=2, ensure_ascii=False)
+        json_str = json.dumps(raw_payload, indent=2, ensure_ascii=False, default=str)
+        if len(json_str) > 20_000:
+            json_str = json_str[:20_000] + "\n… (truncated)"
         items.append(
             ft.ExpansionTile(
                 title=ft.Text(
@@ -853,7 +1040,11 @@ def _username_dossier(
                             )
                         ],
                         spacing=tokens.SPACE_XS,
-                        expand=True,
+                        # Explicit height, not `expand` (see the username
+                        # dialog above): expand is a no-op on a Column child
+                        # in flet 1.0.4, so the list took unbounded height
+                        # and a long result overflowed the fixed dialog.
+                        height=300,
                         padding=0,
                     ),
                 ],
@@ -864,10 +1055,18 @@ def _username_dossier(
             height=420,
         ),
         actions=[
+            *[
+                ft.TextButton(
+                    f"Pivot: @{h}",
+                    icon=ft.Icons.PERSON_SEARCH_ROUNDED,
+                    on_click=lambda e, _h=h: (page.pop_dialog(), on_pivot(_h)),
+                )
+                for h in pivot_handles
+            ],
             ft.TextButton(
                 copy_button_text,
                 icon=ft.Icons.LINK_ROUNDED,
-                on_click=lambda e: asyncio.create_task(
+                on_click=lambda e: spawn(
                     _copy_text(page, profile_url, "Platform link")
                 ),
             ),
@@ -882,7 +1081,7 @@ def _username_dossier(
                 on_click=(
                     (lambda e: page.pop_dialog())
                     if profile_open
-                    else lambda e: asyncio.create_task(_launch_profile_url())
+                    else lambda e: spawn(_launch_profile_url())
                 ),
             ),
             ft.TextButton("Close", on_click=_dismiss),
@@ -908,8 +1107,13 @@ def show_profile_detail_dialog(
     rate_limit: bool = False,
     frequent_rate_limit: bool = False,
     enrichment: dict | None = None,
+    on_pivot=None,
 ) -> None:
-    """Display rich intelligence modal tailored for Username or Email OSINT."""
+    """Display rich intelligence modal tailored for Username or Email OSINT.
+
+    `on_pivot(handle)` — optional callback fired when the user taps a
+    discovered cross-platform handle, so the caller can start a new search.
+    """
     if not page:
         return
     others = others or {}
@@ -941,6 +1145,7 @@ def show_profile_detail_dialog(
                 query_time,
                 others,
                 enrichment,
+                on_pivot,
             )
     except Exception:
         # Never fail silently — a mid-build crash here leaves the tap doing

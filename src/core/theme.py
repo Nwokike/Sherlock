@@ -225,12 +225,11 @@ class AppStyles:
                 end=ft.Alignment.BOTTOM_CENTER,
                 colors=[AppColors.DARK_BG_1, AppColors.DARK_BG_2],
             )
-        else:
-            return ft.LinearGradient(
-                begin=ft.Alignment.TOP_CENTER,
-                end=ft.Alignment.BOTTOM_CENTER,
-                colors=["#F5F5F5", AppColors.LIGHT_BG],
-            )
+        return ft.LinearGradient(
+            begin=ft.Alignment.TOP_CENTER,
+            end=ft.Alignment.BOTTOM_CENTER,
+            colors=["#F5F5F5", AppColors.LIGHT_BG],
+        )
 
 
 # ─── Material 3 Themes ─────────────────────────────────────────────────

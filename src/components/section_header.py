@@ -9,7 +9,7 @@ from core import tokens
 def SectionHeader(text: str) -> Control:
     return ft.Container(
         content=ft.Text(
-            text,
+            text.upper(),
             size=tokens.FONT_SM,
             weight=ft.FontWeight.W_700,
             color=ft.Colors.PRIMARY,

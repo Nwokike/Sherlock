@@ -18,6 +18,7 @@ import contextlib
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import flet as ft
@@ -34,7 +35,6 @@ from core.constants import (
     MSG_OFFLINE,
     MSG_ONLINE,
     MSG_SEARCH_OFFLINE,
-    STORAGE_BIOMETRIC_LOCK,
     STORAGE_CACHED_RESULTS,
     STORAGE_CACHED_SITES,
     STORAGE_CHECK_DOMAINS,
@@ -51,11 +51,13 @@ from core.constants import (
     STORAGE_HISTORY,
     STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
+    STORAGE_LOG_ENGINE_LOGS,
     STORAGE_MANIFEST,
     STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_NSFW,
     STORAGE_ONBOARDING_DONE,
+    STORAGE_PERMUTE,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_RETRIES,
@@ -68,12 +70,15 @@ from core.constants import (
     STORAGE_TIMEOUT,
     STORAGE_USE_CURL_CFFI,
 )
-from core.logger_handler import in_memory_log_handler
+from core.logger_handler import in_memory_log_handler, set_engine_logs
+from core.shared_services import mount_shared_services
 from core.state import state
+from core.tasks import spawn
 from core.theme import AppTheme
 from services.ad_service import AdService
 from services.email_service import EmailResult, EmailSearchProgress, EmailService
 from services.enrich_service import EnrichService
+from services.scan_notify import ScanNotifier
 from services.sherlock_service import SearchProgress, SherlockService, SiteResult
 from services.storage_service import StorageService
 from services.update_service import UpdateService
@@ -85,6 +90,12 @@ from state.controller_ctx import (
 logger = logging.getLogger("sherlock")
 
 
+# The one AdService instance for this session. app_shell's export flow needs
+# it for the export interstitial and has no controller reference of its own,
+# so AppController.init() publishes it here. .get("service") -> AdService|None.
+_AD_SERVICE_REF: dict = {}
+
+
 class AppController:
     """Top-level controller owning services and reactive state."""
 
@@ -92,6 +103,10 @@ class AppController:
         self.page = page
         self.storage: StorageService | None = None
         self.ad_service: AdService | None = None
+        # Built in init() (needs page context); a no-op stand-in until then
+        # so cancel/close paths are safe on a partially-constructed object
+        # (tests build AppController directly).
+        self.scan_notify: ScanNotifier = ScanNotifier(page)
         self.sherlock_service: SherlockService | None = None
         self.email_service: EmailService | None = None
         self.enrich_service: EnrichService | None = None
@@ -112,10 +127,20 @@ class AppController:
         self._enrich_queue: asyncio.Queue[str] | None = None
         self._enriched_seen: set[str] = set()
         self._enrich_worker_task: asyncio.Task | None = None
+        # Enrichment generation: bumped on every kill/new search. The old
+        # drain worker captures its generation at entry and self-quiesces
+        # (skips writes) once a newer generation exists — orphaned
+        # _enrich_single/avatar tasks can never contaminate the next scan.
+        self._enrich_gen: int = 0
+        # Per-scan avatar warm budget (reset in _register_search_task).
+        self._avatar_warmed: int = 0
         # Handle of the in-flight search task (the home-screen `_run`
         # task awaiting start_search/start_email_search) — cancelled
         # instantly when a new search supersedes it.
         self._search_task: asyncio.Task | None = None
+        # Serializes history read-modify-write (primary-done bridge vs
+        # final save) so concurrent upserts can't interleave and lose one.
+        self._history_lock = asyncio.Lock()
         # Coalesced progress bridge throttling
         self._last_progress_emit: float = 0.0
         self._pending_progress: Any | None = None
@@ -143,11 +168,13 @@ class AppController:
         the task also means the old search's results/history tail can
         never run and clobber the new search's state.
 
-        Note: the sherlock scan runs on a worker thread whose queued
-        HTTP requests cannot be interrupted (sherlock-project submits all
-        site checks upfront) — the drain continues in background, but the
-        collector stops ticking the moment the cancel event is set, so
-        no state or UI is affected.
+        Note: `sherlock_service.cancel()` reaches into the worker's own
+        event loop and cancels the running maigret task, which aborts the
+        site checks in flight — maigret's executor cancels its queue workers
+        and each worker cancels its live request
+        (.venv/maigret/executors.py:60-69, 99-110). An earlier comment here
+        claimed those requests "cannot be interrupted"; that was wrong, and
+        it was why a cancelled username scan kept running to completion.
         """
         try:
             current = asyncio.current_task()
@@ -155,12 +182,13 @@ class AppController:
             current = None
 
         killed = []
+        self._enrich_gen += 1
         if self._enrich_worker_task and not self._enrich_worker_task.done():
-            self._enrich_worker_task.cancel()
+            self._cancel_task_threadsafe(self._enrich_worker_task)
             killed.append("enrich-worker")
         self._enrich_queue = None
         if self._render_flush_task and not self._render_flush_task.done():
-            self._render_flush_task.cancel()
+            self._cancel_task_threadsafe(self._render_flush_task)
             killed.append("render-flusher")
         self._render_flush_task = None
         if hasattr(self.sherlock_service, "cancel"):
@@ -174,14 +202,185 @@ class AppController:
             and self._search_task is not current
             and not self._search_task.done()
         ):
-            self._search_task.cancel()
+            self._cancel_task_threadsafe(self._search_task)
             killed.append("search-task")
         state.is_searching = False
+        # Drain the dead scan's target scope too. `_apply_progress` admits a
+        # username tick whose target is in `state.search_targets`, and the
+        # replacement does not rebind that list until its engine starts — so
+        # without this, a dying scan's secondary/cached ticks stay admissible
+        # during the interstitial + site-load window. REBIND, never clear:
+        # the dead worker holds this same list object and appends recursive
+        # secondaries to it, so an in-place clear would be undone by the next
+        # append and the tick would re-enter scope. The next `search()` binds
+        # the fresh list.
+        state.search_targets = []
+        # The old scan's foreground service must die with its engine. Without
+        # this the superseding scan posted a second start_foreground_service
+        # while the previous one kept running, and the orphaned bar looked
+        # exactly like a scan stuck at 99%. Idempotent when nothing runs.
+        self.scan_notify.stop_service()
         logger.info("KILL %s → cancelled: %s", reason, ", ".join(killed) or "nothing")
+
+    def _live_username_progress(self) -> bool:
+        """True when a username scan is genuinely mid-flight.
+
+        Authoritative source is the progress object, not `is_searching`:
+        the flag is set optimistically by the Results retry button and
+        cleared by cancel/kill, so on its own it can disagree with reality
+        in both directions.
+        """
+        prog = state.search_progress
+        if prog is None or hasattr(prog, "checked_modules"):
+            return False  # email progress or nothing at all
+        return bool(getattr(prog, "is_running", False))
+
+    async def _ensure_notifications_ready(self, target: str, *, is_email: bool) -> bool:
+        """Bring the OS notification up and ask for permission, once.
+
+        Must be **awaited**: the service construction and the POST_NOTIFICATIONS
+        request are coroutines, and firing them through `page.run_task` returns
+        a Future immediately — so a `show()` on the next synchronous line sees
+        no service and the first notification of the session is dropped
+        silently. Called from the spawned search task, before the engine
+        starts, so the sequence is guaranteed.
+
+        A declined permission never blocks the scan: the user gets one snack
+        offering the OS settings page instead.
+        """
+        target = (target or "").strip()
+        if not target:
+            return False
+        try:
+            self.scan_notify.set_handlers(
+                on_cancel=self.cancel_search
+                if not is_email
+                else self.cancel_email_search,
+                on_view=(
+                    self._controller_methods.show_results
+                    if self._controller_methods
+                    else None
+                ),
+                on_copy=self._copy_scan_summary,
+                on_permission_denied=self._notify_permission_denied,
+            )
+            ready = await self.scan_notify.ensure_ready()
+            if not ready:
+                return False
+            self.scan_notify.scan_started(target, is_email=is_email)
+            return True
+        except Exception as exc:
+            logger.warning("ScanNotifier: start failed: %s", exc)
+            return False
+
+    def _copy_scan_summary(self) -> None:
+        """Put the finished-scan one-liner on the clipboard.
+
+        The Copy-report notification action's target: the summary line is
+        the same one the resume snack shows, so the user gets the result
+        without opening anything.
+        """
+        summary = getattr(self, "_last_scan_summary", None)
+        if not summary:
+            return
+        mode, target, found = summary
+        noun = "accounts" if mode == "username" else "results"
+        line = f"Sherlock: {found} {noun} for {target}"
+
+        async def _copy():
+            try:
+                from core.shared_services import shared_clipboard
+
+                await shared_clipboard(self.page).set_text(line)
+                from core.notify import show_snack
+
+                show_snack(self.page, "Scan summary copied")
+            except Exception as exc:
+                logger.warning("Scan summary copy failed: %s", exc)
+
+        spawn(_copy())
+
+    def _notify_permission_denied(self) -> None:
+        """Offer the OS settings page once POST_NOTIFICATIONS is declined."""
+        from core.notify import show_snack
+        from core.theme import AppColors
+
+        show_snack(
+            self.page,
+            "Notifications are off for Sherlock — scans won't show progress",
+            bgcolor=AppColors.WARNING,
+            duration=6000,
+            action_label="Settings",
+            on_action=lambda _e: self._open_notification_settings(),
+        )
+
+    def _open_notification_settings(self) -> None:
+        """Async hop into the app's own notification settings page."""
+        page = self.page
+        if page is None:
+            return
+
+        async def _open():
+            await self.scan_notify.open_settings()
+
+        spawn(_open())
+
+    def _owns_scan(self) -> bool:
+        """True while the CALLING task is still the registered search task.
+
+        Target equality alone is not ownership: the retry button and a
+        history re-search can start a scan for the SAME target, and a dying
+        scan that only compares names would then clear the live
+        replacement's flags, stop its shared render flusher and retract its
+        notification bar. `_search_task` is set by every start, so a
+        superseded scan fails this test however its result arrives.
+
+        Outside a running loop (direct calls from teardown/tests) there is no
+        calling task to compare, and the caller's own target guard decides.
+        """
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            return True
+        return self._search_task is None or self._search_task is current
+
+    def _abandon_search(self, target: str, progress_obj) -> None:
+        """Clear this search's state after a cancellation before the engine
+        started (the window between setting the flags and the engine `try`).
+
+        Guarded on ownership so a superseded scan cannot clear the live
+        replacement's flags, exactly like the exception handlers below.
+        """
+        try:
+            if not self._owns_scan():
+                return
+            if (state.current_username or "").strip().lower() != target.strip().lower():
+                return
+            state.is_searching = False
+            state.search_error = None
+            if progress_obj is not None:
+                progress_obj.is_running = False
+            state.progress_version += 1
+            self._stop_render_flusher()
+            # The notification was already posted (ensure_ready + scan_started
+            # run before the interstitial/site-load window this guard covers),
+            # so it must be retracted too — otherwise a cancel during that
+            # window strands a live foreground service with nothing to show.
+            self.scan_notify.stop_service()
+        except Exception as exc:  # never mask the cancellation
+            logger.warning("abandon_search cleanup failed: %s", exc)
+
+    def _live_email_progress(self) -> bool:
+        """Email counterpart of :meth:`_live_username_progress`."""
+        prog = state.search_progress
+        if prog is None or not hasattr(prog, "checked_modules"):
+            return False  # username progress or nothing at all
+        return bool(getattr(prog, "is_running", False))
 
     def _register_search_task(self) -> None:
         """Register the calling task as the active search (killable)."""
         self._search_task = asyncio.current_task()
+        self._avatar_warmed = 0
         self._start_render_flusher()
 
     def _start_render_flusher(self) -> None:
@@ -190,7 +389,24 @@ class AppController:
             return
         self._render_dirty = False
         self._pending_enrichments = {}
-        self._render_flush_task = asyncio.create_task(self._render_flusher())
+        self._render_flush_task = spawn(self._render_flusher())
+
+    def _stop_render_flusher(self) -> None:
+        """Stop the flusher on normal completion (no kill follows).
+
+        Flushes any residual pending enrichments first so the tail batch
+        is never lost, then cancels the idle 0.5s wake loop — otherwise it
+        spins for the app lifetime.
+        """
+        pending, self._pending_enrichments = self._pending_enrichments, {}
+        if pending:
+            try:
+                state.enrichments.update(pending)
+            except Exception:
+                pass
+        task, self._render_flush_task = self._render_flush_task, None
+        if task and not task.done():
+            task.cancel()
 
     async def _render_flusher(self) -> None:
         """The ONLY progress_version bumper during a scan (~2Hz max).
@@ -223,6 +439,20 @@ class AppController:
                 state.progress_version += 1
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            # A raise here used to end the loop for good: every later
+            # `_render_dirty = True` set a flag nothing read, so the UI froze
+            # mid-scan with no error and no recovery. Keep the bump going.
+            logger.warning("Render flusher iteration failed: %s", exc, exc_info=True)
+            self._render_dirty = True
+            try:
+                while True:
+                    await asyncio.sleep(0.5)
+                    if self._render_dirty:
+                        self._render_dirty = False
+                        state.progress_version += 1
+            except asyncio.CancelledError:
+                pass
 
     async def init(self) -> None:
         """Configure the page, init services, load state, mount AppShell."""
@@ -258,12 +488,18 @@ class AppController:
         self.connectivity = ft.Connectivity()
         self.connectivity.on_change = self._on_connectivity_change
         self.page.services.append(self.connectivity)
+
+        # Shared transient services (haptics/clipboard/share/url-launcher):
+        # mount one of each so per-click helpers reuse instead of registering
+        # a new service on every tap.
+        mount_shared_services(self.page)
         self.page.run_task(self._init_connectivity)
         self.page.on_app_lifecycle_state_change = self._on_lifecycle_change
 
         # Init services
         self.storage = StorageService(self.page)
         self.ad_service = AdService(self.page)
+        _AD_SERVICE_REF["service"] = self.ad_service
         self.sherlock_service = SherlockService()
         self.email_service = EmailService()
         self.enrich_service = EnrichService()
@@ -337,6 +573,50 @@ class AppController:
         self.page.on_view_pop = _on_system_back
         self.page.render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
         logger.info("AppShell mounted successfully")
+        # After render: the root view now exists, so guard its back.
+        self._guard_root_view_pop()
+
+    def _guard_root_view_pop(self) -> None:
+        """Intercept Android back on the shell view instead of letting it pop.
+
+        A single-view app has nowhere to pop TO: flet's Dart system-back
+        handler bails out when the top view is the only one, so the
+        framework finishes the activity and the app closes from any screen.
+
+        `View.can_pop=False` + `on_confirm_pop` is the supported will-pop
+        hook: back fires the handler, we route it to in-app navigation, and
+        `confirm_pop(False)` keeps the view on the stack. No second view, so
+        there is also nothing to accidentally reveal underneath.
+        """
+        try:
+            views = self.page.views
+            if not views:
+                return
+            root = views[-1]
+            if getattr(root, "can_pop", True) is False:
+                return  # already guarded (init re-entered)
+            root.can_pop = False
+            root.on_confirm_pop = self._on_root_confirm_pop
+            self.page.update()
+            logger.info("Root view back-guard installed")
+        except Exception as exc:
+            logger.warning("Could not install the back-guard: %s", exc)
+
+    async def _on_root_confirm_pop(self, e) -> None:
+        """Back was pressed on the shell: navigate in, never exit."""
+        try:
+            if self._controller_methods is not None and hasattr(
+                self._controller_methods, "handle_system_back"
+            ):
+                self._controller_methods.handle_system_back()
+        except Exception as exc:
+            logger.warning("Back navigation failed: %s", exc)
+        finally:
+            # Keep the view: the app stays alive whatever navigation did.
+            try:
+                await e.control.confirm_pop(False)
+            except Exception as exc:
+                logger.warning("confirm_pop(False) failed: %s", exc)
 
     async def _load_saved_state(self) -> None:
         """Load saved settings from storage into observable state."""
@@ -365,7 +645,10 @@ class AppController:
 
             timeout_raw = await self.storage.get(STORAGE_TIMEOUT)
             if timeout_raw:
-                state.timeout = int(timeout_raw)
+                try:
+                    state.timeout = int(timeout_raw)
+                except TypeError, ValueError:
+                    logger.warning("Ignoring corrupt stored timeout: %r", timeout_raw)
 
             local_db_raw = await self.storage.get(STORAGE_LOCAL_DB)
             if local_db_raw:
@@ -400,23 +683,35 @@ class AppController:
 
             email_timeout_raw = await self.storage.get(STORAGE_EMAIL_TIMEOUT)
             if email_timeout_raw:
-                val = int(email_timeout_raw)
-                # Migration: old default 10 → new default 30
-                if val == 10:
-                    state.email_timeout = 30
-                    await self.storage.set(STORAGE_EMAIL_TIMEOUT, "30")
-                else:
-                    state.email_timeout = val
+                try:
+                    val = int(email_timeout_raw)
+                except TypeError, ValueError:
+                    logger.warning(
+                        "Ignoring corrupt stored email timeout: %r", email_timeout_raw
+                    )
+                    val = None
+                if val is not None:
+                    # Migration: old default 10 → new default 30
+                    if val == 10:
+                        state.email_timeout = 30
+                        await self.storage.set(STORAGE_EMAIL_TIMEOUT, "30")
+                    else:
+                        state.email_timeout = val
 
             conc_raw = await self.storage.get(STORAGE_EMAIL_CONCURRENCY)
             if conc_raw:
-                val = max(5, min(30, int(conc_raw)))
-                # Migration: old default 15 → new default 5
-                if val == 15:
-                    state.email_concurrency = 5
-                    await self.storage.set(STORAGE_EMAIL_CONCURRENCY, "5")
-                else:
-                    state.email_concurrency = val
+                try:
+                    val = max(5, min(30, int(conc_raw)))
+                except TypeError, ValueError:
+                    logger.warning("Ignoring corrupt stored concurrency: %r", conc_raw)
+                    val = None
+                if val is not None:
+                    # Migration: old default 15 → new default 5
+                    if val == 15:
+                        state.email_concurrency = 5
+                        await self.storage.set(STORAGE_EMAIL_CONCURRENCY, "5")
+                    else:
+                        state.email_concurrency = val
             only_found_raw = await self.storage.get(STORAGE_EMAIL_ONLY_FOUND)
             if only_found_raw is not None:
                 state.email_only_found = only_found_raw == "true"
@@ -463,13 +758,20 @@ class AppController:
             cd_raw = await self.storage.get(STORAGE_CHECK_DOMAINS)
             if cd_raw is not None:
                 state.check_domains = cd_raw == "true"
-            bio_raw = await self.storage.get(STORAGE_BIOMETRIC_LOCK)
-            if bio_raw is not None:
-                state.biometric_lock = bio_raw == "true"
-
             rec_raw = await self.storage.get(STORAGE_RECURSIVE_SEARCH)
             if rec_raw is not None:
                 state.recursive_search = rec_raw == "true"
+
+            perm_raw = await self.storage.get(STORAGE_PERMUTE)
+            if perm_raw is not None:
+                state.permute_enabled = perm_raw == "true"
+
+            log_engine = await self.storage.get(STORAGE_LOG_ENGINE_LOGS)
+            if log_engine is not None:
+                state.log_engine_logs = log_engine == "true"
+            # Applies the stored choice (or the muted default) to the engine
+            # before any scan can emit anything.
+            set_engine_logs(state.log_engine_logs)
 
             ext_raw = await self.storage.get(STORAGE_EXTRACT_INFO)
             if ext_raw is not None:
@@ -544,9 +846,15 @@ class AppController:
         if not target_clean:
             return
 
-        # SMART RE-ATTACH: If already searching this exact username, attach to live progress
+        # SMART RE-ATTACH: attach only to a scan that is genuinely live.
+        # The progress object must exist and still be running — otherwise a
+        # stuck is_searching (the retry button sets it optimistically) or a
+        # just-killed scan whose worker thread has not stopped ticking yet
+        # would swallow every later search into a no-op re-attach, leaving
+        # the app permanently "searching" with no scan behind it.
         if (
             state.is_searching
+            and self._live_username_progress()
             and state.current_username.strip().lower() == target_clean.lower()
             and state.search_mode == MODE_USERNAME
         ):
@@ -557,8 +865,8 @@ class AppController:
 
         # NEW SEARCH = PRIORITY: kill any prior activity instantly,
         # whether it is still running or just draining its tail.
-        self._kill_all_activity(f"username-search[{target_clean}]")
-        self._register_search_task()
+        # NOTE: the kill runs AFTER the offline gate — a doomed new search
+        # (offline/empty) must never kill a healthy running scan.
 
         # Offline gate — don't launch a 400-site scan that can only
         # produce timeouts. History/settings still work offline.
@@ -567,7 +875,16 @@ class AppController:
             self._show_snack(MSG_SEARCH_OFFLINE, duration=10000)
             return
 
+        self._kill_all_activity(f"username-search[{target_clean}]")
+        self._register_search_task()
+
         state.current_username = target_clean
+        # Own the mode as documented (history_screen/_on_re_search: "start_*
+        # owns it after its own gates"). Without this, a start whose mode
+        # disagrees with the running engine (hydrated default, a chip set
+        # elsewhere) made _apply_progress's cross-mode guard drop EVERY tick
+        # of a perfectly live scan — screen and shade both frozen.
+        state.search_mode = MODE_USERNAME
         state.is_searching = True
         state.search_error = None
         # Reset to a fresh USERNAME-typed progress immediately: the UI
@@ -580,11 +897,21 @@ class AppController:
             "WATCHDOG: username search START %r (total_sites pending)",
             target_clean,
         )
+        # Awaited (not run_task): the service and the POST_NOTIFICATIONS
+        # request are coroutines that must land before the first show(),
+        # or the first notification of the session is silently dropped.
+        await self._ensure_notifications_ready(target_clean, is_email=False)
 
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
             try:
                 await self.ad_service.show_interstitial()
+            except asyncio.CancelledError:
+                # A supersede landing in this window must not leave the
+                # flags set with no engine behind them (the stuck-flag
+                # wedge). Clear, then let it propagate.
+                self._abandon_search(target_clean, username_progress)
+                raise
             except Exception as exc:
                 logger.warning("Interstitial show failed: %s", exc)
 
@@ -592,18 +919,42 @@ class AppController:
         self._enriched_seen.clear()
         self._enrich_queue = asyncio.Queue()
         if self.enrich_service and self.enrich_service.is_available:
-            self._enrich_worker_task = asyncio.create_task(self._drain_enrich_queue())
+            try:
+                self._enrich_worker_task = spawn(self._drain_enrich_queue())
+            except asyncio.CancelledError:
+                self._abandon_search(target_clean, username_progress)
+                raise
+            except Exception as exc:
+                logger.warning("Enrich worker start failed: %s", exc)
 
         # Make sure sites are loaded before searching
         try:
             await self.sherlock_service.load_sites()
+        except asyncio.CancelledError:
+            self._abandon_search(target_clean, username_progress)
+            raise
         except Exception as e:
             logger.warning("load_sites failed before scan: %s", e)
+
+        # Permute: separator variants join the target list (engine parses
+        # the comma-joined string; per-target truth lands in
+        # state.target_results and is merged into last_results below).
+        scan_query = target_clean
+        if state.permute_enabled:
+            from core.permute import permute_username
+
+            variants = permute_username(target_clean)
+            if variants:
+                scan_query = ",".join([target_clean, *variants])
+                logger.info(
+                    "Permute: +%d handle variant(s) joined the scan",
+                    len(variants),
+                )
 
         # Bridge the thread-shed progress callbacks onto the main loop
         try:
             result = await self.sherlock_service.search(
-                username=username,
+                username=scan_query,
                 on_progress=self._progress_from_thread,
                 timeout=state.timeout,
                 after_primary=self._on_username_primary_done,
@@ -611,34 +962,63 @@ class AppController:
             # If this scan was cancelled or superseded by another search, do not clobber state
             if (
                 getattr(result, "is_cancelled", False)
-                or state.current_username != username
+                or state.current_username != target_clean
                 or state.search_mode != MODE_USERNAME
             ):
                 logger.info(
                     "WATCHDOG: username search %r cancelled/superseded — ignoring results",
-                    username,
+                    target_clean,
                 )
-                state.is_searching = False
-                username_progress.is_running = False
-                state.progress_version += 1
+                # Only the scan that still OWNS the slot may touch it. A
+                # superseded scan reaches here after its replacement started,
+                # and `is_cancelled` alone cannot tell the two apart: the kill
+                # path marks every live progress cancelled, supersede included.
+                # The replacement owns the flags, the shared render flusher,
+                # the notification id and the foreground service — a dying
+                # scan must not clear, stop or retract any of them.
+                if self._owns_scan():
+                    state.is_searching = False
+                    username_progress.is_running = False
+                    state.progress_version += 1
+                    # Only a USER cancel takes the bar with it: the cancel
+                    # path marks a still-owned scan, a supersede fails the
+                    # ownership check above.
+                    if getattr(result, "is_cancelled", False):
+                        self.scan_notify.scan_cancelled()
+                    self._stop_render_flusher()
                 return
 
             state.is_searching = False
-            state.last_results = {
-                r.site_name: r
-                for r in (result.found + result.not_found + result.errors)
-            }
-            state.last_results_username = username
+            self.scan_notify.scan_finished(
+                len(result.found), result.total_sites or result.checked_sites
+            )
+            merged_results: dict = {}
+
+            def _merge_result(r) -> None:
+                existing = merged_results.get(r.site_name)
+                # Prefer the CLAIMED row when two handles hit the same site.
+                if existing is None or (
+                    r.status == "Claimed" and existing.status != "Claimed"
+                ):
+                    merged_results[r.site_name] = r
+
+            for prog in list((state.target_results or {}).values()):
+                for r in prog.found + prog.not_found + prog.errors:
+                    _merge_result(r)
+            for r in result.found + result.not_found + result.errors:
+                _merge_result(r)
+            state.last_results = merged_results
+            state.last_results_username = target_clean
             logger.info(
                 "WATCHDOG: username search COMPLETE %r — %d/%d checked, %d found",
-                username,
+                target_clean,
                 result.checked_sites,
                 result.total_sites,
                 len(result.found),
             )
 
             await self._save_to_history(
-                username, len(result.found), result.total_sites, mode=MODE_USERNAME
+                target_clean, len(result.found), result.total_sites, mode=MODE_USERNAME
             )
 
             # Final progress apply (enqueues any remaining found URLs).
@@ -646,11 +1026,32 @@ class AppController:
             # and the final result object may be the live one (silent assign).
             await self._apply_progress(result)
             state.progress_version += 1
+            self._stop_render_flusher()
+            self._last_scan_summary = (
+                "username",
+                target_clean,
+                len(result.found),
+            )
         except asyncio.CancelledError:
-            logger.info("WATCHDOG: username search %r killed mid-flight", username)
+            # BaseException in 3.8+ — `except Exception` does NOT catch
+            # this. Without clearing the flag here, a cancelled scan left
+            # is_searching stuck True and the Search button disabled
+            # forever ("the scan is not starting").
+            logger.info("WATCHDOG: username search %r killed mid-flight", target_clean)
+            if getattr(state, "current_username", None) == target_clean:
+                state.is_searching = False
+                username_progress.is_running = False
+                state.search_error = None
+                state.progress_version += 1
+                self._stop_render_flusher()
+                # A crash/cancel between scan_started() and completion
+                # never reaches scan_finished(), so the foreground service
+                # has to be retracted here or it outlives the failure with
+                # a frozen percentage in the shade.
+                self.scan_notify.stop_service()
             raise
         except Exception as e:
-            if getattr(state, "current_username", None) == username:
+            if getattr(state, "current_username", None) == target_clean:
                 logger.exception("Search failed")
                 state.is_searching = False
                 username_progress.is_running = False
@@ -675,12 +1076,18 @@ class AppController:
                     else ERR_GENERIC
                 )
                 self._show_snack(msg, duration=10000)
+                self._stop_render_flusher()
+                # Same contract as the CancelledError handler above: a hard
+                # failure is not a completion, so retract the service rather
+                # than leaving a dead bar claiming a scan still runs.
+                self.scan_notify.stop_service()
 
     async def _drain_enrich_queue(self) -> None:
         """Stream profile enrichment in real-time as sites are found."""
         if not self.enrich_service or not self.enrich_service.is_available:
             return
 
+        gen = self._enrich_gen
         use_mutations = getattr(state, "enrichment_mode", "basic") == "full"
         concurrency = 3 if use_mutations else 4
         semaphore = asyncio.Semaphore(concurrency)
@@ -688,34 +1095,59 @@ class AppController:
 
         async def _enrich_single(url: str) -> None:
             async with semaphore:
+                if gen != self._enrich_gen:
+                    return
                 try:
                     fn = (
                         self.enrich_service.enrich_url_with_mutations
                         if use_mutations
                         else self.enrich_service.enrich_url
                     )
-                    data = await fn(url, timeout=8 if use_mutations else 6)
-                    if data:
+                    # Forward stored cookies (auth-gated schemes) + UA so
+                    # enrichment performs instead of failing logged-out.
+                    cookies_path = (state.cookies_path or "").strip() or None
+                    cookies_str = ""
+                    if cookies_path:
+                        try:
+                            cookies_str = (
+                                Path(cookies_path).read_text(encoding="utf-8")
+                                if Path(cookies_path).is_file()
+                                else ""
+                            )
+                        except OSError:
+                            cookies_str = ""
+                    data = await fn(
+                        url,
+                        timeout=8 if use_mutations else 6,
+                        cookies=cookies_str or None,
+                        user_agent="Sherlock/2.x",
+                    )
+                    if data and gen == self._enrich_gen:
                         # Batch into the flusher — never bump per URL: every
                         # observable write re-renders the whole tree.
                         self._pending_enrichments[url] = data
                         self._render_dirty = True
 
                         # Warm the on-device avatar cache in the background once
-                        # per found profile (never on the render path).
-                        avatar_url = (
-                            data.get("image") or data.get("avatar") or data.get("photo")
-                        )
-                        if (
-                            avatar_url
-                            and isinstance(avatar_url, str)
-                            and avatar_url.startswith("http")
-                        ):
-                            from services.cache_service import (
-                                schedule_avatar_download,
+                        # per found profile (never on the render path). Bounded
+                        # like the email path — unbounded spawns stall the loop.
+                        if self._avatar_warmed < 50:
+                            avatar_url = (
+                                data.get("image")
+                                or data.get("avatar")
+                                or data.get("photo")
                             )
+                            if (
+                                avatar_url
+                                and isinstance(avatar_url, str)
+                                and avatar_url.startswith("http")
+                            ):
+                                from services.cache_service import (
+                                    schedule_avatar_download,
+                                )
 
-                            asyncio.create_task(schedule_avatar_download(avatar_url))
+                                spawn(schedule_avatar_download(avatar_url))
+                                self._avatar_warmed += 1
                 except Exception as exc:
                     logger.warning("Streaming enrichment error for %s: %s", url, exc)
 
@@ -724,6 +1156,12 @@ class AppController:
             or (self._enrich_queue and not self._enrich_queue.empty())
             or pending_tasks
         ):
+            if gen != self._enrich_gen:
+                # Superseded by a newer search — stop draining; children
+                # self-quiesce via the generation check above.
+                for t in pending_tasks:
+                    t.cancel()
+                return
             # Clean up completed tasks
             done = {t for t in pending_tasks if t.done()}
             pending_tasks.difference_update(done)
@@ -731,7 +1169,7 @@ class AppController:
             if self._enrich_queue and not self._enrich_queue.empty():
                 try:
                     url = self._enrich_queue.get_nowait()
-                    t = asyncio.create_task(_enrich_single(url))
+                    t = spawn(_enrich_single(url))
                     pending_tasks.add(t)
                 except Exception:
                     pass
@@ -739,7 +1177,7 @@ class AppController:
                 await asyncio.sleep(0.1)
 
         # Final wait for in-flight tasks when scan completes
-        if pending_tasks:
+        if pending_tasks and gen == self._enrich_gen:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
 
     def _progress_from_thread(self, progress) -> None:
@@ -770,9 +1208,13 @@ class AppController:
                 self._render_dirty = True
 
         if delay > 0.001:
-            self._main_loop.call_later(
-                delay,
-                lambda: asyncio.run_coroutine_threadsafe(_flush(), self._main_loop),
+            # call_later is NOT thread-safe — this bridge runs on the worker
+            # thread, so schedule through call_soon_threadsafe.
+            self._main_loop.call_soon_threadsafe(
+                lambda: self._main_loop.call_later(
+                    delay,
+                    lambda: asyncio.run_coroutine_threadsafe(_flush(), self._main_loop),
+                )
             )
         else:
             try:
@@ -792,8 +1234,16 @@ class AppController:
         late callbacks (e.g. its finally-block tick) must never clobber
         the current search's progress slot. Cross-mode ticks are always
         dropped; same-mode ticks are dropped when their target is not
-        the active search's target.
+        the active search's target, or when the scan that produced them has
+        already been cancelled.
         """
+        if getattr(progress, "is_cancelled", False):
+            # The user stopped this scan. A bare cancel leaves the target
+            # matching, so the scope check below would admit the cancel
+            # path's own trailing tick and repaint a scan the UI has already
+            # reported as stopped.
+            logger.debug("Dropping tick from a cancelled scan")
+            return
         is_email_progress = hasattr(progress, "checked_modules")
         if is_email_progress and state.search_mode != MODE_EMAIL:
             logger.debug(
@@ -809,14 +1259,46 @@ class AppController:
             if getattr(progress, "email", None) != state.current_username:
                 logger.debug("Dropping stale email progress tick — superseded scan")
                 return
-        elif (
-            state.search_targets
-            and state.is_searching
-            and getattr(progress, "username", None) not in state.search_targets
-        ):
-            logger.debug("Dropping stale username progress tick — superseded scan")
-            return
+        else:
+            # Scope of a legitimate tick = the active query PLUS every
+            # target the engine is scanning right now.
+            #
+            # The engine APPENDS recursive secondaries to state.search_targets
+            # (sherlock_service, `targets.append` — whose own comment says it
+            # exists precisely so this filter admits them) and `parse_usernames`
+            # puts permute variants there too. The old check compared ONLY
+            # against current_username and fired first, so it dropped every
+            # secondary tick and the final apply — which carries `last_prog`,
+            # the last secondary. The primary rendered, the recursive tail
+            # froze, and `is_searching` stayed True for the whole tail (up to
+            # 20 targets x 500 sites). That is the "stuck at 98/99%" stall.
+            probe = (getattr(progress, "username", None) or "").strip().lower()
+            primary = (state.current_username or "").strip().lower()
+            # primary unset => cached reattach writes progress directly:
+            # nothing to supersede against, so admit.
+            if primary and probe != primary:
+                # Snapshot: the worker thread appends secondaries to this
+                # same list object; never iterate it live.
+                scope = {
+                    str(t).strip().lower() for t in list(state.search_targets or [])
+                }
+                if probe not in scope:
+                    logger.debug(
+                        "Dropping stale username progress tick — superseded scan"
+                    )
+                    return
         state.search_progress = progress
+
+        # Mirror the tick into the OS notification (the shade owns live
+        # progress), at the same 2Hz budget as the render flusher.
+        if state.is_searching:
+            checked = getattr(progress, "checked_sites", None)
+            if checked is None:
+                checked = getattr(progress, "checked_modules", 0) or 0
+            total = getattr(progress, "total_sites", None)
+            if not total:
+                total = getattr(progress, "total_modules", 0) or 0
+            self.scan_notify.progress(checked, total)
 
         # Stream newly discovered found URLs into the enrichment queue
         if (
@@ -831,13 +1313,33 @@ class AppController:
                     self._enriched_seen.add(url)
                     self._enrich_queue.put_nowait(url)
 
+    def _cancel_task_threadsafe(self, task: asyncio.Task | None) -> None:
+        """Cancel a task from any thread (sync UI callbacks may run off-loop)."""
+        if task is None or task.done():
+            return
+        try:
+            loop = self._main_loop
+            if loop is not None and asyncio.get_running_loop() is not loop:
+                loop.call_soon_threadsafe(task.cancel)
+                return
+        except RuntimeError:
+            pass
+        try:
+            task.cancel()
+        except Exception:
+            pass
+
     def cancel_search(self) -> None:
         """Cancel a running search (sync — called from UI)."""
         logger.info("CANCEL requested by user (username mode)")
         self._kill_all_activity("user-cancel[username]")
-        if state.search_progress:
-            state.search_progress.is_running = False
-            state.search_progress.is_cancelled = True
+        self.scan_notify.scan_cancelled()
+        prog = state.search_progress
+        if prog is not None and getattr(prog, "is_running", False):
+            # Only mark a LIVE scan: a cancel landing after completion
+            # rewrote a finished result as cancelled.
+            prog.is_running = False
+            prog.is_cancelled = True
         state.progress_version += 1
         try:
             self.page.update()
@@ -856,9 +1358,11 @@ class AppController:
         if not email_clean:
             return
 
-        # SMART RE-ATTACH: If already searching this exact email, attach to live progress
+        # SMART RE-ATTACH: live progress only (see the username gate — a
+        # stuck is_searching must not swallow the search).
         if (
             state.is_searching
+            and self._live_email_progress()
             and state.current_username.strip().lower() == email_clean.lower()
             and state.search_mode == MODE_EMAIL
         ):
@@ -867,11 +1371,8 @@ class AppController:
                 self._controller_methods.show_results()
             return
 
-        # NEW SEARCH = PRIORITY: kill any prior activity instantly,
-        # whether it is still running or just draining its tail.
-        self._kill_all_activity(f"email-search[{email_clean}]")
-        self._register_search_task()
-
+        # NOTE: the kill runs AFTER the gates — a doomed new search
+        # (offline/invalid) must never kill a healthy running scan.
         # Offline gate
         if not state.is_online:
             logger.info("Email search blocked: device offline")
@@ -885,7 +1386,13 @@ class AppController:
             self._show_snack(ERR_INVALID_EMAIL)
             return
 
+        self._kill_all_activity(f"email-search[{email_clean}]")
+        self._register_search_task()
+
         state.current_username = email_clean
+        # Same contract as the username path: the start owns the mode, so the
+        # cross-mode guard can't drop a live email scan's ticks.
+        state.search_mode = MODE_EMAIL
         state.is_searching = True
         state.search_error = None
         state.email_results.clear()
@@ -896,11 +1403,21 @@ class AppController:
         state.search_progress = email_progress
         state.progress_version += 1
         logger.info("WATCHDOG: email search START %r", email_clean)
+        # Awaited, for the same reason as the username path above.
+        await self._ensure_notifications_ready(email_clean, is_email=True)
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:
             try:
                 await self.ad_service.show_interstitial()
+            except asyncio.CancelledError:
+                # Mirrors the username path (:862): a supersede landing in
+                # this window must not leave the flags set with no engine
+                # behind them. Without this, a cancel caught here fell
+                # through to `except Exception` — which does NOT catch
+                # BaseException — leaving is_searching stuck True.
+                self._abandon_search(email_clean, email_progress)
+                raise
             except Exception as exc:
                 logger.warning("Interstitial show failed: %s", exc)
 
@@ -924,9 +1441,17 @@ class AppController:
                     "WATCHDOG: email search %r cancelled/superseded — ignoring results",
                     email,
                 )
-                state.is_searching = False
-                email_progress.is_running = False
-                state.progress_version += 1
+                # Same rule as the username path: only the scan that still
+                # OWNS the slot may touch it, because a superseded scan
+                # reaches here after its replacement owns the flags, the
+                # shared render flusher, the notification id and the service.
+                if self._owns_scan():
+                    state.is_searching = False
+                    email_progress.is_running = False
+                    state.progress_version += 1
+                    if getattr(result, "is_cancelled", False):
+                        self.scan_notify.scan_cancelled()
+                    self._stop_render_flusher()
                 return
 
             state.is_searching = False
@@ -937,6 +1462,10 @@ class AppController:
                 result.total_modules,
                 len(result.found),
             )
+            self.scan_notify.scan_finished(
+                len(result.found), result.total_modules or result.checked_modules
+            )
+            self._last_scan_summary = ("email", email_clean, len(result.found))
 
             # Convert to result list for state
             all_results = [
@@ -987,7 +1516,7 @@ class AppController:
                 media = (rrow.get("others") or {}).get("media") or {}
                 avatar = media.get("avatar")
                 if isinstance(avatar, str) and avatar.startswith("http"):
-                    asyncio.create_task(schedule_avatar_download(avatar))
+                    spawn(schedule_avatar_download(avatar))
                     warmed += 1
                 if warmed >= 50:
                     break
@@ -1006,21 +1535,48 @@ class AppController:
             # (silent assign).
             await self._apply_progress(result)
             state.progress_version += 1
+            self._stop_render_flusher()
         except asyncio.CancelledError:
+            # Supersede guard (same as the username path): only clear the
+            # flags if THIS search still owns the slot. A superseded task's
+            # cancellation is delivered late, and clearing unconditionally
+            # would flip the LIVE replacement's is_searching to False and
+            # stop its render flusher, stranding it with a dead UI.
             logger.info("WATCHDOG: email search %r killed mid-flight", email)
+            if state.current_username.strip().lower() == email_clean.lower() and (
+                state.search_mode == MODE_EMAIL
+            ):
+                state.is_searching = False
+                email_progress.is_running = False
+                state.search_error = None
+                state.progress_version += 1
+                self._stop_render_flusher()
+                # Retract the foreground service on this exit path too —
+                # inside the ownership guard so a superseded task's late
+                # cancellation cannot kill the live replacement's service.
+                self.scan_notify.stop_service()
             raise
         except ValueError as ve:
-            state.is_searching = False
-            email_progress.is_running = False
-            state.progress_version += 1
+            if state.current_username.strip().lower() == email_clean.lower() and (
+                state.search_mode == MODE_EMAIL
+            ):
+                state.is_searching = False
+                email_progress.is_running = False
+                state.progress_version += 1
+                self._stop_render_flusher()
+                self.scan_notify.stop_service()
             logger.warning("Email search rejected: %s", ve)
             self._show_snack(str(ve))
         except Exception as e:
             logger.exception("Email search failed")
-            state.is_searching = False
-            email_progress.is_running = False
-            state.progress_version += 1
-            state.search_error = str(e)
+            if state.current_username.strip().lower() == email_clean.lower() and (
+                state.search_mode == MODE_EMAIL
+            ):
+                state.is_searching = False
+                email_progress.is_running = False
+                state.progress_version += 1
+                state.search_error = str(e)
+                self.scan_notify.stop_service()
             msg = (
                 ERR_NETWORK
                 if any(
@@ -1038,14 +1594,17 @@ class AppController:
                 else ERR_GENERIC
             )
             self._show_snack(msg, duration=10000)
+            self._stop_render_flusher()
 
     def cancel_email_search(self) -> None:
         """Cancel a running email search (sync — called from UI)."""
         logger.info("CANCEL requested by user (email mode)")
         self._kill_all_activity("user-cancel[email]")
-        if state.search_progress:
-            state.search_progress.is_running = False
-            state.search_progress.is_cancelled = True
+        self.scan_notify.scan_cancelled()
+        prog = state.search_progress
+        if prog is not None and getattr(prog, "is_running", False):
+            prog.is_running = False
+            prog.is_cancelled = True
         state.progress_version += 1
         try:
             self.page.update()
@@ -1087,11 +1646,24 @@ class AppController:
         if not snapshot:
             return False
 
+        query_norm = query.strip().lower()
+        current_norm = (state.current_username or "").strip().lower()
+        # Same-target live scan: re-attach, do NOT clobber with a stale
+        # snapshot (mirrors the start_search smart re-attach). Liveness and
+        # mode are both required — is_searching alone can be stuck True
+        # (that is the 99%-hang bug), and re-attaching across modes for an
+        # identical string would open the wrong engine's results.
+        live = (
+            self._live_username_progress()
+            if mode == MODE_USERNAME
+            else self._live_email_progress()
+        ) and state.search_mode == mode
+        if state.is_searching and live and current_norm == query_norm:
+            if self._controller_methods and self._controller_methods.show_results:
+                self._controller_methods.show_results()
+            return True
         # Cancel any active scan if opening a different target
-        if (
-            state.is_searching
-            and state.current_username.strip().lower() != query.strip().lower()
-        ):
+        if state.is_searching:
             self._kill_all_activity(f"open-cached-result[{query}]")
 
         if mode == MODE_USERNAME:
@@ -1164,38 +1736,65 @@ class AppController:
             }
             state.search_mode = MODE_USERNAME
             state.search_progress = progress
+            # Clear-first: update() alone would leak the previous target's
+            # enrichments (stale avatars) into this cached result.
+            state.enrichments.clear()
             if snapshot.get("enrichments"):
                 state.enrichments.update(snapshot["enrichments"])
         else:
-            all_email = snapshot.get("email_results", [])
-            found_count = len(
-                [r for r in all_email if r.get("exists") and not r.get("rateLimit")]
-            )
+            all_email = snapshot.get("email_results", []) or []
+            found_dicts = [
+                r for r in all_email if r.get("exists") and not r.get("rateLimit")
+            ]
+            not_found_dicts = [
+                r
+                for r in all_email
+                if not r.get("exists")
+                and not r.get("rateLimit")
+                and not r.get("unavailable")
+            ]
+            rate_limited_dicts = [
+                r for r in all_email if r.get("rateLimit") and not r.get("unavailable")
+            ]
+            unavailable_dicts = [r for r in all_email if r.get("unavailable")]
             state.email_results[:] = all_email
             state.email_results_address = query.strip()
             state.current_username = query.strip()
             state.search_mode = MODE_EMAIL
-            state.email_found_count = found_count
-            state.email_total_modules = snapshot.get("total", len(all_email) or 181)
+            state.email_found_count = len(found_dicts)
+            state.email_not_found_count = len(not_found_dicts)
+            state.email_rate_limited_count = len(rate_limited_dicts)
+            state.email_unavailable_count = len(unavailable_dicts)
+            state.email_total_modules = snapshot.get("total") or len(all_email)
+            # Username enrichments are URL-keyed profile data — meaningless
+            # for email rows. Clear so stale avatars can't leak in, and bump
+            # the generation so any draining worker self-quiesces.
+            state.enrichments.clear()
+            self._enrich_gen += 1
+            self._enriched_seen.clear()
+
+            def _to_email_result(r):
+                return EmailResult(
+                    name=r.get("name", ""),
+                    domain=r.get("domain", ""),
+                    method=r.get("method", ""),
+                    exists=r.get("exists"),
+                    rate_limit=r.get("rateLimit", False),
+                    frequent_rate_limit=r.get("frequent_rate_limit", False),
+                    unavailable=r.get("unavailable", False),
+                    email_recovery=r.get("emailrecovery"),
+                    phone_number=r.get("phoneNumber"),
+                    others=r.get("others"),
+                )
+
             state.search_progress = EmailSearchProgress(
                 email=query.strip(),
                 total_modules=state.email_total_modules,
                 checked_modules=state.email_total_modules,
-                found=[
-                    EmailResult(
-                        name=r.get("name", ""),
-                        domain=r.get("domain", ""),
-                        method=r.get("method", ""),
-                        exists=r.get("exists"),
-                        rate_limit=r.get("rateLimit", False),
-                        frequent_rate_limit=r.get("frequent_rate_limit", False),
-                        email_recovery=r.get("emailrecovery"),
-                        phone_number=r.get("phoneNumber"),
-                        others=r.get("others"),
-                    )
-                    for r in all_email
-                    if r.get("exists") and not r.get("rateLimit")
-                ],
+                found=[_to_email_result(r) for r in found_dicts],
+                not_found=[_to_email_result(r) for r in not_found_dicts],
+                rate_limited=[_to_email_result(r) for r in rate_limited_dicts],
+                unavailable=[_to_email_result(r) for r in unavailable_dicts],
                 is_running=False,
             )
 
@@ -1216,9 +1815,7 @@ class AppController:
             return
 
         def _schedule():
-            asyncio.ensure_future(
-                self._save_to_history(query, found, total, mode=MODE_USERNAME)
-            )
+            spawn(self._save_to_history(query, found, total, mode=MODE_USERNAME))
 
         try:
             loop.call_soon_threadsafe(_schedule)
@@ -1246,6 +1843,7 @@ class AppController:
                             "status": getattr(r, "status", "Claimed"),
                             "http_status": getattr(r, "http_status", ""),
                             "query_time": getattr(r, "query_time", None),
+                            "context": getattr(r, "context", None),
                             "tags": getattr(r, "tags", []),
                             "ids_data": getattr(r, "ids_data", None),
                             "error_type": getattr(r, "error_type", None),
@@ -1319,21 +1917,24 @@ class AppController:
                 "total": total,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M"),
             }
-            raw = await self.storage.get(STORAGE_HISTORY)
-            entries = json.loads(raw) if raw else []
-            # Upsert: a username scan saves when its PRIMARY pass completes
-            # (so Recent appears immediately) and again after the recursive
-            # tail with final counts — same query+mode replaces, no dupes.
-            if (
-                entries
-                and entries[-1].get("query") == entry["query"]
-                and entries[-1].get("mode") == entry["mode"]
-            ):
-                entries[-1] = entry
-            else:
-                entries.append(entry)
-            entries = entries[-50:]
-            await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
+            # The whole read-modify-write runs under the history lock so the
+            # primary-done bridge and the final save can't interleave.
+            async with self._history_lock:
+                raw = await self.storage.get(STORAGE_HISTORY)
+                entries = json.loads(raw) if raw else []
+                # Upsert: a username scan saves when its PRIMARY pass completes
+                # (so Recent appears immediately) and again after the recursive
+                # tail with final counts — same query+mode replaces, no dupes.
+                if (
+                    entries
+                    and entries[-1].get("query") == entry["query"]
+                    and entries[-1].get("mode") == entry["mode"]
+                ):
+                    entries[-1] = entry
+                else:
+                    entries.append(entry)
+                entries = entries[-50:]
+                await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
             # Observable mirror is newest-first (display order); the
             # stored list stays oldest-first. Loaders must reverse.
             if (
@@ -1344,6 +1945,14 @@ class AppController:
                 state.history[0] = entry
             else:
                 state.history.insert(0, entry)
+                # "New history while you were elsewhere" indicator for the
+                # nav badge. Counted, not flagged, so consecutive scans
+                # stack — but only for a row that was actually INSERTED.
+                # A username scan saves twice (primary-done bridge + the
+                # final upsert), and the second save replaces the head row
+                # the first one created; incrementing there read the badge
+                # as 2 for one scan.
+                state.history_unseen = (state.history_unseen or 0) + 1
             if len(state.history) > 50:
                 state.history[:] = state.history[:50]
         except Exception as e:
@@ -1412,7 +2021,7 @@ class AppController:
 
     def on_error(self, e) -> None:
         """Page-level error handler. Best-effort snackbar."""
-        logger.error("Page error: %s", e.data)
+        logger.error("Page error: %s", getattr(e, "data", e))
         self._show_snack(ERR_GENERIC)
 
     # --- Connectivity -------------------------------------------------
@@ -1432,7 +2041,10 @@ class AppController:
         """Native listener callback for device connectivity changes."""
         was_online = state.is_online
         try:
-            types = getattr(e, "connectivity", None) or [e.data]
+            types = getattr(e, "connectivity", None) or [getattr(e, "data", None)]
+            types = [t for t in types if t is not None]
+            if not types:
+                return
             state.is_online = ft.ConnectivityType.NONE not in types
         except Exception:
             return
@@ -1448,6 +2060,30 @@ class AppController:
         backgrounded and the connectivity listener may not fire for it."""
         if e.state not in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):
             return
+        # "Your scan finished while you were away" — the in-app stand-in for
+        # an OS notification (flet has none; see docs/notification-research.md).
+        summary = getattr(self, "_last_scan_summary", None)
+        if summary:
+            self._last_scan_summary = None
+            mode, target, found = summary
+            noun = "accounts" if mode == "username" else "results"
+            try:
+                from core.notify import show_snack
+
+                show_snack(
+                    self.page,
+                    f"Scan finished — {found} {noun} for {target}",
+                    duration=8000,
+                    action_label="View",
+                    on_action=lambda: (
+                        self._controller_methods.show_results()
+                        if self._controller_methods
+                        and self._controller_methods.show_results
+                        else None
+                    ),
+                )
+            except Exception as exc:
+                logger.warning("Resume snack failed: %s", exc)
         if not self.connectivity:
             return
         try:
@@ -1466,6 +2102,10 @@ async def main(page: ft.Page) -> None:
     root_logger = logging.getLogger()
     if in_memory_log_handler not in root_logger.handlers:
         root_logger.addHandler(in_memory_log_handler)
+    # Quiet the engine's per-check chatter from the very first log line —
+    # impossible to read the console or the in-app terminal otherwise.
+    # The Settings troubleshooting toggle and stored preference can lift it.
+    set_engine_logs(state.log_engine_logs)
 
     controller = AppController(page)
     await controller.init()
@@ -1486,14 +2126,27 @@ async def main(page: ft.Page) -> None:
         with contextlib.suppress(Exception):
             if controller.ad_service:
                 await controller.ad_service.close()
+        # A live scan's shade notification must not outlive the app.
+        with contextlib.suppress(Exception):
+            controller.scan_notify.shutdown()
         # Pooled httpx client — logs its own failures at WARNING
         # (no suppression inside close_client).
         from services.http_client import close_client
 
-        await close_client()
+        with contextlib.suppress(Exception):
+            await close_client()
 
     page.on_close = _on_close
 
 
 if __name__ == "__main__":
-    ft.run(main, assets_dir="src/assets")
+    # Resolve against THIS file's directory, not the working directory.
+    # `ft.run` joins a relative assets_dir onto the CWD
+    # (.venv/flet/app.py:__get_assets_dir_path, relative_to_cwd=True), and the
+    # `flet run` CLI joins `--assets` onto the script dir and then exports it as
+    # FLET_ASSETS_DIR (.venv/flet_cli/commands/run.py:resolve_assets_dir) — so a
+    # literal "src/assets" here becomes <root>/src/src/assets under the CLI and
+    # warns "assets_dir does not exist". Deriving it from __file__ means the
+    # same value works whether launched directly, through the CLI, or built.
+    _here = Path(__file__).resolve().parent
+    ft.run(main, assets_dir=str(_here / "assets"))

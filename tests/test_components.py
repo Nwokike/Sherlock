@@ -110,8 +110,32 @@ class TestResultCard:
         tree = ResultCard(
             site_name="GitHub", status="Claimed", url_user="https://x.com/a"
         )
-        if tree.on_click is not None:
-            tree.on_click(None)
+        assert tree.on_click is None
+
+    def test_url_main_only_opens_main(self):
+        # Regression: cards with only url_main rendered clickable but the
+        # click was a no-op (handler only opened url_user).
+        opened = []
+        tree = ResultCard(
+            site_name="Example",
+            status="Claimed",
+            url_main="https://example.com",
+            on_open=opened.append,
+        )
+        assert tree.on_click is not None
+        tree.on_click(None)
+        assert opened == ["https://example.com"]
+
+    def test_zero_followers_rendered(self):
+        # Regression: falsy-or dropped real 0 counts.
+        tree = ResultCard(
+            site_name="GitHub",
+            status="Claimed",
+            url_user="https://github.com/test",
+            enrichment={"follower_count": 0, "following_count": 3},
+        )
+        texts = [t.value or "" for t in walk_texts(tree)]
+        assert any("0 followers" in t for t in texts)
 
 
 class TestTargetsCard:

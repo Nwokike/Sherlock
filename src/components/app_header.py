@@ -6,7 +6,6 @@ Top-right: Version chip + theme cycle (3 modes) + settings gear + screen-specifi
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 
@@ -15,6 +14,7 @@ import flet as ft
 from core import tokens
 from core.constants import APP_VERSION, STORAGE_THEME
 from core.state import state as core_state
+from core.tasks import spawn
 from core.theme import AppColors, is_dark_mode
 
 logger = logging.getLogger("AppHeader")
@@ -129,6 +129,16 @@ def AppHeader(
         except Exception:
             pass
 
+        # Pooled banner ads capture their glass colours when first built, so a
+        # theme swap leaves stale light/dark glass on every banner until the
+        # app restarts. clear_banner_pool's own docstring already promises this.
+        try:
+            from components.banner_ad import clear_banner_pool
+
+            clear_banner_pool()
+        except Exception:
+            pass
+
         async def _persist():
             try:
                 from services.storage_service import StorageService
@@ -138,7 +148,7 @@ def AppHeader(
             except Exception as ex:
                 logger.warning("Failed to persist cycled theme: %s", ex)
 
-        asyncio.create_task(_persist())
+        spawn(_persist())
         try:
             page.update()
         except Exception:

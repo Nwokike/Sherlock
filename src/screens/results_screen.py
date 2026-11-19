@@ -10,7 +10,6 @@ Both modes support: filter bar, stat cards, cancel, export.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from typing import NamedTuple
@@ -24,6 +23,7 @@ from components.result_card import ResultCard
 from components.stat_card import StatCard
 from core import tokens
 from core.constants import ERR_OPEN_URL, MODE_EMAIL
+from core.tasks import spawn
 from core.theme import AppColors
 from hooks.use_debounce import use_debounce
 from state.app_state import AppStateCtx
@@ -105,12 +105,133 @@ def _resolve_username_view_data(state) -> _UsernameViewData:
     )
 
 
+def clamp_tab_index(tab_index: int, length: int) -> int:
+    """Clamp a shared tab index into a valid range for a Tabs of `length` tabs.
+
+    The tab index is shared across username mode (3 tabs) and email mode
+    (4 tabs): switching modes while sitting on email tab 3 would otherwise pass
+    ``selected_index=3`` to a ``length=3`` Tabs, and ``Tabs.before_update``
+    raises ``IndexError`` (flet 1.0.1 does not clamp).
+    """
+    if length <= 0:
+        return 0
+    return max(0, min(int(tab_index), length - 1))
+
+
+def _email_fingerprint(rows) -> tuple:
+    """Content fingerprint for email result dicts (memo dep).
+
+    Must cover every field `_make_email_card` reads. A tuple of
+    (name, flags) alone left a re-scanned row's recovery address, phone
+    number, domain and extras outside the memo deps, so the tab kept
+    rendering the previous scan's card — and its detail dialog stayed bound
+    to the stale dict.
+    """
+    try:
+        return tuple(
+            (
+                str(r.get("name", "")),
+                bool(r.get("exists")),
+                bool(r.get("rateLimit")),
+                bool(r.get("unavailable")),
+                str(r.get("domain", "") or ""),
+                str(r.get("method", "") or ""),
+                str(r.get("emailrecovery", "") or ""),
+                str(r.get("phoneNumber", "") or ""),
+                bool(r.get("frequent_rate_limit", False)),
+                str(r.get("others", "") or ""),
+            )
+            for r in (rows or [])
+        )
+    except Exception:
+        return (len(rows or []),)
+
+
+def _username_fingerprint(items) -> tuple:
+    """Content fingerprint for SiteResults (memo dep).
+
+    Covers every field `_make_username_card` renders — status alone is not
+    enough: a late re-check can set a URL, a tag or an error hint without
+    flipping the status, and the memo would keep showing the old card.
+    """
+    try:
+        return tuple(
+            (
+                str(getattr(r, "site_name", "")),
+                str(getattr(r, "status", "")),
+                str(getattr(r, "url_user", "") or ""),
+                str(getattr(r, "url_main", "") or ""),
+                str(getattr(r, "query_time", "")),
+                str(getattr(r, "error_type", "") or ""),
+                str(getattr(r, "error_hint", "") or ""),
+                str(getattr(r, "tags", "") or ()),
+                str(getattr(r, "protection", "") or ()),
+                str(getattr(r, "badge", "") or ""),
+                bool(getattr(r, "keyword_hit", False)),
+            )
+            for r in (items or ())
+        )
+    except Exception:
+        return (len(items or ()),)
+
+
+def _enrichment_fingerprint(enrichments) -> tuple:
+    """Content fingerprint for the enrichments map (memo dep).
+
+    Values are part of the fingerprint, not just keys: enrichment fills in
+    over time (a mutation extends an existing entry), and a keys-only tuple
+    left the card showing its first snapshot for the rest of the session.
+    """
+    try:
+        if not enrichments:
+            return ()
+        return tuple(
+            (
+                str(k),
+                str(sorted((str(kk), str(vv)) for kk, vv in v.items()))
+                if isinstance(v, dict)
+                else str(v),
+            )
+            for k, v in enrichments.items()
+        )
+    except Exception:
+        return (len(enrichments or {}),)
+
+
+# Banner spacing inside a results list: >10 results -> one banner every 10,
+# <=10 -> one every 5. Keeps density sane on short lists and prevents a
+# 5,200-hit list from becoming an ad wall. The per-list banner count is also
+# capped, since a ListView this long can hit either cap first.
+_BANNER_SPACING = 10
+_BANNER_SPACING_SHORT = 5
+_BANNER_SHORT_THRESHOLD = 10
+_BANNER_MAX_PER_LIST = 15
+
+
+def _banner_slots(count: int) -> list[int]:
+    """0-based card indices after which a banner is placed (owner rule:
+    every 10 results, or every 5 when the list is shorter than 10)."""
+    if count <= 0:
+        return []
+    # <=10 (not just <) takes the tighter spacing so a 10-result list is not
+    # an uncovered edge case.
+    spacing = (
+        _BANNER_SPACING_SHORT if count <= _BANNER_SHORT_THRESHOLD else _BANNER_SPACING
+    )
+    slots = list(range(spacing - 1, count - 1, spacing))
+    if len(slots) > _BANNER_MAX_PER_LIST:
+        step = len(slots) / _BANNER_MAX_PER_LIST
+        slots = [slots[int(i * step)] for i in range(_BANNER_MAX_PER_LIST)]
+    return slots
+
+
 def _build_result_list(
     items,
     empty_title: str,
     empty_msg: str,
     build_card,
     debounced_filter: str = "",
+    banner_at=None,
 ) -> Control:
     """Shared list builder with virtualization for large result sets.
 
@@ -118,6 +239,10 @@ def _build_result_list(
     Performance is handled by ListView virtualization (build_controls_on_demand,
     only visible cards are materialized) and the worker-thread engine isolation;
     hiding a user's results was never an acceptable trade-off.
+
+    `banner_at(i)` returns a banner control for the i-th banner slot; banners
+    come from a stable ref-backed pool so the 2Hz progress ticks never
+    re-request them. On desktop/web the pool entries are zero-size containers.
     """
     if not items:
         from components.empty_state import EmptyState
@@ -129,10 +254,41 @@ def _build_result_list(
             else empty_msg,
             icon=ft.Icons.SEARCH_OFF_ROUNDED,
         )
+    slots = _banner_slots(len(items))
+    controls = []
+    cursor = 0
+
+    def _cards(rows):
+        """Build cards, degrading one bad row instead of killing the screen.
+
+        Flet's update scheduler runs `for control in pending_updates:
+        control.update()` with NO try/except (.venv/flet/messaging/session.py
+        __updates_scheduler): a raise inside a component's render ends that
+        loop permanently and silently, so the whole UI freezes mid-scan and
+        nothing is logged. A single row with a hostile enrichment/location/
+        avatar payload used to take the entire Results screen down — the
+        "works, then stops" freeze. Skipping the row is strictly better than
+        a dead screen, and it is logged so a bad source is still visible.
+        """
+        for row in rows:
+            try:
+                controls.append(build_card(row))
+            except Exception:
+                logger.warning(
+                    "Skipping an unrenderable result row (%s)",
+                    getattr(row, "site_name", type(row).__name__),
+                    exc_info=True,
+                )
+
+    for ordinal, slot in enumerate(slots):
+        _cards(items[cursor : slot + 1])
+        controls.append(banner_at(ordinal))
+        cursor = slot + 1
+    _cards(items[cursor:])
     # ListView with build_controls_on_demand: cards materialize lazily as the
     # user scrolls, so even 5,200 entries stay smooth.
     return ft.ListView(
-        controls=[build_card(r) for r in items],
+        controls=controls,
         spacing=0,
         expand=True,
         build_controls_on_demand=True,
@@ -154,7 +310,7 @@ def ResultsScreen() -> Control:
     # Single source of truth for "a scan is live": the PIPELINE flag, not
     # progress.is_running (which flips False per-target the moment maigret
     # returns — owner saw Results say 'finished' while the banner still
-    # counted 504/509). Results and the ActiveScanBanner now agree.
+    # counted 504/509). Results and the shade progress bar now agree.
     is_running = bool(state.is_searching)
 
     # When a scan is actively running, derive the display mode from the
@@ -168,22 +324,47 @@ def ResultsScreen() -> Control:
     filter_query, set_filter_query = ft.use_state("")
     debounced_filter = use_debounce(filter_query, 250)
     tab_index, set_tab_index = ft.use_state(0)
+    # Stable inactive-tab placeholders: creating fresh Containers on every
+    # progress tick churned TabBarView child identity ~2x/sec and surfaced
+    # as a RangeError storm in the page-error log. Refs keep them stable so
+    # at most one child changes per tick.
+    _email_ph = ft.use_ref(lambda: [ft.Container() for _ in range(4)])
+    _username_ph = ft.use_ref(lambda: [ft.Container() for _ in range(3)])
+
+    # Interleaved in-list banners come from the shared screen-level pool, so
+    # the 2Hz progress ticks never re-request an ad (a fresh BannerAd per
+    # tick would burn requests and flash the slot).
+    def _banner_at(ordinal: int):
+        from components.banner_ad import pooled_banner_ad
+
+        return pooled_banner_ad(f"results-{ordinal}")
 
     def _open_url(url: str):
         async def _launch():
             from flet import context
 
             from core.notify import show_snack
+            from core.shared_services import shared_url_launcher
 
             try:
-                await ft.UrlLauncher().launch_url(url)
+                await shared_url_launcher().launch_url(url)
             except Exception as exc:
                 logger.warning("Failed to launch URL %s: %s", url, exc)
                 page = context.page
                 if page:
                     show_snack(page, ERR_OPEN_URL, bgcolor=AppColors.ERROR)
 
-        asyncio.create_task(_launch())
+        spawn(_launch())
+
+    def _pivot_search(handle: str):
+        """Re-run search with a discovered cross-platform handle."""
+        handle = (handle or "").strip().lstrip("@")
+        if not handle:
+            return
+        if "@" in handle:
+            spawn(controller.start_email_search(handle))
+        else:
+            spawn(controller.start_search(handle))
 
     def _show_username_details(r):
         from flet import context
@@ -192,7 +373,9 @@ def ResultsScreen() -> Control:
         if not page:
             return
         with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
+            from core.shared_services import shared_haptics
+
+            spawn(shared_haptics(page).light_impact())
         with contextlib.suppress(Exception):
             page.pop_dialog()
         enrich = (
@@ -210,6 +393,7 @@ def ResultsScreen() -> Control:
             url_main=r.url_main,
             query_time=r.query_time,
             enrichment=enrich,
+            on_pivot=_pivot_search,
         )
 
     def _show_email_details(r):
@@ -219,7 +403,9 @@ def ResultsScreen() -> Control:
         if not page:
             return
         with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
+            from core.shared_services import shared_haptics
+
+            spawn(shared_haptics(page).light_impact())
         with contextlib.suppress(Exception):
             page.pop_dialog()
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
@@ -291,7 +477,10 @@ def ResultsScreen() -> Control:
             raw_unavailable = [r for r in all_email if r.get("unavailable")]
             engine_total = 0
             total = state.email_total_modules or len(all_email) or 121
-            checked = total if all_email else 0
+            # Cached history has no live checked counter: report 0 so the
+            # progress section shows the indeterminate state instead of a
+            # fake 100% (checked == total masked partial/cancelled runs).
+            checked = 0
 
         def _make_email_card(r):
             if r.get("exists"):
@@ -318,24 +507,37 @@ def ResultsScreen() -> Control:
             )
 
         # Apply only-found filter (method filtering was removed together
-        # with old holehe — holehe-v2 validators carry no method metadata)
+        # with old holehe — holehe-v2 validators carry no method metadata).
+        # Keep raw_* intact for stats_row; the tabs/lists use shown_* so the
+        # stat cards report real totals even when only-found is on.
         only_found = getattr(state, "email_only_found", False)
 
-        raw_not_found = [] if only_found else raw_not_found
-        raw_rate_limited = [] if only_found else raw_rate_limited
-        raw_unavailable = [] if only_found else raw_unavailable
+        shown_not_found = [] if only_found else raw_not_found
+        shown_rate_limited = [] if only_found else raw_rate_limited
+        shown_unavailable = [] if only_found else raw_unavailable
 
-        email_found_filtered = _filter_by_name(
-            raw_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
-        )
-        email_not_found_filtered = _filter_by_name(
-            raw_not_found, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
-        )
+        def _email_filter_key(r):
+            parts = [r.get("name", "") or "", r.get("domain", "") or ""]
+            if r.get("emailrecovery"):
+                parts.append(str(r["emailrecovery"]))
+            if r.get("phoneNumber"):
+                parts.append(str(r["phoneNumber"]))
+            if r.get("method"):
+                parts.append(str(r["method"]))
+            others = r.get("others")
+            if isinstance(others, dict):
+                extra = others.get("extra")
+                if isinstance(extra, dict):
+                    parts.extend(str(v) for v in extra.values() if v)
+            return " ".join(parts)
+
+        email_found_filtered = _filter_by_name(raw_found, _email_filter_key)
+        email_not_found_filtered = _filter_by_name(shown_not_found, _email_filter_key)
         email_rate_limited_filtered = _filter_by_name(
-            raw_rate_limited, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+            shown_rate_limited, _email_filter_key
         )
         email_unavailable_filtered = _filter_by_name(
-            raw_unavailable, lambda r: f"{r.get('name', '')} {r.get('domain', '')}"
+            shown_unavailable, _email_filter_key
         )
 
         # Predictable alphabetical ordering (A-Z by platform name) across all tabs
@@ -377,14 +579,15 @@ def ResultsScreen() -> Control:
                 email_specs[min(tab_index, len(email_specs) - 1)][2],
                 _make_email_card,
                 debounced_filter,
+                banner_at=_banner_at,
             ),
             [
                 tab_index,
                 debounced_filter,
-                len(raw_found),
-                len(raw_not_found),
-                len(raw_rate_limited),
-                len(raw_unavailable),
+                _email_fingerprint(raw_found),
+                _email_fingerprint(shown_not_found),
+                _email_fingerprint(shown_rate_limited),
+                _email_fingerprint(shown_unavailable),
             ],
         )
         tabs = ft.Tabs(
@@ -421,10 +624,10 @@ def ResultsScreen() -> Control:
                     ),
                     ft.TabBarView(
                         controls=[
-                            email_slot if tab_index == 0 else ft.Container(),
-                            email_slot if tab_index == 1 else ft.Container(),
-                            email_slot if tab_index == 2 else ft.Container(),
-                            email_slot if tab_index == 3 else ft.Container(),
+                            email_slot if tab_index == 0 else _email_ph.current[0],
+                            email_slot if tab_index == 1 else _email_ph.current[1],
+                            email_slot if tab_index == 2 else _email_ph.current[2],
+                            email_slot if tab_index == 3 else _email_ph.current[3],
                         ],
                         expand=True,
                     ),
@@ -434,16 +637,40 @@ def ResultsScreen() -> Control:
             ),
             expand=True,
         )
+
+        # Stat cards double as tab selectors; every card uses the same
+        # neutral treatment so none reads as "the selected one" (the old
+        # dim Not-Found looked permanently highlighted).
+        def _goto_tab(idx):
+            set_tab_index(idx)
+
+        _neutral = ft.Colors.ON_SURFACE
         stats_row = ft.Row(
             controls=[
-                StatCard("Found", str(len(raw_found)), AppColors.SUCCESS),
+                StatCard(
+                    "Found",
+                    str(len(raw_found)),
+                    AppColors.SUCCESS,
+                    on_click=lambda e: _goto_tab(0),
+                ),
                 StatCard(
                     "Not Found",
                     str(len(raw_not_found)),
-                    ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                    _neutral,
+                    on_click=lambda e: _goto_tab(1),
                 ),
-                StatCard("Rate Ltd", str(len(raw_rate_limited)), AppColors.WARNING),
-                StatCard("Unavail", str(len(raw_unavailable)), AppColors.ERROR),
+                StatCard(
+                    "Rate Ltd",
+                    str(len(raw_rate_limited)),
+                    AppColors.WARNING,
+                    on_click=lambda e: _goto_tab(2),
+                ),
+                StatCard(
+                    "Unavail",
+                    str(len(raw_unavailable)),
+                    AppColors.ERROR,
+                    on_click=lambda e: _goto_tab(3),
+                ),
             ],
             spacing=tokens.SPACE_SM,
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
@@ -516,33 +743,64 @@ def ResultsScreen() -> Control:
 
         # P1-1: memoized active-tab card list (one use_memo per branch —
         # hook slot stays stable across email↔username mode switches).
-        _empty_title = "No matches" if debounced_filter else "No results yet"
-        _empty_msg = (
-            f'No results match "{debounced_filter}"'
-            if debounced_filter
-            else "Results will appear as the scan progresses."
-        )
-        username_lists = [found_items, notfound_items, error_items]
+        # Per-tab empty states mirror the email branch (email_specs).
+        if debounced_filter:
+            username_specs = [
+                (found_items, "No matches", f'No results match "{debounced_filter}"'),
+                (
+                    notfound_items,
+                    "No matches",
+                    f'No results match "{debounced_filter}"',
+                ),
+                (
+                    error_items,
+                    "No matches",
+                    f'No results match "{debounced_filter}"',
+                ),
+            ]
+        else:
+            username_specs = [
+                (
+                    found_items,
+                    "No results yet",
+                    "Results will appear as the scan progresses.",
+                ),
+                (
+                    notfound_items,
+                    "All claimed",
+                    "Every checked site confirmed this username is taken.",
+                ),
+                (
+                    error_items,
+                    "No errors",
+                    "All checks completed without errors.",
+                ),
+            ]
         username_slot = ft.use_memo(
             lambda: _build_result_list(
-                username_lists[min(tab_index, len(username_lists) - 1)],
-                _empty_title,
-                _empty_msg,
+                username_specs[min(tab_index, len(username_specs) - 1)][0],
+                username_specs[min(tab_index, len(username_specs) - 1)][1],
+                username_specs[min(tab_index, len(username_specs) - 1)][2],
                 _make_username_card,
                 debounced_filter,
+                banner_at=_banner_at,
             ),
             [
                 tab_index,
                 debounced_filter,
-                len(username_view.found),
-                len(username_view.not_found),
-                len(username_view.errors),
-                len(state.enrichments or {}),
+                _username_fingerprint(username_view.found),
+                _username_fingerprint(username_view.not_found),
+                _username_fingerprint(username_view.errors),
+                _enrichment_fingerprint(state.enrichments),
             ],
         )
 
+        # Username mode has 3 tabs (0-2) but tab_index is shared with email
+        # mode (4 tabs, 0-3): clamp so switching from email tab 3 cannot raise
+        # IndexError in Tabs.before_update.
+        username_tab_index = clamp_tab_index(tab_index, 3)
         tabs = ft.Tabs(
-            selected_index=tab_index,
+            selected_index=username_tab_index,
             length=3,
             on_change=lambda e: set_tab_index(e.control.selected_index),
             content=ft.Column(
@@ -568,9 +826,15 @@ def ResultsScreen() -> Control:
                     ),
                     ft.TabBarView(
                         controls=[
-                            username_slot if tab_index == 0 else ft.Container(),
-                            username_slot if tab_index == 1 else ft.Container(),
-                            username_slot if tab_index == 2 else ft.Container(),
+                            username_slot
+                            if username_tab_index == 0
+                            else _username_ph.current[0],
+                            username_slot
+                            if username_tab_index == 1
+                            else _username_ph.current[1],
+                            username_slot
+                            if username_tab_index == 2
+                            else _username_ph.current[2],
                         ],
                         expand=True,
                     ),
@@ -580,15 +844,28 @@ def ResultsScreen() -> Control:
             ),
             expand=True,
         )
+        _neutral = ft.Colors.ON_SURFACE
         stats_row = ft.Row(
             controls=[
-                StatCard("Found", str(len(username_view.found)), AppColors.SUCCESS),
+                StatCard(
+                    "Found",
+                    str(len(username_view.found)),
+                    AppColors.SUCCESS,
+                    on_click=lambda e: set_tab_index(0),
+                ),
                 StatCard(
                     "Not Found",
                     str(len(username_view.not_found)),
-                    ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                    _neutral,
+                    on_click=lambda e: set_tab_index(1),
                 ),
-                StatCard("Errors", str(len(username_view.errors)), AppColors.WARNING),
+                StatCard(
+                    "Errors",
+                    str(len(username_view.errors)),
+                    AppColors.WARNING,
+                    on_click=lambda e: set_tab_index(2),
+                ),
+                # Total is a summary, not a tab — stays a plain card.
                 StatCard("Total", str(total), ft.Colors.PRIMARY),
             ],
             spacing=tokens.SPACE_SM,
@@ -597,9 +874,10 @@ def ResultsScreen() -> Control:
         if username_view.is_cancelled:
             progress_label = f"Cancelled — {checked}/{total} checked"
         elif checked == 0 and username_view.engine_total == 0:
-            # Initializing phase — mirrors the ActiveScanBanner: the engine
-            # has not reported a single site yet, so a 0/N denominator is
-            # meaningless; show the same "Initializing..." state the banner
+            # Initializing phase — mirrors the shade progress notification:
+            # the engine has not reported a single site yet, so a 0/N
+            # denominator is meaningless; show the same "Initializing..."
+            # state the notification shows.
             # shows instead of a frozen 0/total bar.
             progress_label = "Initializing..."
         else:
@@ -664,8 +942,8 @@ def ResultsScreen() -> Control:
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
         # Indeterminate (value=None) while the engine has reported nothing —
-        # the same continuously-filling "Initializing" animation the
-        # ActiveScanBanner shows. Once the first site completes (or the
+        # the same continuously-filling "Initializing" animation the shade
+        # progress notification shows. Once the first site completes (or the
         # engine publishes its real denominator), switch to a determinate
         # 0..1 fraction.
         engine_known_total = username_view.engine_total or (

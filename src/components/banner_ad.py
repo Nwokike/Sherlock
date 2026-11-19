@@ -8,8 +8,8 @@ Revenue-critical sizing: the glass container stretches FULL WIDTH on every
 screen — Home/History/Results wrap their banners in shrink-wrap Columns
 (320px, left-aligned) while Settings' ListView forces full width, so a
 stretcher Row with an expand=True banner equalizes all screens to the
-Settings look. The ad itself stays pinned at its native 320x50 (AdSize
-banner) and is centered inside the stretched glass. Never set ``alignment``
+Settings look. The ad itself stays pinned at its native 320x50 (fixed
+width/height via LayoutControl) and is centered inside the stretched glass. Never set ``alignment``
 on a wide Container — it can expand to fill the parent's offer and caused
 the full-page regression. No SPONSORED label by design (removed
 intentionally 2026-09-03).
@@ -31,6 +31,38 @@ from core.constants import AD_BANNER_UNIT_ID
 from core.theme import adaptive_glass_bg, adaptive_glass_border
 
 logger = logging.getLogger(__name__)
+
+
+# Screen-level banners are constructed once and reused across re-renders.
+# A fresh BannerAd per render throws away a live ad (resetting AdMob's own
+# refresh cycle) and flashes the slot, so callers request from this pool by
+# slot key instead of building new controls. Desktop/web entries are the
+# cheap zero-size containers the function returns there.
+_BANNER_POOL: dict[str, Control] = {}
+
+
+def pooled_banner_ad(slot: str, page: ft.Page | None = None) -> Control:
+    """Return the banner for `slot`, building it once and reusing it after.
+
+    Safe to call from any render path: the same control object comes back
+    every time, so the ad is never re-requested by a re-render.
+    """
+    ad = _BANNER_POOL.get(slot)
+    if ad is None:
+        ad = build_banner_ad(page)
+        _BANNER_POOL[slot] = ad
+    return ad
+
+
+def clear_banner_pool() -> None:
+    """Drop every pooled banner (page teardown / theme change).
+
+    Pooled controls carry the page they were built under — their glass colors
+    are frozen at build time — so keeping them past a teardown would show a
+    stale theme and hold dead native views. The next render path simply
+    rebuilds what it needs.
+    """
+    _BANNER_POOL.clear()
 
 
 def build_banner_ad(page: ft.Page | None = None) -> Control:

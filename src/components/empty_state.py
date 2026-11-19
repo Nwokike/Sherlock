@@ -4,12 +4,15 @@ Modern, spacious empty state with circular icon backdrop.
 Plain function — testable without a renderer.
 """
 
+import logging
 from collections.abc import Callable
 
 import flet as ft
 from flet import Control
 
 from core import tokens
+
+logger = logging.getLogger("EmptyState")
 
 
 def EmptyState(
@@ -19,6 +22,11 @@ def EmptyState(
     on_action: Callable | None = None,
     icon: ft.IconData = ft.Icons.INFO_OUTLINE,
 ) -> Control:
+    if action_label and on_action is None:
+        logger.warning(
+            "EmptyState %r has an action label but no handler — button omitted",
+            title,
+        )
     items = [
         ft.Container(
             content=ft.Icon(

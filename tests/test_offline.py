@@ -30,7 +30,7 @@ class _StubSherlockService:
         self.search_calls += 1
         if self.fail:
             raise RuntimeError("connection failed: DNS lookup timed out")
-        return None
+        return
 
 
 class _FakeConnectivity:
@@ -47,6 +47,17 @@ class _FakeConnectivity:
 
 @pytest.fixture
 def controller(fake_page):
+    # Establish a clean slate BEFORE the test too: teardown-only restore
+    # leaks into whichever test runs next under a different file order.
+    state.is_online = True
+    state.is_searching = False
+    state.search_error = None
+    state.current_username = ""
+    # start_search also assigns search_progress and bumps progress_version
+    # before the service call; the online-failure test depends on that
+    # path, so both must round-trip.
+    saved_progress = state.search_progress
+    saved_version = state.progress_version
     c = AppController(fake_page)
     yield c
     # Restore singleton fields touched by these tests
@@ -54,6 +65,8 @@ def controller(fake_page):
     state.is_searching = False
     state.search_error = None
     state.current_username = ""
+    state.search_progress = saved_progress
+    state.progress_version = saved_version
 
 
 def _last_snack(page) -> ft.SnackBar:

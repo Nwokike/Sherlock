@@ -105,13 +105,28 @@ def human_date(value: object) -> str | None:
 
 
 def sites_total_label() -> str:
-    """The network count to advertise: the live DB total when loaded.
+    """The network count to advertise, from the live DB total.
 
     maigret's bundled database grows (it is live-updated), so a hardcoded
-    number drifts; prefer the loaded count and fall back only before load.
+    number drifts. Prefer the loaded count; before the load finishes, read
+    the installed package's own database metadata — never a literal.
     """
     from core.constants import SITES_TOTAL_FALLBACK
     from core.state import state
 
     total = getattr(state, "sites_total", 0) or 0
+    if total:
+        return format_count(total)
+    try:
+        import json
+        import pathlib
+
+        import maigret
+
+        meta = (
+            pathlib.Path(maigret.__file__).parent / "resources" / "db_meta.json"
+        )
+        total = int(json.loads(meta.read_text(encoding="utf-8")).get("sites_count") or 0)
+    except Exception:
+        total = 0
     return format_count(total or SITES_TOTAL_FALLBACK)

@@ -57,13 +57,11 @@ from core.constants import (
     STORAGE_MANIFEST,
     STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
-    STORAGE_NSFW,
     STORAGE_ONBOARDING_DONE,
     STORAGE_PERMUTE,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_RETRIES,
-    STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_KEYWORDS,
     STORAGE_SEARCH_MODE,
@@ -581,12 +579,6 @@ class AppController:
             else:
                 self.page.theme_mode = ft.ThemeMode.LIGHT
 
-            nsfw_raw = await self.storage.get(STORAGE_NSFW)
-            if nsfw_raw is not None:
-                state.nsfw_enabled = nsfw_raw == "true"
-            else:
-                state.nsfw_enabled = True
-
             excl_raw = await self.storage.get(STORAGE_EXCLUSIONS)
             if excl_raw is not None:
                 state.ignore_exclusions = excl_raw == "true"
@@ -618,7 +610,12 @@ class AppController:
                     names = json.loads(cache_raw)
                     if isinstance(names, list) and names:
                         state.sites_cache = sorted(names, key=str.lower)
-                        state.sites_total = len(names)
+                        # Deliberately NOT setting state.sites_total here: this
+                        # list is a warm hint from storage and can be stale (an
+                        # older database), which made the Home scope card show
+                        # the previous DB's count (e.g. 5.2k vs 10,310). The
+                        # count comes from load_sites(); before that the label
+                        # reads the installed database metadata.
                         state.sites_version += 1
                 except Exception:
                     logger.warning("Site cache unreadable; will repopulate on load")
@@ -748,10 +745,6 @@ class AppController:
             curl_raw = await self.storage.get(STORAGE_USE_CURL_CFFI)
             if curl_raw is not None:
                 state.use_curl_cffi = curl_raw == "true"
-
-            safe_raw = await self.storage.get(STORAGE_SAFE_SEARCH)
-            if safe_raw is not None:
-                state.safe_search = safe_raw == "true"
 
             cached_res_raw = await self.storage.get(STORAGE_CACHED_RESULTS)
             if cached_res_raw:

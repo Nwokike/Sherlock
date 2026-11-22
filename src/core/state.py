@@ -69,7 +69,6 @@ class AppState:
     results_cache: dict | None = None
 
     # --- Settings state ---
-    nsfw_enabled: bool = True
     ignore_exclusions: bool = False
     timeout: int = 15
     email_timeout: int = 10
@@ -112,7 +111,6 @@ class AppState:
     retries: int = 0
     dns_resolver: str = "threaded"
     use_curl_cffi: bool = True
-    safe_search: bool = False
 
     # --- Site database ---
     # Total sites in the active site database (0 until first load lands).

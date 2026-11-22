@@ -222,21 +222,20 @@ def test_results_leaves_initializing_once_a_tick_lands():
         state.search_targets = ["primaryuser"]
         state.is_searching = True
 
-        # Fresh scan, no tick yet: the shade owns progress, so the screen
-        # must not render an in-app "Initializing" label.
+        # Fresh scan, no tick yet: the bar is indeterminate ("Initializing").
         state.search_progress = SearchProgress(
             username="primaryuser", total_sites=0, is_running=True
         )
-        assert not any(
+        assert any(
             "Initializing" in t for t in _texts_of(_render_results())
-        ), "Results renders in-app progress; the shade owns progress"
+        ), "Results should start at the initializing state"
 
         # The engine's first tick, arriving the way a worker sends it:
         # `_progress_from_thread` coalesces on a 500ms window and the flush
         # that follows sets `_render_dirty` — that flag is the whole bridge
         # between "the engine reported a number" and "the screen shows it".
         first = SearchProgress(
-            username="primaryuser", total_sites=5200, is_running=True
+            username="primaryuser", total_sites=5200, checked_sites=52, is_running=True
         )
         loop = asyncio.new_event_loop()
         controller._main_loop = loop
@@ -254,13 +253,14 @@ def test_results_leaves_initializing_once_a_tick_lands():
             "the worker bridge never marked the render dirty — the engine "
             "would advance while the screen stays frozen"
         )
-        # Link 4: the shade owns progress now — the screen must NOT render an
-        # in-app progress label even after a real tick.
+        # Link 4: the screen climbs to the real percentage after a tick.
         labels = _texts_of(_render_results())
         assert not any("Initializing" in t for t in labels), (
-            "Results renders in-app progress; the shade owns progress"
+            "Results still shows Initializing after a real tick"
         )
-        assert not any("Checking" in t and "sites" in t for t in labels)
+        assert any("1%" in t for t in labels), (
+            "Results must show the climbing percentage"
+        )
     finally:
         _restore(snap)
 

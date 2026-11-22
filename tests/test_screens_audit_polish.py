@@ -37,7 +37,6 @@ def _restore_global_state():
         "ignore_exclusions": state.ignore_exclusions,
         "is_searching": state.is_searching,
         "no_password_recovery": state.no_password_recovery,
-        "nsfw_enabled": state.nsfw_enabled,
         "recursive_search": state.recursive_search,
         "scan_depth": state.scan_depth,
         "search_mode": state.search_mode,
@@ -117,7 +116,6 @@ def test_home_screen_features_copy_and_quick_chips():
     # Username mode chips
     state.search_mode = MODE_USERNAME
     state.scan_depth = "all"
-    state.nsfw_enabled = True
     state.recursive_search = False
     state.ignore_exclusions = False
 
@@ -126,8 +124,9 @@ def test_home_screen_features_copy_and_quick_chips():
 
     assert any("PDF dossiers" in t for t in texts)
     assert any("XMind mind maps" in t for t in texts)
-    assert any("Scope: All 5.2k" in t for t in texts)
-    assert any("Adult Sites: ON" in t for t in texts)
+    # The depth chip reads the live DB total, not a hardcoded literal.
+    assert any("Scope: All" in t for t in texts)
+    assert not any("5.2k" in t for t in texts)
     assert any("Recursive: OFF" in t for t in texts)
     assert any("Disabled Sites: OFF" in t for t in texts)
 
@@ -224,7 +223,6 @@ def test_settings_screen_all_engine_parameters_and_segmented_enrichment():
     # Check Maigret scan parameters
     assert any("Recursive OSINT Search" in t for t in texts)
     assert any("Profile Data Extraction" in t for t in texts)
-    assert any("Include Adult Sites" in t for t in texts)
     assert any("Include Disabled Sites" in t for t in texts)
     assert any("Request Retries" in t for t in texts)
     assert any("DNS Resolver Mode" in t for t in texts)

@@ -66,12 +66,3 @@ def test_slider_range_constants():
     assert re.search(r"min=4,\n.*max=30", src) is None
 
 
-def test_nsfw_single_writer_contract():
-    """_set_nsfw writes both keys; _toggle_safe_search routes through it."""
-    from pathlib import Path
-
-    src = Path("src/screens/settings_screen.py").read_text(encoding="utf-8")
-    assert "def _set_nsfw(val: bool):" in src
-    assert "STORAGE_SAFE_SEARCH" in src
-    home = Path("src/screens/home_screen.py").read_text(encoding="utf-8")
-    assert "STORAGE_SAFE_SEARCH" in home

@@ -123,10 +123,10 @@
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Flet 1.0.4 (Flutter 3.44) on Python 3.14 | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
-| **Scan Core** | `maigret 0.6.6` (11,000+ sites) + `holehe-v2 1.0.3` (181 validators) | Username + Email OSINT on isolated worker threads with private event loops |
-| **Stealth Email** | `curl-cffi 0.16.3` (Chrome 124 impersonation) | JA3/TLS fingerprint bypass for WAF-blocked email checks |
-| **Enrichment** | `socid-extractor 0.1.1` (164 schemes, 449 fields) | Post-scan avatar/bio/metrics via `batch_enrich` (Basic/Full `use_mutations`) |
+| **Frontend** | Flet 1.1.2 (Flutter 3.44) on Python 3.14 | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
+| **Scan Core** | `maigret 0.6.7` (11,000+ sites) + `holehe-v2 1.0.3` (181 validators) | Username + Email OSINT on isolated worker threads with private event loops |
+| **Stealth Email** | `curl-cffi 0.16.3` (Chrome 150 impersonation) | JA3/TLS fingerprint bypass for WAF-blocked email checks |
+| **Enrichment** | `socid-extractor 0.1.2` (272 schemes) | Post-scan avatar/bio/metrics via `batch_enrich` (Basic/Full `use_mutations`) |
 | **Reports** | `reportlab` + `xmind` + `networkx` | Gold PDF dossiers, XMind mind maps, identity network analytics |
 | **Ads** | `flet-ads 1.0.4` | `BannerAd 320×50` + `InterstitialAd` (every search, preload rotation) + UMP `ConsentManager` |
 | **Cache** | 6-layer pickle/JSON/png tiers under `.flet/storage` | Compiled DB (2.88× cold start), avatars, report fingerprints, geo, tag indices, DNS |

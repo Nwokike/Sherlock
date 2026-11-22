@@ -18,6 +18,7 @@ import logging
 
 import flet as ft
 
+from core import tokens
 from core.changelog import notes_for
 from core.constants import (
     APP_VERSION,
@@ -167,6 +168,38 @@ def _build_current_buttons(page: ft.Page) -> list[ft.Control]:
     ]
 
 
+def _changelog_rows(notes: str) -> list[ft.Control]:
+    """One row per changelog bullet.
+
+    The bundled changelog stores bullets as "• " lines; a single Markdown
+    blob collapses them into one paragraph (and wraps badly on a phone), so
+    each note gets its own row with a small marker — proot-distro's pattern.
+    """
+    rows: list[ft.Control] = []
+    for raw in (notes or "").splitlines():
+        line = raw.strip().lstrip("•").strip()
+        if not line:
+            continue
+        rows.append(
+            ft.Row(
+                controls=[
+                    ft.Icon(
+                        ft.Icons.CIRCLE, size=tokens.ICON_XS, color=AppColors.PRIMARY
+                    ),
+                    ft.Text(
+                        line,
+                        size=13,
+                        color=ft.Colors.ON_SURFACE,
+                        expand=True,
+                    ),
+                ],
+                spacing=tokens.SPACE_SM,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            )
+        )
+    return rows
+
+
 def show_update_dialog(page: ft.Page, update_data: dict | None = None):
     """Open the version dialog. Uses a fresh check result when given (the
     dialog's own Check button), else the observable state."""
@@ -221,18 +254,10 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
             controls=[
                 ft.Text(f"✓ Latest version · v{APP_VERSION}", size=13),
                 ft.Text("What's New:", size=13, weight=ft.FontWeight.W_600),
-                ft.Container(
-                    content=ft.Markdown(
-                        notes_for(APP_VERSION),
-                        selectable=True,
-                        extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-                        on_tap_link=lambda e: (
-                            _launch(page, safe)
-                            if (safe := _safe_link(getattr(e, "data", None)))
-                            else None
-                        ),
-                    ),
-                    width=None,  # fill the derived dialog width; a fixed 360 overflowed narrow phones
+                ft.Column(
+                    controls=_changelog_rows(notes_for(APP_VERSION)),
+                    spacing=tokens.SPACE_SM,
+                    tight=True,
                 ),
             ],
             spacing=8,

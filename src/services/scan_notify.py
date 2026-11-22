@@ -224,13 +224,29 @@ class ScanNotifier:
             return False
 
     def progress(self, checked: int, total: int) -> None:
-        """Advance the FGS progress bar (caller throttles to ~2 Hz)."""
-        if not self._fgs_running or self._service is None:
+        """Advance the shade progress bar (caller throttles to ~2 Hz).
+
+        Post on every platform. On Android this updates the foreground
+        service's notification in place (same id); where a foreground service
+        is unavailable (desktop `flet run`) it still surfaces the percentage
+        as a normal notification. The Results screen shows the same numbers.
+        """
+        if self._service is None:
             return
         pct = int(checked / max(total, 1) * 100) if total else 0
+
+        async def _safe_show(*args, **kwargs):
+            # page.run_task re-raises an unawaited task's exception into the
+            # session logger ("NotificationException: Session closed"), so a
+            # post during teardown must swallow it here.
+            try:
+                await self._service.show(*args, **kwargs)
+            except Exception as exc:
+                logger.debug("ScanNotifier: progress post failed: %s", exc)
+
         try:
             self.page.run_task(
-                self._service.show,
+                _safe_show,
                 NOTIF_ID_SCAN,
                 title="Sherlock",
                 body=f"{checked}/{total} checked" if total else "Preparing…",

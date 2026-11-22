@@ -396,14 +396,24 @@ def SitesScreen() -> Control:
         lambda: sorted(state.sites_cache or [], key=str.lower),
         [state.sites_version],
     )
-    # Lowered tag sets, hoisted out of the per-row loop (O(N·T) per frame).
-    lowered_tags = ft.use_memo(
-        lambda: {
-            n: frozenset(str(t).lower() for t in (tags or []))
-            for n, tags in ((getattr(state, "sites_tags_map", {}) or {}).items())
-        },
-        [state.sites_version],
-    )
+    # Lowered tag sets are built LAZILY and only when a tag filter names a tag
+    # the live index doesn't know. Building 10,000+ frozensets on every render
+    # (and touching them per keystroke) was the lag on the Customize screen.
+    _tags_cache = ft.use_ref(None)
+    _tags_cache_version = ft.use_ref(None)
+
+    def _tags_map() -> dict:
+        if (
+            _tags_cache_version.current != state.sites_version
+            or _tags_cache.current is None
+        ):
+            _tags_cache.current = {
+                n: frozenset(str(t).lower() for t in (tags or []))
+                for n, tags in ((getattr(state, "sites_tags_map", {}) or {}).items())
+            }
+            _tags_cache_version.current = state.sites_version
+        return _tags_cache.current
+
     tag_buckets = ft.use_memo(
         lambda: {
             str(k).lower(): frozenset(v or [])
@@ -418,18 +428,16 @@ def SitesScreen() -> Control:
             tag_buckets.get(selected_tag.lower()) if selected_tag != "all" else None
         )
         if selected_tag != "all" and bucket is None:
+            # Tag not in the live index: fall back to the per-site tag map.
+            needle = selected_tag.lower()
             bucket = frozenset(
-                n for n, ts in lowered_tags.items() if selected_tag.lower() in ts
+                n for n, ts in _tags_map().items() if needle in ts
             )
         out = []
         for name in canonical_names:
             if bucket is not None and name not in bucket:
                 continue
-            if (
-                q
-                and q not in name.lower()
-                and not any(q in t for t in lowered_tags.get(name, ()))
-            ):
+            if q and q not in name.lower():
                 continue
             out.append(name)
         return out

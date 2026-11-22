@@ -27,12 +27,17 @@ UPDATE_CONFIG_URL = (
 )
 PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=ng.kiri.sherlock"
 GITHUB_RELEASES_URL = "https://github.com/Nwokike/Sherlock/releases/latest"
+REPO_URL = "https://github.com/Nwokike/Sherlock"
+# Owner's contact for the Settings → Contact developer row (proot-distro's
+# settings uses the same pattern).
+CONTACT_EMAIL = "onyeka@kiri.ng"
+# The owner's other apps live under this developer account.
+MORE_APPS_URL = "https://github.com/Nwokike?tab=repositories"
 
 # ── Storage keys ──────────────────────────────────────────────────────
 STORAGE_HISTORY = "sherlock_history"
 STORAGE_THEME = "sherlock_theme"
 STORAGE_CACHED_SITES = "sherlock_cached_sites"
-STORAGE_NSFW = "sherlock_nsfw"
 STORAGE_EXCLUSIONS = "sherlock_exclusions"
 STORAGE_TIMEOUT = "sherlock_timeout"
 STORAGE_LOCAL_DB = "sherlock_local_db"
@@ -64,7 +69,6 @@ STORAGE_MAX_CONNECTIONS = "sherlock_max_connections"
 STORAGE_RETRIES = "sherlock_retries"
 STORAGE_DNS_RESOLVER = "sherlock_dns_resolver"
 STORAGE_USE_CURL_CFFI = "sherlock_use_curl_cffi"
-STORAGE_SAFE_SEARCH = "sherlock_safe_search"
 
 # ── Search modes ──────────────────────────────────────────────────────
 MODE_USERNAME = "username"

@@ -916,13 +916,86 @@ def ResultsScreen() -> Control:
             bottom=tokens.SPACE_SM,
         ),
     )
-    # No in-app progress bar or Cancel button: the OS shade owns both
-    # (foreground-service notification with a determinate bar + Cancel
-    # action), and the app shows only the tiny "Scanning…" pill in AppHeader.
-    # Results below still render live as the engine reports them.
+    # Live progress stays in-app: a scan opens this screen and the owner
+    # expects the bar to climb from 1% to 100% here. The shade notification
+    # mirrors the same numbers for when the user is elsewhere — both show it.
+    progress_section = ft.Container(width=0, height=0)
+    if is_running and active_progress:
+        engine_known_total = username_view.engine_total or (
+            getattr(active_progress, "total_modules", 0) or 0
+        )
+        if username_view.checked == 0 and engine_known_total == 0:
+            progress_val = None
+        elif username_view.total > 0:
+            progress_val = username_view.checked / username_view.total
+        else:
+            progress_val = None
+        is_email_progress = hasattr(active_progress, "checked_modules")
+        noun = "platforms" if is_email_progress else "sites"
+        if getattr(active_progress, "is_cancelled", False):
+            progress_label = (
+                f"Cancelled — {username_view.checked}/{username_view.total} checked"
+            )
+        elif progress_val is None:
+            progress_label = "Initializing..."
+        else:
+            progress_label = (
+                f"Checking {username_view.checked}/{username_view.total} {noun} "
+                f"({int(progress_val * 100)}%)..."
+            )
+
+        def cancel_callback(e):
+            if is_email_progress:
+                controller.cancel_email_search()
+            else:
+                controller.cancel_search()
+
+        progress_section = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.ProgressBar(
+                        value=progress_val,
+                        color=ft.Colors.PRIMARY,
+                        bgcolor=ft.Colors.with_opacity(
+                            tokens.OPACITY_LIGHT, ft.Colors.PRIMARY
+                        ),
+                        height=tokens.PROGRESS_BAR_HEIGHT,
+                    ),
+                    ft.Row(
+                        controls=[
+                            ft.Text(
+                                progress_label,
+                                size=tokens.FONT_SM,
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                                ),
+                            ),
+                            ft.Container(expand=True),
+                            ft.TextButton(
+                                content=ft.Text(
+                                    "Cancel",
+                                    size=tokens.FONT_SM,
+                                    color=AppColors.ERROR,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                on_click=cancel_callback,
+                            ),
+                        ]
+                    ),
+                ],
+                spacing=tokens.SPACE_XS,
+            ),
+            padding=ft.Padding(
+                left=tokens.SPACE_XL,
+                right=tokens.SPACE_XL,
+                top=tokens.SPACE_SM,
+                bottom=0,
+            ),
+        )
 
     return ft.Column(
         controls=[
+            progress_section,
             stats_card,
             filter_box,
             tabs,

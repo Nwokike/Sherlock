@@ -303,8 +303,10 @@ def AppHeader(
             pill = _scan_pill(nav)
 
     if pill is not None:
+        # BELOW the header, not above it: the owner wants the scanning chip to
+        # sit after the header row, not before it.
         return ft.Container(
-            content=ft.Column(controls=[pill, header_row], spacing=0, tight=True),
+            content=ft.Column(controls=[header_row, pill], spacing=0, tight=True),
             padding=ft.Padding(
                 left=tokens.SPACE_LG,
                 top=tokens.SPACE_SM,

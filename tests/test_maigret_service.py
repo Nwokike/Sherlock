@@ -92,7 +92,6 @@ def test_query_notify_accumulation():
 
 def test_sherlock_service_load_sites():
     async def scenario():
-        state.nsfw_enabled = False
         state.ignore_exclusions = False
         svc = SherlockService()
         count = await svc.load_sites(force=True)

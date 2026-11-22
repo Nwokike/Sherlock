@@ -887,7 +887,7 @@ def _run_maigret_worker_thread(
                     break
                 if id_type == "username":
                     # Rank-ordered slice of the user's own scope — bounded
-                    # even when the primary scan is "All 5.2k".
+                    # even when the primary scan covers every network.
                     sites2: dict[str, Any] = dict(
                         list(sites_to_scan.items())[:RECURSIVE_USERNAME_SITES]
                     )
@@ -898,7 +898,6 @@ def _run_maigret_worker_thread(
                         sites2 = db.ranked_sites_dict(
                             top=SCAN_ALL,
                             disabled=app_state.ignore_exclusions,
-                            excluded_tags=([] if app_state.nsfw_enabled else ["nsfw"]),
                             id_type=id_type,
                         )
                     except Exception as exc:
@@ -1063,7 +1062,6 @@ class SherlockService:
             state.custom_manifest.strip() if state.custom_manifest else "",
             state.use_local_db,
             state.ignore_exclusions,
-            state.nsfw_enabled,
             state.scan_depth,
             tuple(state.unhealthy_sites or ()),
         )
@@ -1106,8 +1104,9 @@ class SherlockService:
 
             self._db = await asyncio.to_thread(_load_db)
 
-            # Build sites dict according to NSFW & exclusion settings and scan depth
-            excluded_tags = [] if state.nsfw_enabled else ["nsfw"]
+            # Build sites dict according to the exclusion settings and scan
+            # depth. (maigret 0.6.7's database carries no "nsfw" tag anymore,
+            # so there is nothing for an adult-content filter to match.)
             top_limit = (
                 500
                 if state.scan_depth == "500"
@@ -1116,7 +1115,6 @@ class SherlockService:
             sites_dict = self._db.ranked_sites_dict(
                 top=top_limit,
                 disabled=state.ignore_exclusions,
-                excluded_tags=excluded_tags,
                 id_type="username",
             )
             # P3-6: drop sites the sampled DB-health panel flagged on the
@@ -1268,14 +1266,29 @@ class SherlockService:
         # Cloudflare webgate bypass via a self-hosted FlareSolverr. Only
         # built when the user opts in AND configured a solver URL; maigret
         # logs an unreachable solver and carries on, so this is never fatal.
+        # The config is built by MAIGRET'S OWN builder (checking.py
+        # build_cloudflare_bypass_config) so the trigger_protection defaults
+        # and module validation come from the engine, not from us.
         cloudflare_bypass = None
         if bool(getattr(state, "cloudflare_bypass", False)):
             _solver = (getattr(state, "flaresolverr_url", "") or "").strip()
             if _solver:
-                cloudflare_bypass = {
-                    "enabled": True,
-                    "modules": [{"method": "json_api", "url": _solver}],
-                }
+                from types import SimpleNamespace
+
+                from maigret.checking import build_cloudflare_bypass_config
+
+                _settings = SimpleNamespace(
+                    cloudflare_bypass={
+                        "enabled": True,
+                        "modules": [{"method": "json_api", "url": _solver}],
+                    }
+                )
+                cloudflare_bypass = build_cloudflare_bypass_config(_settings)
+                if cloudflare_bypass is None:
+                    logger.warning(
+                        "Cloudflare bypass enabled but the solver config was "
+                        "rejected by maigret — continuing without it"
+                    )
 
         # Bridge the worker-thread primary-completion hook to the caller's
         # (target, found, total) signature — main saves history through it.

@@ -4,12 +4,13 @@ current APP_VERSION in sync when bumping (guarded by tests)."""
 
 CHANGELOG: dict[str, str] = {
     "2.3.0": (
-        "• Username permutations: scan separator variants with one toggle\n"
-        "• Profile dates humanized everywhere: cards, dossier, reports\n"
-        "• Paste a profile URL into search — the handle is pulled out for you\n"
-        "• Email scans retry once through rate limits; cancels now always land\n"
-        "• Gravatar fallback avatars, database stats header\n"
-        "• 386 tests, full lint-rule suite, ad subsystem untouched"
+        "• Scans now live in the notification shade: a foreground-service progress bar with a Cancel action, so you can leave the app and still watch or stop the hunt\n"
+        "• Wake lock keeps the screen on while a scan runs\n"
+        '• A tiny tappable "Scanning…" pill is the only in-app indicator — tap it to open Results\n'
+        "• 11,000+ networks via Maigret 0.6.7, with a live count and an optional Cloudflare-bypass solver\n"
+        "• Email checks retry through rate limits and render recovery details; TLS fingerprint bumped to chrome150\n"
+        "• Flet, flet-ads and flet-notifications upgraded to 1.1.2\n"
+        "• Release notes on every build are generated from this changelog"
     ),
     "2.2.0": (
         "• 5,200+ platforms: Maigret 0.6.6 database doubled\n"
@@ -34,6 +35,25 @@ CHANGELOG: dict[str, str] = {
 }
 
 
+def _version_key(version: str) -> tuple[tuple[int, ...], str]:
+    """Stdlib dotted-int sort key ('1.10.0' > '1.9.0'); odd suffixes sort
+    by their raw string so ordering stays deterministic."""
+    head = version.split("-", 1)[0].split("+", 1)[0]
+    parts = head.split(".")
+    if all(p.isdigit() for p in parts):
+        return (tuple(int(p) for p in parts), version)
+    return ((), version)
+
+
 def notes_for(version: str) -> str:
-    """Changelog entry for a version, falling back to the latest entry."""
-    return CHANGELOG.get(version) or next(iter(CHANGELOG.values()), "")
+    """Changelog entry for a version, falling back to the NEWEST entry.
+
+    Dict insertion order is not guaranteed to be newest-first once older
+    versions are appended below the head, so the fallback picks the highest
+    version key.
+    """
+    if version in CHANGELOG:
+        return CHANGELOG[version]
+    if not CHANGELOG:
+        return ""
+    return CHANGELOG[max(CHANGELOG, key=_version_key)]

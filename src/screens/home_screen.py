@@ -26,9 +26,7 @@ from core.constants import (
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
     STORAGE_NO_PASSWORD_RECOVERY,
-    STORAGE_NSFW,
     STORAGE_RECURSIVE_SEARCH,
-    STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_MODE,
     STORAGE_TIMEOUT,
@@ -466,28 +464,6 @@ def HomeScreen(banner: Control | None = None) -> Control:
         state.progress_version += 1
         _persist(STORAGE_RECURSIVE_SEARCH, "true" if new_val else "false")
 
-    def _toggle_nsfw(e):
-        new_val = not state.nsfw_enabled
-        state.nsfw_enabled = new_val
-        state.safe_search = not new_val
-        state.progress_version += 1
-        # Persist BOTH keys (single-writer contract with Settings:
-        # nsfw_enabled is engine truth, safe_search its mirror).
-
-        async def _save_both():
-            try:
-                from services.storage_service import StorageService
-
-                storage = StorageService.for_page(_get_page())
-                await storage.set(STORAGE_NSFW, "true" if new_val else "false")
-                await storage.set(STORAGE_SAFE_SEARCH, "false" if new_val else "true")
-                if controller.refresh_sites:
-                    await controller.refresh_sites()
-            except Exception as exc:
-                logger.debug("Home persist failed: %s", exc)
-
-        spawn(_save_both())
-
     def _toggle_exclusions(e):
         new_val = not state.ignore_exclusions
         state.ignore_exclusions = new_val
@@ -732,7 +708,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
         ]
     else:
         depth_labels = {
-            "all": "Scope: All 5.2k",
+            "all": f"Scope: All {sites_total_label()}",
             "1000": "Scope: Top 1k",
             "500": "Scope: Top 500",
         }
@@ -740,7 +716,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
         chips = [
             _category_chip(
                 icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED,
-                label=depth_labels.get(curr_depth, "Scope: All 5.2k"),
+                label=depth_labels.get(curr_depth, f"Scope: All {sites_total_label()}"),
                 color=AppColors.PRIMARY,
                 is_active=curr_depth != "all",
                 on_click=_cycle_scan_depth,
@@ -762,13 +738,6 @@ def HomeScreen(banner: Control | None = None) -> Control:
                 else AppColors.GREY,
                 is_active=getattr(state, "recursive_search", False),
                 on_click=_toggle_recursive_search,
-            ),
-            _category_chip(
-                icon=ft.Icons.BLOCK_ROUNDED,
-                label="Adult Sites: ON" if state.nsfw_enabled else "Adult Sites: OFF",
-                color=AppColors.PRIMARY if state.nsfw_enabled else AppColors.GREY,
-                is_active=state.nsfw_enabled,
-                on_click=_toggle_nsfw,
             ),
             _category_chip(
                 icon=ft.Icons.SHIELD_ROUNDED,

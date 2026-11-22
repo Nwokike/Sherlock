@@ -23,6 +23,11 @@ from core.constants import (
     APP_BUILD_NUMBER,
     APP_NAME,
     APP_VERSION,
+    CONTACT_EMAIL,
+    GITHUB_RELEASES_URL,
+    MORE_APPS_URL,
+    PLAY_STORE_URL,
+    REPO_URL,
     STORAGE_CHECK_DOMAINS,
     STORAGE_CLOUDFLARE_BYPASS,
     STORAGE_COOKIES_PATH,
@@ -41,12 +46,10 @@ from core.constants import (
     STORAGE_MANIFEST,
     STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
-    STORAGE_NSFW,
     STORAGE_PERMUTE,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_RETRIES,
-    STORAGE_SAFE_SEARCH,
     STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_KEYWORDS,
     STORAGE_THEME,
@@ -291,6 +294,15 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
     # Narrow screens stack each setting's control under its description —
     # one-line rows squeeze subtitles and overflow SegmentedButtons.
+    # Re-evaluate on resize too: the window can shrink after this component
+    # mounted, and without a rebuild the rows keep the wide layout and warp.
+    _narrow_version, set_narrow_version = ft.use_state(0)
+    if page is not None:
+
+        def _on_resize(e):
+            set_narrow_version(_narrow_version + 1)
+
+        page.on_resize = _on_resize
     narrow = bool(page and getattr(page, "width", None) and page.width < 600)
     is_mobile = bool(page and hasattr(page, "platform") and page.platform.is_mobile())
 
@@ -377,22 +389,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             on_click=lambda e, m=mode: spawn(_on_theme_change(m)),
             animate=ft.Animation(tokens.ANIM_FAST, ft.AnimationCurve.EASE_OUT),
         )
-
-    def _set_nsfw(val: bool):
-        """Single writer for the NSFW toggle pair.
-
-        The engine reads only ``nsfw_enabled``; ``safe_search`` is kept as a
-        derived mirror so the two storage keys can never diverge.
-        """
-        state.nsfw_enabled = bool(val)
-        state.safe_search = not bool(val)
-        spawn(_persist(STORAGE_NSFW, "true" if val else "false"))
-        spawn(_persist(STORAGE_SAFE_SEARCH, "false" if val else "true"))
-        if controller.refresh_sites:
-            spawn(controller.refresh_sites())
-
-    def _toggle_nsfw(val: bool):
-        _set_nsfw(bool(val))
 
     def _toggle_exclusions(val: bool):
         state.ignore_exclusions = val
@@ -660,9 +656,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         state.use_curl_cffi = val
         spawn(_persist(STORAGE_USE_CURL_CFFI, "true" if val else "false"))
 
-    def _toggle_safe_search(val: bool):
-        _set_nsfw(not val)
-
     async def _persist(key: str, value: str):
         try:
             from flet import context
@@ -801,21 +794,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             ft.Switch(
                 value=state.ignore_exclusions,
                 on_change=lambda e: _toggle_exclusions(e.control.value),
-                active_color=ft.Colors.PRIMARY,
-            ),
-            stacked=narrow,
-        ),
-        ft.Divider(
-            height=1,
-            color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-        ),
-        _setting_row(
-            ft.Icons.BLOCK_ROUNDED,
-            "Include Adult Sites",
-            "Include NSFW, dating, and adult networks in scans",
-            ft.Switch(
-                value=state.nsfw_enabled,
-                on_change=lambda e: _toggle_nsfw(e.control.value),
                 active_color=ft.Colors.PRIMARY,
             ),
             stacked=narrow,
@@ -1007,7 +985,10 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 "Choose between full sweep or top Alexa-ranked networks",
                 ft.SegmentedButton(
                     segments=[
-                        ft.Segment(value="all", label=ft.Text("All 5.2k", size=10)),
+                        ft.Segment(
+                            value="all",
+                            label=ft.Text(f"All {sites_total_label()}", size=10),
+                        ),
                         ft.Segment(value="1000", label=ft.Text("Top 1k", size=10)),
                         ft.Segment(value="500", label=ft.Text("Top 500", size=10)),
                     ],
@@ -1048,7 +1029,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.FLASH_ON_ROUNDED,
                 "Bundled Database",
-                "Use local bundled 5.2k database (faster startup)",
+                f"Use local bundled {sites_total_label()} database (faster startup)",
                 ft.Switch(
                     value=state.use_local_db,
                     on_change=lambda e: _toggle_local_db(e.control.value),
@@ -1210,6 +1191,95 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     bottom=tokens.SPACE_LG,
                 ),
                 alignment=ft.Alignment.CENTER,
+            ),
+        ]
+    )
+
+    # Help & feedback — the proot-distro settings pattern: contact the
+    # developer, rate the app, and the owner's other apps, all reachable.
+    def _open_link(url: str):
+        async def _go():
+            try:
+                from core.shared_services import shared_url_launcher
+
+                await shared_url_launcher(page).launch_url(url)
+            except Exception as exc:
+                logger.warning("Could not open %s: %s", url, exc)
+
+        spawn(_go())
+
+    def _link_row(icon, title: str, subtitle: str, url: str) -> ft.Control:
+        return ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(icon, size=tokens.ICON_MD, color=AppColors.PRIMARY),
+                    ft.Column(
+                        controls=[
+                            ft.Text(
+                                title, size=tokens.FONT_MD, weight=ft.FontWeight.W_500
+                            ),
+                            ft.Text(
+                                subtitle,
+                                size=tokens.FONT_XS,
+                                color=ft.Colors.with_opacity(
+                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                                ),
+                            ),
+                        ],
+                        spacing=tokens.SPACE_XXS,
+                        expand=True,
+                    ),
+                    ft.Icon(
+                        ft.Icons.OPEN_IN_NEW_ROUNDED,
+                        size=tokens.ICON_SM,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                ],
+                spacing=tokens.SPACE_MD,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(
+                tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM
+            ),
+            ink=True,
+            on_click=lambda e, u=url: _open_link(u),
+        )
+
+    help_card = _settings_card(
+        [
+            _link_row(
+                ft.Icons.MAIL_OUTLINE_ROUNDED,
+                "Contact developer",
+                CONTACT_EMAIL,
+                f"mailto:{CONTACT_EMAIL}",
+            ),
+            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            _link_row(
+                ft.Icons.STAR_ROUNDED,
+                "Rate 5 stars",
+                "Open the Play Store listing",
+                PLAY_STORE_URL,
+            ),
+            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            _link_row(
+                ft.Icons.APPS_ROUNDED,
+                "More apps from Kiri",
+                "Sherlock, CollabShell, DDGS and more",
+                MORE_APPS_URL,
+            ),
+            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            _link_row(
+                ft.Icons.CODE_ROUNDED,
+                "Source code",
+                "README, issues and releases",
+                REPO_URL,
+            ),
+            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            _link_row(
+                ft.Icons.NEW_RELEASES_ROUNDED,
+                "Releases",
+                "Changelogs for every build",
+                GITHUB_RELEASES_URL,
             ),
         ]
     )
@@ -1564,6 +1634,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             logs_card,
             SectionHeader("ABOUT"),
             about_card,
+            SectionHeader("HELP & FEEDBACK"),
+            help_card,
             ft.Container(height=tokens.SPACE_XXXL),
         ],
         spacing=0,

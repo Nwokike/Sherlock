@@ -296,7 +296,7 @@ def get_graph_analytics(G: Any) -> dict:
     try:
         from networkx.algorithms.community import greedy_modularity_communities
 
-        comms = list(greedy_modularity_communities(G))
+        comms = list(greedy_modularity_communities(G, weight="weight"))
         communities = sorted(
             (
                 {
@@ -334,7 +334,18 @@ def get_graph_analytics(G: Any) -> dict:
         except Exception as exc:
             logger.debug("Betweenness skipped: %s", exc)
         try:
-            pr = nx.pagerank(G)
+            try:
+                pr = nx.pagerank(G)
+            except Exception as exc:
+                # networkx delegates pagerank to pagerank_scipy, which needs
+                # numpy/scipy — not installed on the device. The pure-Python
+                # eigenvector centrality covers the same "who matters" view.
+                logger.debug("PageRank (scipy) unavailable: %s", exc)
+                try:
+                    pr = nx.eigenvector_centrality(G, max_iter=500)
+                except Exception as exc2:
+                    logger.debug("Eigenvector centrality unavailable: %s", exc2)
+                    pr = {}
             top_pagerank = sorted(
                 (
                     {"id": n, "label": G.nodes[n].get("label", n), "score": round(s, 3)}
@@ -452,9 +463,11 @@ def export_pyvis_html(
             select_menu=True,
             filter_menu=True,
         )
+        kept: set = set()
         for n, d in G.nodes(data=True):
             if kinds is not None and d.get("kind") not in kinds:
                 continue
+            kept.add(n)
             net.add_node(
                 n,
                 label=str(d.get("label", n)),
@@ -463,15 +476,42 @@ def export_pyvis_html(
                 size=int(d.get("size", 12)),
             )
         for u, v, d in G.edges(data=True):
+            # pyvis asserts both endpoints exist; with kinds= filtered out a
+            # node, its edges must be skipped or the whole export returns None.
+            if u not in kept or v not in kept:
+                continue
             reason = str(d.get("reason", "linked"))
+            # Reason-specific edge colors so relationship types are legible.
+            edge_colors = {
+                "member": "#8C6B1A",
+                "registered_email": "#D4AF37",
+                "recovery_hint": "#4FC3F7",
+                "recovery_phone": "#4FC3F7",
+                "linked": "#D4AF37",
+            }
             net.add_edge(
                 u,
                 v,
                 title=reason,
-                color="#8C6B1A" if "member" in reason else "#D4AF37",
+                color=edge_colors.get(reason, "#D4AF37"),
             )
         try:
             net.toggle_physics(physics)
+        except Exception:
+            pass
+        # Physics tuning: force-atlas spreads the identity clusters instead of
+        # collapsing them into a hairball (the old default was unconfigured).
+        try:
+            net.set_options(
+                """{
+                  "physics": {"forceAtlas2Based": {"gravitationalConstant": -50,
+                             "centralGravity": 0.01, "springLength": 120,
+                             "springConstant": 0.08},
+                             "maxVelocity": 40, "solver": "forceAtlas2Based",
+                             "timestep": 0.3},
+                  "edges": {"smooth": {"type": "continuous"}, "color": {"inherit": false}}
+                }"""
+            )
         except Exception:
             pass
         out = Path(out_path)

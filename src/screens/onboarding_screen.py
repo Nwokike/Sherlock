@@ -14,6 +14,7 @@ from flet import Control
 
 from core import tokens
 from core.constants import STORAGE_ONBOARDING_DONE
+from core.format import sites_total_label
 from core.tasks import spawn
 from core.theme import AppColors, is_dark_mode
 
@@ -24,7 +25,7 @@ _SLIDES = [
         "use_app_icon": True,
         "icon": None,
         "color": AppColors.PRIMARY,
-        "title": "Hunt Across\n5,200+ Networks",
+        "title": f"Hunt Across\n{sites_total_label()} Networks",
         "body": (
             "Scan major social platforms simultaneously — GitHub, X, "
             "Instagram, TikTok, Reddit, Spotify, and more — to find active "
@@ -124,7 +125,7 @@ def OnboardingScreen() -> Control:
             else:
                 from services.storage_service import StorageService
 
-                storage = StorageService(page)
+                storage = StorageService.for_page(page)
                 await storage.set(STORAGE_ONBOARDING_DONE, "true")
                 await storage.flush()
         except Exception:

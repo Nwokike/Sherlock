@@ -151,9 +151,13 @@ class TestTargetsCard:
         assert any("25 networks selected" in (t.value or "") for t in texts)
 
     def test_fallback_label_when_total_unknown(self):
+        from core.format import sites_total_label
+
         tree = TargetsCard(selected_count=0, total_count=0, on_open=lambda: None)
         texts = list(walk_texts(tree))
-        assert any("5,200+" in (t.value or "") for t in texts)
+        # No loaded DB yet: the live-count helper falls back to the bundled
+        # database size (11,071 as of maigret 0.6.7).
+        assert any(sites_total_label() in (t.value or "") for t in texts)
 
     def test_tap_triggers_on_open(self):
         fired = []

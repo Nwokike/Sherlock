@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  Dual-mode OSINT — hunt usernames across 5,200+ networks and emails across 180+ platforms simultaneously
+  Dual-mode OSINT — hunt usernames across 11,000+ networks and emails across 180+ platforms simultaneously
 </p>
 
 <p align="center">
@@ -11,7 +11,7 @@
   <a href="https://github.com/Nwokike/Sherlock/releases/latest"><img src="https://img.shields.io/badge/Download-APK-orange?style=for-the-badge&logo=android&logoColor=white" alt="Download APK" /></a>
   <a href="https://github.com/Nwokike/Sherlock/releases/latest"><img src="https://img.shields.io/badge/Download_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" /></a>
   <a href="https://github.com/Nwokike/Sherlock/releases/latest"><img src="https://img.shields.io/badge/Download_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" /></a>
-  <img src="https://img.shields.io/badge/Built%20with-Flet%200.86.5-00B0FF?style=for-the-badge&logo=flutter&logoColor=white" alt="Flet" />
+  <img src="https://img.shields.io/badge/Built%20with-Flet%201.0.4-00B0FF?style=for-the-badge&logo=flutter&logoColor=white" alt="Flet" />
   <img src="https://img.shields.io/badge/Python-3.14-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -40,14 +40,14 @@
 
 | Capability | Description |
 | :--- | :--- |
-| **5,200+ Username Networks** | Username OSINT via the Maigret engine — GitHub, Instagram, Discord, Telegram, SoundCloud, and thousands more across international, regional, and specialized networks. Recursive search expands from discovered IDs. |
+| **11,000+ Username Networks** | Username OSINT via the Maigret engine — GitHub, Instagram, Discord, Telegram, SoundCloud, and thousands more across international, regional, and specialized networks. Recursive search expands from discovered IDs. |
 | **180+ Email Platforms** | Email OSINT via `holehe` — register/login/recovery checks with masked recovery email + phone hints, method badges, and honest Unavailable/Rate-Limited separation. |
 | **Stealth TLS Email Checks** | curl-cffi Chrome 124 JA3/TLS fingerprinting bypasses WAF 403 blocks during email scans. |
 | **Profile Enrichment** | `socid-extractor` (164 schemes) — avatar, bio, followers, location, company, verified, personal links. Basic (fast) / Full (API mutations) modes. |
 | **Intelligence Dossiers** | Gold PDF Dossier, XMind Mind Map (.xmind), Identity Network Analysis, JSON, CSV, and TXT exports — all generated on-device. |
 | **6-Layer On-Device Cache** | Compiled database pickle (2.88× faster cold start), avatar images, report fingerprints, geo lookups, inverted tag indices, and TTL DNS cache. |
 | **Fast Offline Scans** | Local-first database — scan instantly without an initial download. |
-| **Selective Target Scope** | Scan depth (All 5,200+ / Top 1,000 / Top 500), custom manifest support, and per-category network browsing. |
+| **Selective Target Scope** | Scan depth (All 11,000+ / Top 1,000 / Top 500), custom manifest support, and per-category network browsing. |
 | **History + Typeahead** | Local search history with `Dismissible` swipe-to-delete and `SearchBar` typeahead suggestions. |
 
 ---
@@ -60,7 +60,7 @@
     <td width="50%"><img src="screenshots/home_email_search.png" width="100%" alt="Home - Email Search" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Username search across 5,200+ social networks with quick scan options.</em></td>
+    <td align="center"><em>Username search across 11,000+ social networks with quick scan options.</em></td>
     <td align="center"><em>Email lookup across 180+ platforms with password recovery checks.</em></td>
   </tr>
 </table>
@@ -103,7 +103,7 @@
 ## Features
 
 - **Gold-Branded Design System** — Solarized Light (Pure White) and Monokai themes aligned to the bronze-gold detective logo. `ScrollbarTheme` / `ChipTheme` / `TabBarTheme` / `CardTheme` / `PageTransitionsTheme` unified in `AppTheme`.
-- **Dual-Mode OSINT** — Username (Maigret, 5,200+ networks) + Email (holehe-v2) with material `SegmentedButton` pill and type-ahead `SearchBar`.
+- **Dual-Mode OSINT** — Username (Maigret, 11,000+ networks) + Email (holehe-v2) with material `SegmentedButton` pill and type-ahead `SearchBar`.
 - **Profile Enrichment** — `socid-extractor` post-scan enrichment: avatar guard (`https` only), bio, followers, location, company, verified badge, personal link — Basic/Full modes via `mutate_url` API schemes.
 - **Live Text-Search Filters** — Instantly filter thousands of results as the scanner runs. `ListView(build_controls_on_demand=True)` virtualization + `SelectionArea` long-press. Results sort A–Z by platform.
 - **Tap-to-Open + Share + Haptic** — Tap result → browser; copy/share via `Clipboard` + `Share`; `HapticFeedback` on search/copy/share.
@@ -123,12 +123,12 @@
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Flet 0.86.5 (Flutter 3.44) on Python 3.14 | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
-| **Scan Core** | `maigret 0.6.6` (5,200+ sites) + `holehe-v2 1.0.3` (181 validators) | Username + Email OSINT on isolated worker threads with private event loops |
+| **Frontend** | Flet 1.0.4 (Flutter 3.44) on Python 3.14 | Cross-platform UI — `SegmentedButton`, `Chip`, `Banner`, `BottomSheet`, `Dismissible`, `Markdown` + services (`HapticFeedback`, `Share`, `Connectivity`) |
+| **Scan Core** | `maigret 0.6.6` (11,000+ sites) + `holehe-v2 1.0.3` (181 validators) | Username + Email OSINT on isolated worker threads with private event loops |
 | **Stealth Email** | `curl-cffi 0.16.3` (Chrome 124 impersonation) | JA3/TLS fingerprint bypass for WAF-blocked email checks |
 | **Enrichment** | `socid-extractor 0.1.1` (164 schemes, 449 fields) | Post-scan avatar/bio/metrics via `batch_enrich` (Basic/Full `use_mutations`) |
 | **Reports** | `reportlab` + `xmind` + `networkx` | Gold PDF dossiers, XMind mind maps, identity network analytics |
-| **Ads** | `flet-ads 0.86.5` | `BannerAd 320×50` + `InterstitialAd` (every search, preload rotation) + UMP `ConsentManager` |
+| **Ads** | `flet-ads 1.0.4` | `BannerAd 320×50` + `InterstitialAd` (every search, preload rotation) + UMP `ConsentManager` |
 | **Cache** | 6-layer pickle/JSON/png tiers under `.flet/storage` | Compiled DB (2.88× cold start), avatars, report fingerprints, geo, tag indices, DNS |
 | **Local Database** | `.flet/storage/data` (`storage.json`) | Debounced atomic `JSON` store — settings, theme, selection scope, site-name cache, history |
 
@@ -137,7 +137,7 @@
 ```mermaid
 graph TB
     subgraph SHERLOCK_CLIENT ["📱 SHERLOCK CLIENT (Local-First Dual OSINT App)"]
-        UI["🎨 Flet 0.86.5 Reactive UI (Home | History | Settings | Social Networks)"]
+        UI["🎨 Flet 1.0.4 Reactive UI (Home | History | Settings | Social Networks)"]
         Engine["⚙️ Maigret + holehe Engines (isolated worker threads)"]
         Enrich["✨ socid-extractor Enrichment (Basic/Full)"]
         Cache["⚡ 6-Layer On-Device Cache"]
@@ -149,7 +149,7 @@ graph TB
     end
 
     subgraph GLOBAL_RESOURCES ["🌐 EDGE DATABASE & PROVIDERS"]
-        Targets["🎯 5,200+ Social + 180+ Email Servers (HTTPS)"]
+        Targets["🎯 11,000+ Social + 180+ Email Servers (HTTPS)"]
     end
 
     Engine ==>|HTTPS GET/POST| Targets
@@ -167,7 +167,7 @@ To optimize execution speed, tune the sliders in Settings:
 | **Top 500** | 500 ranked networks | **~30 Seconds** | Quick broad sweep of the biggest platforms |
 | **Top 1,000** | 1,000 ranked networks | **~1–2 Minutes** | Balanced coverage and speed |
 | **Email (holehe-v2)** | 181 validators | **10–30 s** | Use concurrency Slider 4–30; higher = faster but more rate-limits |
-| **Full Sweep** | 5,200+ Sites | **2–4 Minutes** | Deep exhaustive OSINT reports and full footprint audits |
+| **Full Sweep** | 11,000+ Sites | **2–4 Minutes** | Deep exhaustive OSINT reports and full footprint audits |
 
 ---
 
@@ -204,7 +204,7 @@ Notes for contributors:
 - `version.json` (in-app update notes) may be held back from the repo until the
   Play Store upload ships — CI prints a NOTICE for that state and only fails on
   drift that would break users.
-- Dependency deep-study + utilization backlog: `docs/dependency-study.md`.
+- Dependency audit performed against the installed `.venv` sources (the old docs/ directory was removed in 2.3.0).
 
 ---
 

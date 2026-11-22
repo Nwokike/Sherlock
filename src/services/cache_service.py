@@ -115,8 +115,19 @@ def _write_json_atomic(path: Path, payload: Any) -> bool:
 
 def _read_json(path: Path) -> Any | None:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.warning("Cache read failed for %s: %s", path, exc)
+        return None
+    try:
+        return json.loads(text)
+    except Exception as exc:
+        # Parse errors are evidence: keep a forensic copy instead of silently
+        # discarding a cache that may explain a bad scan.
+        logger.warning("Corrupt cache %s: %s", path, exc)
+        _backup_corrupt(path)
         return None
 
 
@@ -506,7 +517,11 @@ def load_dns_cache() -> dict[str, dict[str, Any]]:
                 else:
                     ips = []
                 raw_ts = rec.get("ts", 0)
-                ts = raw_ts if isinstance(raw_ts, (int, float)) else 0
+                ts = (
+                    raw_ts
+                    if isinstance(raw_ts, (int, float)) and not isinstance(raw_ts, bool)
+                    else 0
+                )
                 is_dead = bool(rec.get("dead", False)) or not ips
                 if is_dead:
                     if (now - ts) > _DNS_DEAD_TTL_SEC:
@@ -523,7 +538,18 @@ def load_dns_cache() -> dict[str, dict[str, Any]]:
 
 
 def get_dns_record(domain: str) -> dict[str, Any] | None:
-    return load_dns_cache().get(str(domain).lower().strip())
+    rec = load_dns_cache().get(str(domain).lower().strip())
+    if rec is None:
+        return None
+    # TTLs were applied when the file was first loaded; a long-running
+    # session keeps the in-memory store forever, so re-check on every read.
+    age = time.time() - (rec.get("ts") or 0)
+    if rec.get("dead"):
+        if age > _DNS_DEAD_TTL_SEC:
+            return None
+    elif age > _DNS_TTL_SEC:
+        return None
+    return rec
 
 
 def set_dns_record(domain: str, ips: list[str] | None, dead: bool = False) -> None:
@@ -651,6 +677,9 @@ def clear_all_caches() -> int:
         if root.is_dir():
             for child in list(root.iterdir()):
                 if child.name.startswith(".") and not child.name.endswith(".tmp"):
+                    continue
+                # Forensic backups are deliberately NOT regenerable caches.
+                if ".corrupt." in child.name and child.name.endswith(".bak"):
                     continue
                 try:
                     if child.is_dir():

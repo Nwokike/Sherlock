@@ -34,23 +34,44 @@ logger = logging.getLogger(__name__)
 
 
 # Screen-level banners are constructed once and reused across re-renders.
-# A fresh BannerAd per render throws away a live ad (resetting AdMob's own
-# refresh cycle) and flashes the slot, so callers request from this pool by
-# slot key instead of building new controls. Desktop/web entries are the
-# cheap zero-size containers the function returns there.
+# This is revenue-critical, not just a perf nicety: the shipped Dart
+# (flutter/flet_ads/lib/src/banner.dart:20-82) builds a NEW native BannerAd on
+# every widget build and only calls load() when !_isLoaded — so any re-render
+# after the first load produces a fresh, UNLOADED, blank ad. Returning the
+# same Python control keeps the same widget and its State, so the ad stays
+# filled and keeps accruing AdMob's own auto-refresh impressions.
 _BANNER_POOL: dict[str, Control] = {}
+# The page each pooled control was built under: its glass colors are baked in
+# at build time, so a control must never be handed to a different page.
+_BANNER_POOL_PAGES: dict[str, object] = {}
+
+
+def _resolve_page(page: ft.Page | None):
+    if page is not None:
+        return page
+    try:
+        from flet import context
+
+        return context.page
+    except Exception:
+        return None
 
 
 def pooled_banner_ad(slot: str, page: ft.Page | None = None) -> Control:
     """Return the banner for `slot`, building it once and reusing it after.
 
     Safe to call from any render path: the same control object comes back
-    every time, so the ad is never re-requested by a re-render.
+    every time, so the ad is never re-requested by a re-render and never goes
+    blank. Rebuilt only when the requesting page differs from the one the
+    control was built under.
     """
+    resolved = _resolve_page(page)
     ad = _BANNER_POOL.get(slot)
-    if ad is None:
-        ad = build_banner_ad(page)
-        _BANNER_POOL[slot] = ad
+    if ad is not None and _BANNER_POOL_PAGES.get(slot) is resolved:
+        return ad
+    ad = build_banner_ad(page)
+    _BANNER_POOL[slot] = ad
+    _BANNER_POOL_PAGES[slot] = resolved
     return ad
 
 
@@ -63,6 +84,7 @@ def clear_banner_pool() -> None:
     rebuilds what it needs.
     """
     _BANNER_POOL.clear()
+    _BANNER_POOL_PAGES.clear()
 
 
 def build_banner_ad(page: ft.Page | None = None) -> Control:
@@ -100,6 +122,13 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
             on_load=lambda e: logger.info("BannerAd loaded"),
             on_error=lambda e: logger.warning(
                 "BannerAd load error: %s", getattr(e, "data", e)
+            ),
+            # Revenue telemetry (measurement only — never gates serving):
+            # impressions and paid events land in the in-app terminal so the
+            # owner can see what each slot actually earns.
+            on_impression=lambda e: logger.info("BannerAd impression"),
+            on_paid=lambda e: logger.info(
+                "BannerAd paid: %s", getattr(e, "data", None)
             ),
         )
     except Exception as e:

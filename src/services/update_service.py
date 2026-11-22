@@ -22,9 +22,22 @@ logger = logging.getLogger("UpdateService")
 
 
 def _safe_https_url(value: object, default: str | None) -> str | None:
-    """Allow only https:// URLs for update/install links, else the default."""
-    if isinstance(value, str) and value.startswith("https://"):
-        return value
+    """Allow only well-formed https:// URLs with a host, else the default."""
+    if isinstance(value, str):
+        try:
+            from urllib.parse import urlparse
+
+            candidate = value.strip()
+            parsed = urlparse(candidate)
+            if (
+                parsed.scheme.lower() == "https"
+                and parsed.netloc
+                and "\r" not in candidate
+                and "\n" not in candidate
+            ):
+                return candidate
+        except ValueError:
+            pass
     return default
 
 

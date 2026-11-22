@@ -12,11 +12,10 @@ import flet as ft
 from flet import Control
 
 from core import tokens
-from core.format import format_count
+from core.format import format_count, sites_total_label
 from core.theme import AppColors, adaptive_glass_bg, adaptive_glass_border
 
 # Matches the marketing copy used by the search bar hint.
-FALLBACK_TOTAL_LABEL = "5,200+"
 
 
 def TargetsCard(
@@ -40,7 +39,7 @@ def TargetsCard(
         subtitle = "Scanning your custom network list"
         icon = ft.Icons.CHECK_CIRCLE_ROUNDED
     else:
-        total_label = format_count(total_count) if total_count else FALLBACK_TOTAL_LABEL
+        total_label = format_count(total_count) if total_count else sites_total_label()
         title = "All networks selected"
         subtitle = f"Scanning all {total_label} social networks"
         icon = ft.Icons.PUBLIC_ROUNDED

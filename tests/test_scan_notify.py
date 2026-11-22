@@ -1,461 +1,281 @@
-"""Lifecycle tests for the flet-notifications integration (scan_notify).
+"""Scan shade-notification behavior (flet-notifications 1.1.x API).
 
-Covers the shape the OS actually receives, without a notification
-backend: one notification id per scan (re-show updates in place),
-indeterminate -> determinate progress, completion with counts, cancel
-clearing the bar, and the shutdown path. Also pins the design decision
-that no manifest patch is required (show + foreground actions only).
+Pins the reference-app pattern: a foreground service whose notification IS
+the progress bar, a LOW/silent channel, a Cancel action, reused ids, and
+stop-before-cancel teardown. Every native call is mocked — no device.
 """
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
 
 import pytest
 
-from services.scan_notify import (
-    CHANNEL_PROGRESS,
-    CHANNEL_RESULT,
-    FGS_START_TYPE,
-    FGS_TYPE,
-    NOTIF_ID_DONE,
-    NOTIF_ID_SCAN,
-    PAYLOAD_ROUTE,
-    ScanNotifier,
-)
+import services.scan_notify as sn
+
+
+class _Platform:
+    def __init__(self, mobile=True):
+        self._mobile = mobile
+
+    def is_mobile(self):
+        return self._mobile
+
+
+class _FakePage:
+    def __init__(self, mobile=True):
+        self.platform = _Platform(mobile)
+        self.services: list = []
+        self.tasks: list = []
+
+    def run_task(self, coro_fn, *args, **kwargs):
+        task = asyncio.get_running_loop().create_task(coro_fn(*args, **kwargs))
+        self.tasks.append(task)
+        return task
+
+
+class _FakeNotifications:
+    """Records the calls the real Notifications service would make."""
+
+    permission_result = True
+    permission_raises = None
+    fgs_raises = None
+
+    def __init__(self, android_default_icon=None):
+        self.android_default_icon = android_default_icon
+        self.on_tap = None
+        self.on_action = None
+        self.channels: list = []
+        self.fgs_calls: list = []
+        self.shown: list = []
+        self.cancelled: list = []
+        self.stopped = False
+        self.cancelled_all = False
+        self.settings_opened = False
+
+    async def create_channel(self, channel):
+        self.channels.append(channel)
+
+    async def request_permissions(self, **kwargs):
+        if _FakeNotifications.permission_raises is not None:
+            raise _FakeNotifications.permission_raises
+        return _FakeNotifications.permission_result
+
+    async def are_notifications_enabled(self):
+        return True
+
+    async def start_foreground_service(self, id, **kwargs):  # noqa: A002
+        if _FakeNotifications.fgs_raises is not None:
+            raise _FakeNotifications.fgs_raises
+        self.fgs_calls.append((id, kwargs))
+
+    async def stop_foreground_service(self):
+        self.stopped = True
+
+    async def show(self, id, **kwargs):  # noqa: A002
+        self.shown.append((id, kwargs))
+
+    async def cancel(self, id, **kwargs):  # noqa: A002
+        self.cancelled.append(id)
+
+    async def cancel_all(self):
+        self.cancelled_all = True
+
+    async def open_settings(self):
+        self.settings_opened = True
 
 
 @pytest.fixture
-def notifier():
-    """A ScanNotifier with a stubbed backend, on a mock page."""
-    page = MagicMock()
-    n = ScanNotifier(page)
-    n._service = MagicMock()  # skip construction/permissions
-    # Posting paths gate on `is_usable()`, which needs both a service and a
-    # granted permission — the legacy tests assume a healthy backend.
-    n._ready = True
-    return n
-
-
-def _dispatched(page):
-    """The (service_call, args, kwargs) the page actually received.
-
-    The service call is a bound-method Mock; `_mock_name` carries the
-    attribute name ("show"/"cancel"/"cancel_all") reliably — `__name__`
-    on a Mock is itself a Mock and stringifies empty.
-    """
-    out = []
-    for call in page.run_task.call_args_list:
-        args, kwargs = call
-        fn = args[0]
-        name = getattr(fn, "_mock_name", None)
-        if not isinstance(name, str):  # real coroutine function
-            name = getattr(fn, "__name__", "?")
-        out.append((name, args[1:], kwargs))
-    return out
-
-
-def test_scan_start_runs_the_foreground_service(notifier):
-    """A running scan lives in a foreground service, not a plain show().
-
-    The service is what keeps the engine alive when the user closes the app,
-    and its notification is what the progress bar advances on.
-    """
-    notifier.scan_started("torvalds", is_email=False)
-    (name, args, kwargs) = _dispatched(notifier.page)[0]
-    assert name == "start_foreground_service"
-    assert args[0] == NOTIF_ID_SCAN  # stable id -> update in place
-    assert args[1] == "Scanning username"
-    assert "torvalds" in args[2]
-    assert kwargs["show_progress"] is True
-    assert kwargs["indeterminate"] is True
-    assert kwargs["channel_id"] == CHANNEL_PROGRESS
-    # `start_type` is a different vocabulary from the service type: Dart
-    # accepts only the three sticky strings, so passing FGS_TYPE here would
-    # have silently fallen back to startSticky anyway.
-    assert kwargs["start_type"] == FGS_START_TYPE
-    assert kwargs["foreground_service_types"] == [FGS_TYPE]
-    assert kwargs["payload"] == PAYLOAD_ROUTE
-    # Cancel AND View: a running scan has to be able to take the user back
-    # to it, otherwise the shade is a dead end mid-scan.
-    assert [a.id for a in kwargs["actions"]] == ["cancel", "view"]
-
-
-def test_progress_tick_updates_same_notification_in_place(notifier):
-    notifier.scan_started("torvalds", is_email=False)
-    notifier.progress(2671, 5897)
-    dispatched = _dispatched(notifier.page)
-    assert dispatched[1][0] == "show"
-    assert dispatched[1][1][0] == NOTIF_ID_SCAN  # same id, not a new one
-    assert "45%" in dispatched[1][1][1]
-    assert dispatched[1][2]["progress"] == 2671
-    assert dispatched[1][2]["max_progress"] == 5897
-    assert dispatched[1][2]["payload"] == PAYLOAD_ROUTE
-    # Re-show REPLACES the action list, so the tick must re-offer View or
-    # the first progress update would strip the button off the FGS
-    # notification posted by scan_started().
-    assert [a.id for a in dispatched[1][2]["actions"]] == ["cancel", "view"]
-
-
-def test_completion_swaps_to_a_separate_notification(notifier):
-    """Completion stops the service, posts its own notification with the
-    found count, offers View and Copy, and clears the progress bar."""
-    notifier.scan_started("torvalds", is_email=False)
-    notifier.progress(100, 100)
-    notifier.scan_finished(14, 5897)
-    dispatched = _dispatched(notifier.page)
-    shows = [d for d in dispatched if d[0] == "show" and d[1][0] == NOTIF_ID_DONE]
-    assert len(shows) == 1
-    finish = shows[0]
-    assert "14 accounts" in finish[1][1]
-    assert finish[2]["channel_id"] == CHANNEL_RESULT
-    # View opens results; Copy report takes the summary to the clipboard.
-    assert [a.id for a in finish[2]["actions"]] == ["view", "copy"]
-    # the service is stopped before the result is posted
-    stops = [d for d in dispatched if d[0] == "stop_foreground_service"]
-    assert stops and dispatched.index(stops[0]) < dispatched.index(finish)
-    # and the progress bar is cleared
-    cancels = [d for d in dispatched if d[0] == "cancel" and d[1] == (NOTIF_ID_SCAN,)]
-    assert cancels
-
-
-def test_cancel_clears_the_progress_bar(notifier):
-    notifier.scan_started("torvalds", is_email=False)
-    notifier.scan_cancelled()
-    dispatched = _dispatched(notifier.page)
-    cancel = dispatched[-1]
-    assert cancel[0] == "cancel"
-    assert cancel[1] == (NOTIF_ID_SCAN,)
-
-
-def test_cancel_also_stops_the_foreground_service(notifier):
-    """A cancelled scan must not leave the service running.
-
-    `cancel()` only removes the tray entry; Android can re-post the service's
-    own ongoing notification and the process stays flagged foreground. Every
-    cancel/supersede path funneled through `scan_cancelled()` previously left
-    it running, which reads exactly like a scan stuck at 99%.
-    """
-    notifier.scan_started("torvalds", is_email=False)
-    notifier.page.run_task.reset_mock()
-    notifier.scan_cancelled()
-    ops = [d[0] for d in _dispatched(notifier.page)]
-    assert "stop_foreground_service" in ops, (
-        "scan_cancelled() dropped the notification but left the foreground "
-        "service running"
-    )
-    # Stop first: dismissing the bar before stopping can race the service's
-    # own ongoing notification back into the shade.
-    assert ops.index("stop_foreground_service") < ops.index("cancel")
-
-
-def test_stop_service_is_safe_with_nothing_running():
-    """stop_service() must be a no-op rather than a raise when idle."""
-    page = MagicMock()
-    n = ScanNotifier(page)
-    n._service = None
-    n.stop_service()  # must not raise
-    assert page.run_task.call_count == 0
-
-
-def test_email_scan_wording(notifier):
-    notifier.scan_started("bob@example.com", is_email=True)
-    notifier.scan_finished(3, 181)
-    dispatched = _dispatched(notifier.page)
-    assert "Scanning email" in dispatched[0][1][1]
-    done = next(d for d in dispatched if d[0] == "show" and d[1][0] == NOTIF_ID_DONE)
-    assert "3 results" in done[1][1]
-
-
-def test_zero_total_progress_does_not_divide_by_zero(notifier):
-    notifier.scan_started("x", is_email=False)
-    notifier.progress(0, 0)  # engine has not reported a denominator yet
-    (_name, args, _kwargs) = _dispatched(notifier.page)[1]
-    assert "0%" in args[1]
-    assert args[1] != ""
-
-
-def test_handlers_wire_cancel_and_view(notifier):
-    """The notification buttons route to the app's own handlers."""
-    fired = []
-    notifier.set_handlers(
-        on_cancel=lambda: fired.append("cancel"),
-        on_view=lambda: fired.append("view"),
-    )
-    # simulate the OS delivering an action button press
-    notifier._on_cancel()
-    notifier._on_view()
-    assert fired == ["cancel", "view"]
-
-
-def test_view_action_failure_is_contained(notifier):
-    """A broken view handler must not raise back into the notification."""
-
-    def _boom():
-        raise RuntimeError("view handler exploded")
-
-    notifier.set_handlers(on_view=_boom)
-    notifier._fire_view()  # logs, does not raise
-
-
-def test_shutdown_clears_everything(notifier):
-    """Teardown stops the foreground service, THEN clears the tray.
-
-    Both are coroutines, so both go through run_task rather than being
-    called directly — a direct call returns an un-awaited coroutine and the
-    shade keeps the bar. Order matters: stopping first means the tray clear
-    can't race the service's own ongoing notification.
-    """
-    svc = MagicMock()
-    notifier._service = svc
-    notifier.shutdown()
-    ops = [d[0] for d in _dispatched(notifier.page)]
-    assert ops == ["stop_foreground_service", "cancel_all"]
-    svc.cancel_all.assert_not_called()
-
-
-def test_service_missing_is_noop():
-    """No flet-notifications installed: everything degrades to a no-op."""
-    page = MagicMock()
-    n = ScanNotifier(page)
-    n._service = None
-    n.scan_started("x", is_email=False)
-    n.progress(1, 2)
-    n.scan_finished(1, 2)
-    n.scan_cancelled()
-    n.shutdown()
-    assert page.run_task.call_count == 0
-
-
-def test_available_flag_matches_import():
-    """The availability probe agrees with the package's importability."""
-    import importlib.util
-
-    expected = importlib.util.find_spec("flet_notifications") is not None
-    n = ScanNotifier(MagicMock())
-    assert n.available is expected
-
-
-# ── the race that made the first notification of a session vanish ──────
-
-
-def _deny(notifier):
-    """Backend stub where notifications exist but the user declined.
-
-    A plain fake, not a MagicMock of `LocalNotifications` — the real control
-    is a dataclass whose methods need a mounted page.
-    """
-    from services.scan_notify import _FakeBackend
-
-    svc = _FakeBackend(enabled=False, granted=False)
-    notifier._service = svc
-    return svc
-
-
-def _grant(notifier):
-    """Backend stub with the permission already granted."""
-    from services.scan_notify import _FakeBackend
-
-    svc = _FakeBackend(enabled=True, granted=True)
-    notifier._service = svc
-    return svc
-
-
-def test_ensure_ready_constructs_and_posts(notifier):
-    """ensure_ready awaited before a scan makes the first show possible.
-
-    The regression: firing the init through `page.run_task` returns a Future
-    immediately, so `_service` is still None when `scan_started()` runs on
-    the next line and the first notification of the session is dropped.
-    """
-    page = MagicMock()
-    page.services = []
-    n = ScanNotifier(page)
-
-    # make construction resolve to our stub
-    import services.scan_notify as sn
-
-    real = sn.LocalNotifications
-    sn.LocalNotifications = lambda: _grant(n)
-    try:
-        assert asyncio.run(n.ensure_ready()) is True
-        assert n._service is not None
-        assert n.is_usable() is True
-        # now the first post of the session lands
-        n.scan_started("torvalds", is_email=False)
-        dispatched = _dispatched(n.page)
-        assert dispatched
-        assert dispatched[0][0] == "start_foreground_service"
-    finally:
-        sn.LocalNotifications = real
-
-
-def test_ensure_ready_no_show_when_denied(notifier):
-    """A declined permission must suppress the notification, not crash."""
-    _deny(notifier)
-
-    assert asyncio.run(notifier.ensure_ready()) is False
-    assert notifier.is_usable() is False
-    notifier.scan_started("torvalds", is_email=False)
-    # nothing posted: the scan still runs, just silently
-    assert notifier.page.run_task.call_count == 0
-
-
-def test_denial_warns_once_and_routes_to_settings(notifier):
-    """Decline -> one warning carrying a Settings action -> OS page."""
-    svc = _deny(notifier)
-    seen = []
-    notifier.set_handlers(on_permission_denied=lambda: seen.append(True))
-
-    assert asyncio.run(notifier.ensure_ready()) is False
-    assert asyncio.run(notifier.ensure_ready()) is False
-    # warned once per session, not once per scan
-    assert seen == [True]
-
-    asyncio.run(notifier.open_settings())
-    assert svc.settings_calls == 1
-
-
-def test_permission_enabled_later_needs_no_restart(notifier):
-    """Re-probed per scan, so enabling from OS settings takes effect now."""
-    svc = _deny(notifier)
-    assert asyncio.run(notifier.ensure_ready()) is False
-
-    # user flips the switch in Android settings; next scan sees it
-    svc.enabled = True
-    assert asyncio.run(notifier.ensure_ready()) is True
-    assert notifier.is_usable() is True
-
-
-def test_no_package_is_a_clean_no_op(notifier):
-    """With no notification backend, ensure_ready just says no.
-
-    There is no user setting to consult any more — a scan posts because it
-    is a foreground activity the system must show, not because of a
-    preference.
-    """
-    notifier._service = None
-    assert asyncio.run(notifier.ensure_ready()) is False
-    assert notifier.page.run_task.call_count == 0
-
-
-# ── channels and the foreground service ───────────────────────────────
-
-
-async def _ready(n):
-    """Bring a fresh notifier to the usable state."""
-    import services.scan_notify as sn
-
-    real = sn.LocalNotifications
-    sn.LocalNotifications = lambda: _grant(n)
-    try:
-        await n.ensure_ready()
-    finally:
-        sn.LocalNotifications = real
-
-
-def test_two_channels_are_created_once():
-    """A silent low channel for progress, a default one for results.
-
-    Sound and vibration are immutable after creation
-    (.venv/flet_notifications/channels.py:13-16), so a running scan cannot
-    share the finished-scan channel — it must not ding.
-    """
-    from services.scan_notify import _FakeBackend
-
-    page = MagicMock()
-    page.services = []
-    n = ScanNotifier(page)
-    n._service = _FakeBackend(enabled=True, granted=True)
-    asyncio.run(_ready(n))
-
-    ids = [c["id"] for c in n._service.channels]
-    assert ids == [CHANNEL_PROGRESS, CHANNEL_RESULT]
-
-
-def test_completion_stops_the_service_before_posting():
-    """Stopping the FGS first avoids the bar and the result racing."""
-    page = MagicMock()
-    n = ScanNotifier(page)
-    n._service = MagicMock()
-    n._ready = True
-    n.scan_finished(3, 10)
-    ops = [d[0] for d in _dispatched(page)]
-    assert "stop_foreground_service" in ops
-    assert ops.index("stop_foreground_service") < ops.index("show")
-
-
-def test_cancel_action_routes_to_the_scan_canceller():
-    """The shade's Cancel button stops the scan without opening the app."""
-    from services.scan_notify import _ACTION_CANCEL
-
-    class _Event:
-        action_id = _ACTION_CANCEL
-
-    n = ScanNotifier(MagicMock())
-    calls = []
-    n.set_handlers(on_cancel=lambda: calls.append(True))
-    handler = _installed_on_action(n)
-    asyncio.run(handler(_Event()))
-    assert calls == [True]
-
-
-def _installed_on_action(notifier):
-    """The on_action closure the notifier installed on its real service."""
-    import services.scan_notify as sn
-
-    captured = {}
-
-    class _Svc:
-        def __init__(self):
-            self.on_action = None
-            self.on_tap = None
-
-    def _fake():
-        s = _Svc()
-        captured["svc"] = s
-        return s
-
-    notifier._started = False
-    notifier._service = None
-    real_ctor = sn.LocalNotifications
-    sn.LocalNotifications = _fake
-    try:
-        asyncio.run(notifier._construct())
-    finally:
-        sn.LocalNotifications = real_ctor
-    return captured["svc"].on_action
-
-
-def test_stop_service_also_clears_the_frozen_bar():
-    """Stopping the service alone leaves the last progress tick up.
-
-    Every tick re-posts with `show()` on NOTIF_ID_SCAN, so when the service
-    goes away that entry lingers as a normal notification frozen at its
-    percentage — the "stuck at 99%" look the whole fix was supposed to
-    remove. stop_service() must do both halves.
-    """
-    page = MagicMock()
-    n = ScanNotifier(page)
-    n._service = MagicMock()
-    n._ready = True
-    n.stop_service()
-    ops = [d[0] for d in _dispatched(page)]
-    assert ops == ["stop_foreground_service", "cancel"], ops
-    assert [d[1] for d in _dispatched(page) if d[0] == "cancel"] == [(NOTIF_ID_SCAN,)]
-
-
-def test_view_does_not_dismiss_the_live_bar(notifier):
-    """View must keep the progress bar it navigates the user to.
-
-    `cancel_notification` defaults to True, so tapping View used to remove
-    the live progress the user just asked for.
-    """
-    notifier.scan_started("torvalds", is_email=False)
-    (_name, _args, kwargs) = _dispatched(notifier.page)[0]
-    views = [a for a in kwargs["actions"] if a.id == "view"]
-    assert views, "the live notification has no View action"
-    assert views[0].cancel_notification is False, (
-        "View cancels the notification, hiding the live progress bar"
-    )
+def fake(monkeypatch):
+    _FakeNotifications.permission_result = True
+    _FakeNotifications.permission_raises = None
+    _FakeNotifications.fgs_raises = None
+    monkeypatch.setattr(sn, "Notifications", _FakeNotifications)
+    monkeypatch.setattr(sn, "_HAS_NOTIFICATIONS", True)
+    return _FakeNotifications
+
+
+def _notifier(fake):
+    page = _FakePage()
+    return sn.ScanNotifier(page), page
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def test_mount_creates_service_and_channels(fake):
+    notifier, page = _notifier(fake)
+    assert _run(notifier.mount()) is True
+    svc = notifier._service
+    assert svc in page.services
+    assert svc.android_default_icon == sn.NOTIFICATION_ICON
+    ids = {c.id for c in svc.channels}
+    assert ids == {sn.CHANNEL_SCAN, sn.CHANNEL_RESULT}
+    scan = next(c for c in svc.channels if c.id == sn.CHANNEL_SCAN)
+    assert scan.play_sound is False and scan.enable_vibration is False
+
+
+def test_mount_is_idempotent(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    svc = notifier._service
+    _run(notifier.mount())
+    assert notifier._service is svc
+    assert len(svc.channels) == 2
+
+
+def test_permission_denial_is_not_fatal_and_offers_settings(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    denied = []
+    notifier.set_handlers(on_permission_denied=lambda: denied.append(1))
+    _FakeNotifications.permission_result = False
+    assert _run(notifier.ensure_permission()) is False
+    assert denied == [1]
+    # The scan still runs: the foreground service keeps the engine alive even
+    # if the shade row is hidden, and permission is only asked once.
+    assert _run(notifier.scan_started("alice")) is True
+
+
+def test_permission_timeout_does_not_latch(fake, monkeypatch):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    monkeypatch.setattr(sn, "_PERMISSION_TIMEOUT_SEC", 0.01)
+
+    async def _hang(**kwargs):
+        await asyncio.sleep(3600)
+        return False
+
+    notifier._service.request_permissions = _hang
+    assert _run(notifier.ensure_permission()) is False
+    # not latched: a later scan still attempts the foreground service
+    assert _run(notifier.scan_started("alice")) is True
+
+
+def test_scan_started_opens_foreground_service_with_progress_and_cancel(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    assert _run(notifier.scan_started("alice", is_email=False)) is True
+    svc = notifier._service
+    assert len(svc.fgs_calls) == 1
+    call_id, kw = svc.fgs_calls[0]
+    assert call_id == sn.NOTIF_ID_SCAN and call_id != 0
+    assert kw["start_type"] is sn.AndroidServiceStartType.STICKY
+    assert sn.AndroidForegroundServiceType.SPECIAL_USE in kw["service_types"]
+    actions = kw["actions"]
+    assert [a.id for a in actions] == [sn._ACTION_CANCEL]
+    android = kw["options"].android
+    assert android.channel == sn.CHANNEL_SCAN
+    assert android.silent and android.only_alert_once and android.ongoing
+    assert android.progress.indeterminate is True
+
+
+def test_second_scan_does_not_reopen_the_service(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    _run(notifier.scan_started("alice"))
+    _run(notifier.scan_started("bob"))
+    assert len(notifier._service.fgs_calls) == 1
+
+
+def test_progress_reuses_the_same_id(fake):
+    notifier, _ = _notifier(fake)
+
+    async def run():
+        await notifier.mount()
+        await notifier.scan_started("alice")
+        notifier.progress(250, 5000)
+        await asyncio.gather(*notifier.page.tasks)
+
+    _run(run())
+    svc = notifier._service
+    shown = [c for c in svc.shown if c[0] == sn.NOTIF_ID_SCAN]
+    assert shown, "progress must update the FGS notification in place"
+    progress = shown[-1][1]["options"].android.progress
+    assert progress.value == 5 and progress.max == 100
+    assert progress.indeterminate is False
+
+
+def test_finish_stops_service_then_posts_result(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    _run(notifier.scan_started("alice"))
+    _run(notifier.scan_finished(12, 5000))
+    svc = notifier._service
+    assert svc.stopped is True
+    assert sn.NOTIF_ID_SCAN in svc.cancelled
+    done = [c for c in svc.shown if c[0] == sn.NOTIF_ID_DONE]
+    assert done, "a finished scan must post a result row"
+    assert done[-1][1]["options"].android.auto_cancel is True
+
+
+def test_stop_service_stops_before_cancelling(fake):
+    """The FGS owns the id; stopping first stops Android re-posting it."""
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    _run(notifier.scan_started("alice"))
+    order: list = []
+    notifier._service.stop_foreground_service = _record(order, "stop")
+    notifier._service.cancel = _record(order, "cancel", ids=True)
+    _run(notifier.stop_service())
+    assert order[0] == "stop"
+    assert notifier._fgs_running is False
+
+
+def _record(order, tag, ids=False):
+    async def _do(*args, **kwargs):
+        order.append(tag)
+        if ids:
+            order.append(args[0] if args else kwargs.get("id"))
+
+    return _do
+
+
+def test_cancel_action_routes_to_controller(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    cancelled = []
+    viewed = []
+    notifier.set_handlers(on_cancel=lambda: cancelled.append(1), on_view=lambda: viewed.append(1))
+
+    async def run():
+        await notifier._handle_action(_Event(action_id=sn._ACTION_CANCEL))
+        await notifier._handle_tap(_Event(action_id=""))
+
+    _run(run())
+    assert cancelled == [1] and viewed == [1]
+
+
+def test_fgs_failure_is_swallowed(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    _FakeNotifications.fgs_raises = RuntimeError("no native layer")
+    assert _run(notifier.scan_started("alice")) is False
+    assert notifier._fgs_running is False
+
+
+def test_shutdown_clears_everything(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    _run(notifier.scan_started("alice"))
+    _run(notifier.shutdown())
+    svc = notifier._service
+    assert svc.stopped and svc.cancelled_all
+    assert notifier._fgs_running is False
+
+
+class _Event:
+    def __init__(self, action_id="", data=None):
+        self.action_id = action_id
+        self.data = data
+
+
+def test_fresh_denial_does_not_start_the_foreground_service(fake):
+    """A first-run denial must return False and leave the FGS down."""
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    _FakeNotifications.permission_result = False
+    assert _run(notifier.scan_started("alice")) is False
+    assert notifier._service.fgs_calls == []
+    assert notifier._fgs_running is False

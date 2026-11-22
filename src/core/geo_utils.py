@@ -32,7 +32,6 @@ _DISK_CACHE: dict[str, list[str]] | None = None
 # updates stay instant; disk lags at most _GEO_FLUSH_INTERVAL.
 _GEO_FLUSH_INTERVAL = 10.0
 _LAST_GEO_FLUSH = [0.0]
-_GEO_FLUSH_DIRTY = [False]
 
 
 def _country_to_row(c: CountryInfo | None) -> list[str] | None:
@@ -84,17 +83,14 @@ def _record_disk_hit(key: str, c: CountryInfo | None) -> None:
 
     now = _time.monotonic()
     if (now - _LAST_GEO_FLUSH[0]) < _GEO_FLUSH_INTERVAL:
-        _GEO_FLUSH_DIRTY[0] = True  # memory holds it; disk flushes later
-        return
+        return  # memory holds it; disk flushes on the next call after 10s
     _LAST_GEO_FLUSH[0] = now
-    _GEO_FLUSH_DIRTY[0] = False
     try:
         from services.cache_service import save_geo_cache
 
         save_geo_cache(store)
-    except Exception:
-        _GEO_FLUSH_DIRTY[0] = True
-        pass
+    except Exception as exc:
+        logger.debug("Geo cache flush failed: %s", exc)
 
 
 @dataclass(frozen=True)

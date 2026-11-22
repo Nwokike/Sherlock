@@ -61,6 +61,33 @@ def get_temp_dir() -> Path:
 
 
 class StorageService:
+    # One instance per page. Call sites used to construct their own copy, each
+    # loading storage.json independently and rewriting the WHOLE dict — the
+    # last writer silently erased the others' keys (settings vs history).
+    _PAGE_ATTR = "_sherlock_storage_service"
+
+    @classmethod
+    def for_page(
+        cls, page: ft.Page | None = None, data_dir: Path | str | None = None
+    ) -> StorageService:
+        """Return the single shared service for this page.
+
+        `page=None` (tests, headless) and an explicit `data_dir` still get a
+        fresh instance: those are deliberate isolated stores, not the app
+        session's shared one.
+        """
+        if page is None or data_dir is not None:
+            return cls(page, data_dir)
+        existing = getattr(page, cls._PAGE_ATTR, None)
+        if isinstance(existing, cls):
+            return existing
+        svc = cls(page)
+        try:
+            setattr(page, cls._PAGE_ATTR, svc)
+        except Exception as exc:
+            logger.warning("Could not stash shared StorageService: %s", exc)
+        return svc
+
     def __init__(self, page: ft.Page | None = None, data_dir: Path | str | None = None):
         self._page = page
         self._data: dict[str, str] = {}
@@ -89,29 +116,46 @@ class StorageService:
             if not hasattr(page, "session_id") and not hasattr(page, "web"):
                 self._is_web = True
 
+        self._web_prefs = None
+        self._web_loaded = False
         if self._is_web:
-            self._load_web()
+            # Loaded lazily on the first async call: flet 1.0.4 has NO
+            # page.client_storage — the real web API is the async
+            # SharedPreferences service (see _ensure_web).
+            self._data = {}
         else:
             self._load()
 
-    def _load_web(self) -> None:
+    async def _ensure_web(self) -> bool:
+        """Mount and read flet's SharedPreferences once per web session."""
+        if not self._is_web:
+            return True
+        if self._web_loaded:
+            return self._web_prefs is not None
+        self._web_loaded = True  # never retry an already-failed mount
         try:
-            if self._page and hasattr(self._page, "client_storage"):
-                cs = self._page.client_storage
-                raw = cs.get("sherlock_storage")
-                parsed = json.loads(raw) if raw else {}
-                self._data = (
-                    {
-                        k: v
-                        for k, v in parsed.items()
-                        if isinstance(k, str) and isinstance(v, str)
-                    }
-                    if isinstance(parsed, dict)
-                    else {}
-                )
+            import flet as ft
+
+            prefs = ft.SharedPreferences()
+            if self._page is not None and prefs not in self._page.services:
+                self._page.services.append(prefs)  # keep-alive
+            self._web_prefs = prefs
+            raw = await prefs.get("sherlock_storage")
+            parsed = json.loads(raw) if isinstance(raw, str) and raw else {}
+            self._data = (
+                {
+                    k: v
+                    for k, v in parsed.items()
+                    if isinstance(k, str) and isinstance(v, str)
+                }
+                if isinstance(parsed, dict)
+                else {}
+            )
+            return True
         except Exception as e:
-            logger.warning("StorageService._load_web failed: %s", e)
-            self._data = {}
+            logger.warning("StorageService web load failed: %s", e)
+            self._web_prefs = None
+            return False
 
     def _load(self) -> None:
         try:
@@ -177,21 +221,28 @@ class StorageService:
 
     def _save_now(self) -> None:
         if self._is_web:
-            self._save_now_web()
+            # SharedPreferences is async; a no-running-loop fallback cannot
+            # await it. Leaving _dirty set preserves the write for the next
+            # real flush instead of falsely reporting success.
+            logger.info("StorageService: web flush deferred until a loop is running")
             return
         if self._write_snapshot(dict(self._data)):
             self._dirty = False
             self._last_write = time.monotonic()
 
-    def _save_now_web(self) -> None:
+    async def _save_now_web(self, snapshot: dict[str, str]) -> bool:
+        if not await self._ensure_web() or self._web_prefs is None:
+            return False
         try:
-            if self._page and hasattr(self._page, "client_storage"):
-                cs = self._page.client_storage
-                cs.set("sherlock_storage", json.dumps(self._data))
-            self._dirty = False
-            self._last_write = time.monotonic()
+            ok = await self._web_prefs.set(
+                "sherlock_storage", json.dumps(snapshot, ensure_ascii=False)
+            )
+            if not ok:
+                logger.warning("StorageService: SharedPreferences.set returned False")
+            return bool(ok)
         except Exception as e:
-            logger.warning("StorageService._save_now_web failed: %s", e)
+            logger.warning("StorageService web save failed: %s", e)
+            return False
 
     def _schedule_write(self) -> None:
         if self._pending_write_task:
@@ -229,6 +280,7 @@ class StorageService:
         await self.flush()
 
     async def get(self, key: str) -> str | None:
+        await self._ensure_web()
         async with self._lock:
             return self._data.get(key)
 
@@ -248,6 +300,7 @@ class StorageService:
         self._schedule_write()
 
     async def delete(self, key: str) -> None:
+        await self._ensure_web()
         async with self._lock:
             if key not in self._data:
                 return
@@ -256,6 +309,7 @@ class StorageService:
         self._schedule_write()
 
     async def clear(self) -> None:
+        await self._ensure_web()
         async with self._lock:
             if not self._data:
                 return
@@ -264,15 +318,20 @@ class StorageService:
         self._schedule_write()
 
     async def get_all(self) -> dict[str, str]:
+        await self._ensure_web()
         async with self._lock:
             return dict(self._data)
 
     async def flush(self) -> None:
+        await self._ensure_web()
         async with self._lock:
             if not self._dirty:
                 return
             if self._is_web:
-                self._save_now_web()  # fast client_storage, keep under lock
+                ok = await self._save_now_web(dict(self._data))
+                if ok:
+                    self._dirty = False
+                self._last_write = time.monotonic()
                 return
             snapshot = dict(self._data)
         # Write outside the lock so gets/sets never stall on fsync.
@@ -285,11 +344,11 @@ class StorageService:
             self._last_write = time.monotonic()
 
 
-def load_history_entries(raw: str | None) -> list[dict]:
-    """Decode stored history (oldest-first) → newest-first for display.
+def decode_stored_history(raw: str | None) -> list[dict]:
+    """Decode the STORED list without reversing (oldest-first, dict rows only).
 
-    Shared by HomeScreen and AppController so the reversed contract lives
-    in one place. Returns empty list on bad/missing JSON.
+    Writers should use this: `load_history_entries` reverses for DISPLAY and
+    using it in a writer silently flips the persisted order.
     """
     if not raw:
         return []
@@ -297,9 +356,18 @@ def load_history_entries(raw: str | None) -> list[dict]:
         entries = json.loads(raw)
         if not isinstance(entries, list):
             return []
-        return [e for e in reversed(entries) if isinstance(e, dict)]
+        return [e for e in entries if isinstance(e, dict)]
     except Exception:
         return []
+
+
+def load_history_entries(raw: str | None) -> list[dict]:
+    """Decode stored history (oldest-first) → newest-first for display.
+
+    Shared by HomeScreen and AppController so the reversed contract lives
+    in one place. Returns empty list on bad/missing JSON.
+    """
+    return list(reversed(decode_stored_history(raw)))
 
 
 def encode_history_entries(entries: list[dict], new_entry: dict | None = None) -> str:

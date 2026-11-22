@@ -16,7 +16,7 @@ import flet as ft
 from flet import Control
 
 from components.app_header import AppHeader
-from components.banner_ad import build_banner_ad
+from components.banner_ad import pooled_banner_ad
 from components.section_header import SectionHeader
 from core import tokens
 from core.constants import (
@@ -24,6 +24,7 @@ from core.constants import (
     APP_NAME,
     APP_VERSION,
     STORAGE_CHECK_DOMAINS,
+    STORAGE_CLOUDFLARE_BYPASS,
     STORAGE_COOKIES_PATH,
     STORAGE_DEEP_ENRICH,
     STORAGE_DNS_RESOLVER,
@@ -33,6 +34,7 @@ from core.constants import (
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_EXTRACT_INFO,
+    STORAGE_FLARESOLVERR_URL,
     STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
     STORAGE_LOG_ENGINE_LOGS,
@@ -51,6 +53,7 @@ from core.constants import (
     STORAGE_TIMEOUT,
     STORAGE_USE_CURL_CFFI,
 )
+from core.format import sites_total_label
 from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
 from core.notify import show_snack
 from core.tasks import spawn
@@ -313,7 +316,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             pass
         from services.storage_service import StorageService
 
-        storage = StorageService(page)
+        storage = StorageService.for_page(page)
         await storage.set(STORAGE_THEME, val)
         await storage.flush()
         try:
@@ -507,6 +510,23 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         spawn(_persist(STORAGE_I2P_PROXY, cleaned))
         return True
 
+    def _on_flaresolverr_change(val: str) -> bool:
+        raw = (val or "").strip()
+        if raw and not raw.lower().startswith(("http://", "https://")):
+            show_snack(
+                page,
+                "FlareSolverr URL must start with http:// or https://",
+                bgcolor=AppColors.WARNING,
+            )
+            return False
+        state.flaresolverr_url = raw
+        spawn(_persist(STORAGE_FLARESOLVERR_URL, raw))
+        return True
+
+    def _on_cloudflare_change(val: bool):
+        state.cloudflare_bypass = bool(val)
+        spawn(_persist(STORAGE_CLOUDFLARE_BYPASS, "true" if val else "false"))
+
     def _on_check_domains_change(val: bool):
         state.check_domains = bool(val)
         spawn(_persist(STORAGE_CHECK_DOMAINS, "true" if val else "false"))
@@ -545,6 +565,10 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 else "Site database already current",
                 bgcolor=AppColors.SUCCESS,
             )
+            # Major action completed: the site database was checked/refreshed.
+            from services.ad_service import fire_major_action_interstitial
+
+            fire_major_action_interstitial()
         except Exception as exc:
             logger.exception("Site-DB update failed")
             show_snack(page, f"Site-DB update failed: {exc}", bgcolor=AppColors.ERROR)
@@ -573,6 +597,10 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         show_snack(page, "DB health: probing 25 sites… (takes up to a minute)")
         try:
             await controller.run_db_health()
+            # Major action completed: the health report was delivered.
+            from services.ad_service import fire_major_action_interstitial
+
+            fire_major_action_interstitial()
         except Exception as exc:
             # Fire-and-forget tasks eat exceptions — never let this die
             # silently (owner saw exactly that on device).
@@ -641,7 +669,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
             from services.storage_service import StorageService
 
-            storage = StorageService(context.page)
+            storage = StorageService.for_page(context.page)
             await storage.set(key, value)
             await storage.flush()
         except Exception as exc:
@@ -751,13 +779,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             height=1,
             color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
         ),
-        # No "Scan Notifications" row here on purpose. Scan progress is
-        # delivered by an OS notification with a Cancel action, so the app
-        # keeps working while the user is somewhere else; a scan is a
-        # foreground activity that the system needs permission to show, not
-        # a preference to opt into. Permission is requested the first time a
-        # scan starts (main._ensure_notifications_ready), and a decline is
-        # surfaced once with a route to the OS settings page.
         _setting_row(
             ft.Icons.ACCOUNT_BOX_ROUNDED,
             "Profile Data Extraction",
@@ -1216,6 +1237,27 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
                 ),
             ),
+            _setting_row(
+                ft.Icons.SHIELD_ROUNDED,
+                "Cloudflare Bypass",
+                "Send WAF-blocked checks through your own FlareSolverr solver",
+                ft.Switch(
+                    value=getattr(state, "cloudflare_bypass", False),
+                    on_change=lambda e: _on_cloudflare_change(e.control.value),
+                    active_color=ft.Colors.PRIMARY,
+                ),
+                stacked=narrow,
+            ),
+            ft.Container(
+                content=SettingsTextField(
+                    value=state.flaresolverr_url or "",
+                    on_commit=_on_flaresolverr_change,
+                    hint_text="http://127.0.0.1:8191 (empty = unused)",
+                ),
+                padding=ft.Padding(
+                    tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_MD
+                ),
+            ),
             ft.Container(
                 content=SettingsTextField(
                     value=state.cookies_path or "",
@@ -1400,8 +1442,9 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                             ),
                             border_radius=tokens.RADIUS_SM,
                             padding=tokens.SPACE_MD,
-                            # Explicit height, not `expand`: this sits in a
-                            # Column, where expand is a no-op in flet 1.0.4,
+                            # Explicit height, not `expand`: this sits under
+                            # a Container (only Column/Row/View set
+                            # flet's `host_expanded`), so expand has no host.
                             # so a 500-line buffer shrink-wrapped and burst
                             # out of the fixed dialog box.
                             height=260,
@@ -1486,7 +1529,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
                 "Site Database Update",
-                "Fetch the latest 5,200+ network definitions from upstream",
+                f"Fetch the latest {sites_total_label()} network definitions from upstream",
                 ft.FilledButton(
                     "Check for Update",
                     icon=ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
@@ -1504,19 +1547,19 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             preferences_card,
             SectionHeader("SCAN PARAMETERS"),
             scan_card,
-            build_banner_ad(),
+            pooled_banner_ad("settings-1"),
             SectionHeader("EMAIL INTELLIGENCE"),
             email_card,
             SectionHeader("NETWORK & PROXY"),
             network_card,
             SectionHeader("ENRICHMENT"),
             enrichment_card,
-            build_banner_ad(),
+            pooled_banner_ad("settings-2"),
             SectionHeader("CONNECTION & SPEED"),
             performance_card,
             SectionHeader("CUSTOM SITE-DB MANIFEST"),
             manifest_card,
-            build_banner_ad(),
+            pooled_banner_ad("settings-3"),
             SectionHeader("TROUBLESHOOTING & LOGS"),
             logs_card,
             SectionHeader("ABOUT"),

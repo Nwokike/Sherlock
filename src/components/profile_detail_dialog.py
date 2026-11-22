@@ -425,8 +425,9 @@ def _email_dossier(
                         height=tokens.SPACE_MD,
                         color=ft.Colors.with_opacity(0.1, ft.Colors.OUTLINE),
                     ),
-                    # Explicit height, not `expand`: expand is a no-op on a
-                    # Column child in flet 1.0.4, so the list got unbounded
+                    # Explicit height, not `expand`: it sits under a
+                    # Container (only Column/Row/View set `host_expanded`),
+                    # so the list got unbounded
                     # height, laid out every enrichment row, and a long
                     # profile overflowed out of this fixed 380x420 dialog.
                     ft.ListView(
@@ -1041,8 +1042,9 @@ def _username_dossier(
                         ],
                         spacing=tokens.SPACE_XS,
                         # Explicit height, not `expand` (see the username
-                        # dialog above): expand is a no-op on a Column child
-                        # in flet 1.0.4, so the list took unbounded height
+                        # dialog above): its parent is a Container, not a
+                        # host_expanded Column/Row/View, so the list took
+                        # unbounded height
                         # and a long result overflowed the fixed dialog.
                         height=300,
                         padding=0,

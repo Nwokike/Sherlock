@@ -17,7 +17,7 @@ from typing import NamedTuple
 import flet as ft
 from flet import Control
 
-from components.banner_ad import build_banner_ad
+from components.banner_ad import pooled_banner_ad
 from components.profile_detail_dialog import show_profile_detail_dialog
 from components.result_card import ResultCard
 from components.stat_card import StatCard
@@ -210,7 +210,13 @@ _BANNER_MAX_PER_LIST = 15
 
 def _banner_slots(count: int) -> list[int]:
     """0-based card indices after which a banner is placed (owner rule:
-    every 10 results, or every 5 when the list is shorter than 10)."""
+    every 10 results, or every 5 when the list is shorter than 10).
+
+    Never on the last card: the screen already carries a bottom banner, and
+    two adjacent ads is an AdMob density risk. Short lists (2-5 results) get
+    one mid-list banner so they are not left to the bottom slot alone — that
+    ADDS coverage without ever stacking two ads together.
+    """
     if count <= 0:
         return []
     # <=10 (not just <) takes the tighter spacing so a 10-result list is not
@@ -219,6 +225,10 @@ def _banner_slots(count: int) -> list[int]:
         _BANNER_SPACING_SHORT if count <= _BANNER_SHORT_THRESHOLD else _BANNER_SPACING
     )
     slots = list(range(spacing - 1, count - 1, spacing))
+    if not slots and count >= 2:
+        # Too short for one full spacing run: place a single banner mid-list,
+        # still never on the last card.
+        slots = [max(0, count // 2 - 1)]
     if len(slots) > _BANNER_MAX_PER_LIST:
         step = len(slots) / _BANNER_MAX_PER_LIST
         slots = [slots[int(i * step)] for i in range(_BANNER_MAX_PER_LIST)]
@@ -457,8 +467,7 @@ def ResultsScreen() -> Control:
             raw_rate_limited = [_to_dict(r) for r in active_progress.rate_limited]
             raw_unavailable = [_to_dict(r) for r in active_progress.unavailable]
             engine_total = active_progress.total_modules or 0
-            total = engine_total or state.email_total_modules or 121
-            checked = active_progress.checked_modules
+            total = engine_total or state.email_total_modules
         else:
             all_email = list(state.email_results) if state.email_results else []
             raw_found = [
@@ -476,11 +485,7 @@ def ResultsScreen() -> Control:
             ]
             raw_unavailable = [r for r in all_email if r.get("unavailable")]
             engine_total = 0
-            total = state.email_total_modules or len(all_email) or 121
-            # Cached history has no live checked counter: report 0 so the
-            # progress section shows the indeterminate state instead of a
-            # fake 100% (checked == total masked partial/cancelled runs).
-            checked = 0
+            total = state.email_total_modules or len(all_email)
 
         def _make_email_card(r):
             if r.get("exists"):
@@ -675,17 +680,6 @@ def ResultsScreen() -> Control:
             spacing=tokens.SPACE_SM,
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
         )
-        if active_progress and getattr(active_progress, "is_cancelled", False):
-            progress_label = f"Cancelled — {checked}/{total} checked"
-        elif checked == 0 and engine_total == 0:
-            # Initializing phase — same rationale as the username branch.
-            progress_label = "Initializing..."
-        else:
-            pct = int(checked / max(total, 1) * 100)
-            progress_label = f"Checking {checked}/{total} platforms ({pct}%)..."
-
-        def cancel_callback(e):
-            controller.cancel_email_search()
 
     else:
 
@@ -739,7 +733,6 @@ def ResultsScreen() -> Control:
         notfound_items.sort(key=lambda r: (getattr(r, "site_name", "") or "").lower())
         error_items.sort(key=lambda r: (getattr(r, "site_name", "") or "").lower())
         total = username_view.total
-        checked = username_view.checked
 
         # P1-1: memoized active-tab card list (one use_memo per branch —
         # hook slot stays stable across email↔username mode switches).
@@ -871,22 +864,6 @@ def ResultsScreen() -> Control:
             spacing=tokens.SPACE_SM,
             alignment=ft.MainAxisAlignment.SPACE_EVENLY,
         )
-        if username_view.is_cancelled:
-            progress_label = f"Cancelled — {checked}/{total} checked"
-        elif checked == 0 and username_view.engine_total == 0:
-            # Initializing phase — mirrors the shade progress notification:
-            # the engine has not reported a single site yet, so a 0/N
-            # denominator is meaningless; show the same "Initializing..."
-            # state the notification shows.
-            # shows instead of a frozen 0/total bar.
-            progress_label = "Initializing..."
-        else:
-            pct = int(checked / max(total, 1) * 100)
-            progress_label = f"Checking {checked}/{total} sites ({pct}%)..."
-
-        def cancel_callback(e):
-            controller.cancel_search()
-
     stats_card = ft.Container(
         content=stats_row,
         padding=tokens.SPACE_MD,
@@ -939,72 +916,20 @@ def ResultsScreen() -> Control:
             bottom=tokens.SPACE_SM,
         ),
     )
-    progress_section = ft.Container(width=0, height=0)
-    if is_running and active_progress:
-        # Indeterminate (value=None) while the engine has reported nothing —
-        # the same continuously-filling "Initializing" animation the shade
-        # progress notification shows. Once the first site completes (or the
-        # engine publishes its real denominator), switch to a determinate
-        # 0..1 fraction.
-        engine_known_total = username_view.engine_total or (
-            getattr(active_progress, "total_modules", 0) or 0
-        )
-        if checked == 0 and engine_known_total == 0:
-            progress_val = None
-        elif total > 0:
-            progress_val = checked / total
-        else:
-            progress_val = None
-        progress_section = ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.ProgressBar(
-                        value=progress_val,
-                        color=ft.Colors.PRIMARY,
-                        bgcolor=ft.Colors.with_opacity(
-                            tokens.OPACITY_LIGHT, ft.Colors.PRIMARY
-                        ),
-                        height=tokens.PROGRESS_BAR_HEIGHT,
-                    ),
-                    ft.Row(
-                        controls=[
-                            ft.Text(
-                                progress_label,
-                                size=tokens.FONT_SM,
-                                color=ft.Colors.with_opacity(
-                                    tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
-                                ),
-                            ),
-                            ft.Container(expand=True),
-                            ft.TextButton(
-                                content=ft.Text(
-                                    "Cancel",
-                                    size=tokens.FONT_SM,
-                                    color=AppColors.ERROR,
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                on_click=cancel_callback,
-                            ),
-                        ]
-                    ),
-                ],
-                spacing=tokens.SPACE_XS,
-            ),
-            padding=ft.Padding(
-                left=tokens.SPACE_XL,
-                right=tokens.SPACE_XL,
-                top=tokens.SPACE_SM,
-                bottom=0,
-            ),
-        )
+    # No in-app progress bar or Cancel button: the OS shade owns both
+    # (foreground-service notification with a determinate bar + Cancel
+    # action), and the app shows only the tiny "Scanning…" pill in AppHeader.
+    # Results below still render live as the engine reports them.
 
     return ft.Column(
         controls=[
-            progress_section,
             stats_card,
             filter_box,
             tabs,
-            build_banner_ad(),
+            # Pooled: this body re-renders on every progress tick (~2 Hz).
+            # An unpooled banner here built a NEW native ad each tick, which
+            # the Dart side leaves unloaded -> a blank slot burning requests.
+            pooled_banner_ad("results-bottom"),
         ],
         expand=True,
         spacing=0,

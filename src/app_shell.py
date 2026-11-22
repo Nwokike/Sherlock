@@ -440,9 +440,9 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     # The service's own interval guard prevents stacking with
                     # the search interstitial.
                     try:
-                        from main import _AD_SERVICE_REF
+                        from services.ad_service import AD_SERVICE_REF
 
-                        ad_service = _AD_SERVICE_REF.get("service")
+                        ad_service = AD_SERVICE_REF.get("service")
                         if ad_service is not None:
                             await ad_service.show_interstitial()
                     except Exception as exc:
@@ -466,6 +466,11 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             page = context.page
             if not page:
                 return
+
+            # Major action: premium graph analysis opened.
+            from services.ad_service import fire_major_action_interstitial
+
+            fire_major_action_interstitial()
 
             from services.graph_service import (
                 build_identity_graph,
@@ -619,9 +624,12 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     from pathlib import Path as _Path
 
                     from core.shared_services import shared_url_launcher
+                    from services.ad_service import fire_major_action_interstitial
                     from services.graph_service import export_pyvis_html
                     from services.storage_service import get_cache_dir
 
+                    # Major action: the interactive graph viewer opened.
+                    fire_major_action_interstitial()
                     saved = export_pyvis_html(
                         G, _Path(get_cache_dir()) / "identity_graph.html"
                     )
@@ -1101,8 +1109,7 @@ def AppShell() -> Control:
             current_nav.selected_index = active_tab
         else:
             # The History destination carries a badge with the number of
-            # history entries added since you last opened the tab (the
-            # zero-dependency stand-in for an OS notification). Cleared by
+            # history entries added since you last opened the tab. Cleared by
             # HistoryScreen on mount.
             unseen = getattr(state, "history_unseen", 0) or 0
             destinations = [

@@ -35,6 +35,7 @@ from core.constants import (
     STORAGE_USE_CURL_CFFI,
     test_id,
 )
+from core.format import sites_total_label
 from core.notify import show_snack
 from core.tasks import spawn
 from core.theme import (
@@ -55,7 +56,7 @@ logger = logging.getLogger("HomeScreen")
 _FEATURES_USERNAME = [
     {
         "icon": ft.Icons.PERSON_SEARCH_ROUNDED,
-        "title": "Hunt Across 5,200+ Networks",
+        "title": f"Hunt Across {sites_total_label()} Networks",
         "desc": "Scan GitHub, X, Instagram, TikTok, Reddit, Spotify, and more — simultaneously.",
         "color": AppColors.PRIMARY,
     },
@@ -96,7 +97,7 @@ _FEATURES_EMAIL = [
 
 _STEPS_USERNAME = [
     ("1", "Enter", "Type a username to hunt across social networks"),
-    ("2", "Scan", "Sherlock checks 5,200+ platforms simultaneously"),
+    ("2", "Scan", f"Sherlock checks {sites_total_label()} platforms simultaneously"),
     ("3", "Done", "View results, export reports, or open profiles in browser"),
 ]
 
@@ -226,7 +227,6 @@ def _history_row(
     )
 
 
-@ft.memo
 def _feature_card(
     icon: str,
     title: str,
@@ -278,7 +278,6 @@ def _feature_card(
     )
 
 
-@ft.memo
 def _step_row(number: str, title: str, desc: str) -> ft.Row:
     """Numbered step row."""
     return ft.Row(
@@ -410,7 +409,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
             try:
                 from services.storage_service import StorageService
 
-                storage = StorageService(_get_page())
+                storage = StorageService.for_page(_get_page())
                 await storage.set(STORAGE_SEARCH_MODE, new_mode)
             except Exception:
                 pass
@@ -426,7 +425,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
             try:
                 from services.storage_service import StorageService
 
-                storage = StorageService(_get_page())
+                storage = StorageService.for_page(_get_page())
                 await storage.set(key, value)
                 if after is not None:
                     await after()
@@ -479,7 +478,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
             try:
                 from services.storage_service import StorageService
 
-                storage = StorageService(_get_page())
+                storage = StorageService.for_page(_get_page())
                 await storage.set(STORAGE_NSFW, "true" if new_val else "false")
                 await storage.set(STORAGE_SAFE_SEARCH, "false" if new_val else "true")
                 if controller.refresh_sites:
@@ -679,7 +678,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                     load_history_entries,
                 )
 
-                storage = StorageService(_get_page())
+                storage = StorageService.for_page(_get_page())
                 raw = await storage.get(STORAGE_HISTORY)
                 entries = load_history_entries(raw)
                 if entries:
@@ -1271,11 +1270,11 @@ def HomeScreen(banner: Control | None = None) -> Control:
     )
 
     # NOTE: the scrollable Column goes straight into the Container. An extra
-    # wrapper Column here gives it unbounded height (expand is a no-op on
-    # Column children in flet 1.0.4), so it shrink-wraps to full content and
-    # the wrapper — which has no scroll of its own — clips everything below
-    # the fold. Container keeps the constraints bounded, so the inner scroll
-    # works.
+    # plain Column wrapper would give it UNBOUNDED main-axis height: only
+    # Column/Row/View set flet's `host_expanded` (column.py:88, row.py:104,
+    # view.py:163); a Container/SafeArea passes bounded constraints through.
+    # The wrapper would shrink-wrap to full content and, having no scroll of
+    # its own, clip everything below the fold. Container here stays bounded.
     return ft.Container(
         content=content,
         gradient=AppStyles.brand_gradient(_get_page())

@@ -1,4 +1,4 @@
-"""Regression tests for the revenue + notification batch (post-2.3.0).
+"""Regression tests for the revenue + history-badge batch (post-2.3.0).
 
 - Interleaved results banners: every 10 when the list is bigger than 10,
   every 5 when it is 10 or fewer, all tabs, capped per list.
@@ -30,7 +30,15 @@ def test_banner_spacing_rule():
     # nothing to interleave
     assert _banner_slots(0) == []
     assert _banner_slots(1) == []
-    assert _banner_slots(4) == []
+    # short lists (2-5) get ONE mid-list banner: extra coverage, never on the
+    # last card (the screen's bottom banner would otherwise sit adjacent)
+    assert _banner_slots(2) == [0]
+    assert _banner_slots(3) == [0]
+    assert _banner_slots(4) == [1]
+    assert _banner_slots(5) == [1]
+    # no slot ever lands on the final card, at any size
+    for n in range(2, 200):
+        assert all(s < n - 1 for s in _banner_slots(n)), n
 
 
 def test_banner_spacing_capped_for_huge_lists():
@@ -112,7 +120,7 @@ def test_interstitial_min_interval_blocks_burst():
     assert svc._last_interstitial_at == before
 
     # outside the window it proceeds (and stamps the new time)
-    svc._last_interstitial_at = 0.0
+    svc._last_interstitial_at = time.monotonic() - 7200.0
     svc.interstitial = None
 
     def _fresh(**kwargs):

@@ -158,6 +158,32 @@ def _texts_of(control) -> list[str]:
     return [n.value for n in out if hasattr(n, "value") and isinstance(n.value, str)]
 
 
+def _nodes_of(control) -> list:
+    from flet.components.component import Component
+
+    out: list = []
+
+    def expand(node):
+        out.append(node)
+        if isinstance(node, Component):
+            node.before_update()
+            b = getattr(node, "_b", None)
+            if b is not None:
+                expand(b)
+        elif isinstance(node, list):
+            for item in node:
+                expand(item)
+        else:
+            for ch in getattr(node, "controls", None) or []:
+                expand(ch)
+            content = getattr(node, "content", None)
+            if content is not None and not isinstance(content, str):
+                expand(content)
+
+    expand(control)
+    return out
+
+
 def _render_results():
     from flet.components.component import Renderer
 
@@ -176,9 +202,8 @@ def _render_results():
 def test_results_leaves_initializing_once_a_tick_lands():
     """The owner's top symptom: Results stuck on "Initializing" forever.
 
-    The shade notification and the screen are fed from the SAME call site
-    (`_apply_progress`), but the screen only re-renders when the flusher
-    bumps `progress_version`. So the chain that must hold is:
+    The screen only re-renders when the flusher bumps `progress_version`,
+    so the chain that must hold is:
 
         tick -> state.search_progress assigned
              -> _render_dirty set
@@ -191,25 +216,25 @@ def test_results_leaves_initializing_once_a_tick_lands():
     """
     controller = _make_controller()
     snap = _snapshot()
-    version_before = state.progress_version
     try:
         state.current_username = "primaryuser"
         state.search_mode = MODE_USERNAME
         state.search_targets = ["primaryuser"]
         state.is_searching = True
 
-        # Fresh scan: no tick yet — this is the initializing state.
+        # Fresh scan, no tick yet: the shade owns progress, so the screen
+        # must not render an in-app "Initializing" label.
         state.search_progress = SearchProgress(
             username="primaryuser", total_sites=0, is_running=True
         )
-        assert any("Initializing" in t for t in _texts_of(_render_results())), (
-            "expected Results to start at the initializing state"
-        )
+        assert not any(
+            "Initializing" in t for t in _texts_of(_render_results())
+        ), "Results renders in-app progress; the shade owns progress"
 
         # The engine's first tick, arriving the way a worker sends it:
         # `_progress_from_thread` coalesces on a 500ms window and the flush
         # that follows sets `_render_dirty` — that flag is the whole bridge
-        # between "the shade shows a number" and "the screen does".
+        # between "the engine reported a number" and "the screen shows it".
         first = SearchProgress(
             username="primaryuser", total_sites=5200, is_running=True
         )
@@ -226,15 +251,77 @@ def test_results_leaves_initializing_once_a_tick_lands():
         assert state.search_progress is first, "tick never reached state"
         # Link 2: the flush marked the shell dirty (what the flusher reads).
         assert controller._render_dirty, (
-            "the worker bridge never marked the render dirty — the shade "
+            "the worker bridge never marked the render dirty — the engine "
             "would advance while the screen stays frozen"
         )
-        # Link 3: bumping (what the flusher does) moves progress_version.
-        state.progress_version += 1
-        assert state.progress_version > version_before
-
-        # Link 4: the screen actually leaves "Initializing".
-        still = [t for t in _texts_of(_render_results()) if "Initializing" in t]
-        assert not still, "Results still shows Initializing after a real tick"
+        # Link 4: the shade owns progress now — the screen must NOT render an
+        # in-app progress label even after a real tick.
+        labels = _texts_of(_render_results())
+        assert not any("Initializing" in t for t in labels), (
+            "Results renders in-app progress; the shade owns progress"
+        )
+        assert not any("Checking" in t and "sites" in t for t in labels)
     finally:
         _restore(snap)
+
+
+def test_tiny_scanning_pill_is_the_only_in_app_indicator():
+    """While a scan runs the app shows a tiny tappable pill, nothing else.
+
+    Progress and Cancel live in the OS shade (foreground service); the app
+    must not render an in-app progress bar or Cancel button.
+    """
+    from flet.components.component import Renderer
+
+    from components.app_header import AppHeader, set_scan_navigation
+    from state.app_state import AppStateCtx
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    snap = _snapshot()
+    tapped: list = []
+    try:
+        state.current_username = "alice"
+        state.search_mode = MODE_USERNAME
+        state.is_searching = True
+        state.search_targets = ["alice"]
+        state.search_progress = SearchProgress(
+            username="alice", total_sites=5200, is_running=True
+        )
+        set_scan_navigation(lambda: tapped.append(1))
+
+        root = Renderer().render(
+            lambda: ControllerMethodsCtx(
+                ControllerMethods(),
+                lambda: AppStateCtx(state, lambda: AppHeader(MagicMock())),
+            )
+        )
+        texts = _texts_of(root)
+        assert any("Scanning" in t for t in texts), "tiny scanning pill missing"
+        assert not any(t == "Cancel" for t in texts), (
+            "Cancel belongs to the shade notification, not the app"
+        )
+
+        # The pill must navigate to Results when tapped.
+        pill = next(
+            n for n in _nodes_of(root)
+            if "scan is running" in (getattr(n, "tooltip", "") or "")
+        )
+        assert pill.on_click is not None, "the pill is not tappable"
+        pill.on_click(None)
+        assert tapped == [1], "tapping the pill did not open Results"
+
+        # And it must disappear when nothing is scanning.
+        state.is_searching = False
+        state.search_progress = None
+        idle = Renderer().render(
+            lambda: ControllerMethodsCtx(
+                ControllerMethods(),
+                lambda: AppStateCtx(state, lambda: AppHeader(MagicMock())),
+            )
+        )
+        assert not any("Scanning" in t for t in _texts_of(idle)), (
+            "the pill stayed after the scan ended"
+        )
+    finally:
+        _restore(snap)
+        set_scan_navigation(None)

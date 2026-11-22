@@ -4,7 +4,6 @@ import asyncio
 import datetime
 from typing import ClassVar
 
-import httpx
 import pytest
 
 
@@ -65,9 +64,10 @@ def test_client_timeout_http2_wiring():
         assert isinstance(client.timeout, httpx.Timeout)
         assert client.timeout.connect == 5.0
         assert client.timeout.read == 15.0
-        # Direct transport carries retries + http2
+        # httpx's wrapper carries retries on its internal pool.
         transport = client._transport
-        assert getattr(transport, "_retries", None) == 2 or True  # opaque internals
+        assert isinstance(transport, httpx.AsyncHTTPTransport)
+        assert transport._pool._retries == 2
     finally:
         state.proxy_url, state.retries = prev_proxy, prev_retries
         http_client._client = None
@@ -96,7 +96,16 @@ def test_client_rebuilds_on_retries_change():
         http_client._client_retries = None
 
 
-def test_client_proxy_mounts_present():
+def test_client_proxy_leg_keeps_retries():
+    """httpx drops retries on its proxy mount; the transport must carry them.
+
+    The old design mounted an AsyncHTTPTransport(proxy=...) on "all://" over
+    a direct transport — the mount made the direct leg dead config and the
+    proxy leg silently had retries=0 (httpcore only applies retries to its
+    plain ConnectionPool, not its HTTPProxy).
+    """
+    import httpx
+
     import services.http_client as http_client
     from core.state import state
 
@@ -106,9 +115,12 @@ def test_client_proxy_mounts_present():
         state.retries = 1
         client = http_client.get_client()
         mounts = getattr(client, "_mounts", {}) or {}
-        patterns = [getattr(k, "pattern", str(k)) for k in mounts]
-        assert "all://" in patterns
-        assert all(isinstance(v, httpx.AsyncHTTPTransport) for v in mounts.values())
+        assert not mounts, "no mount may override the single proxy transport"
+        transport = client._transport
+        # Must be httpx's wrapper (translates httpx.Request -> httpcore.Request);
+        # a raw httpcore pool raises AttributeError on every request.
+        assert isinstance(transport, httpx.AsyncHTTPTransport)
+        assert transport._pool._retries == 1, "proxy leg lost its retries"
     finally:
         state.proxy_url, state.retries = prev_proxy, prev_retries
         http_client._client = None

@@ -33,29 +33,28 @@ def test_notes_for_falls_back_to_latest():
     assert notes_for("2.0.0") == CHANGELOG["2.0.0"]
 
 
-def test_geo_flush_flag_clears_on_save(monkeypatch):
-    """After the interval expires, dirty entries flush and the flag resets."""
+def test_geo_flush_writes_after_interval(monkeypatch):
+    """After the interval expires the accumulated entries actually reach disk."""
     import core.geo_utils as geo
 
-    saved = {}
+    calls = []
     monkeypatch.setattr(
-        "services.cache_service.save_geo_cache", lambda store: saved.update(store)
+        "services.cache_service.save_geo_cache", lambda store: calls.append(dict(store))
     )
     monkeypatch.setattr(geo, "_load_disk_cache", lambda: {})
-    old_last, old_dirty = geo._LAST_GEO_FLUSH[0], geo._GEO_FLUSH_DIRTY[0]
+    old_last = geo._LAST_GEO_FLUSH[0]
     try:
-        geo._GEO_FLUSH_DIRTY[0] = True
         geo._LAST_GEO_FLUSH[0] = 0.0  # long ago: interval expired
         geo._record_disk_hit("xx-test", None)
-        assert geo._GEO_FLUSH_DIRTY[0] is False
+        assert len(calls) == 1, "interval elapsed but the cache was never written"
     finally:
         geo._LAST_GEO_FLUSH[0] = old_last
-        geo._GEO_FLUSH_DIRTY[0] = old_dirty
         geo._DISK_CACHE = None
         geo.resolve_location.cache_clear()
 
 
 def test_geo_flush_throttles_within_interval(monkeypatch):
+    """A novel lookup inside the throttle window must not hit the disk."""
     import time
 
     import core.geo_utils as geo
@@ -65,16 +64,13 @@ def test_geo_flush_throttles_within_interval(monkeypatch):
         "services.cache_service.save_geo_cache", lambda store: calls.append(store)
     )
     monkeypatch.setattr(geo, "_load_disk_cache", lambda: {})
-    old_last, old_dirty = geo._LAST_GEO_FLUSH[0], geo._GEO_FLUSH_DIRTY[0]
+    old_last = geo._LAST_GEO_FLUSH[0]
     try:
-        geo._GEO_FLUSH_DIRTY[0] = False
         geo._LAST_GEO_FLUSH[0] = time.monotonic()
         geo._record_disk_hit("xx-test-2", None)
-        assert geo._GEO_FLUSH_DIRTY[0] is True
-        assert calls == []
+        assert calls == [], "render-path IO was not throttled"
     finally:
         geo._LAST_GEO_FLUSH[0] = old_last
-        geo._GEO_FLUSH_DIRTY[0] = old_dirty
         geo._DISK_CACHE = None
         geo.resolve_location.cache_clear()
 

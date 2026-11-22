@@ -637,12 +637,12 @@ def SitesScreen() -> Control:
             + ("…" if len(missing) > 20 else "")
         )
 
-    # The ListView IS the screen root and owns the only scroll. A Column here
-    # would give it unbounded height (flet 1.0.4 ignores `expand` on column
-    # children — no control sets `host_expanded`), the list would shrink-wrap
-    # to all 5,200 rows, and a Column without `scroll=` never scrolls, so the
-    # screen clipped and could not be scrolled at all. Header controls ride
-    # inside the list instead.
+    # The ListView IS the screen root and owns the only scroll. A plain
+    # Column parent would give it unbounded main-axis height (only Column/
+    # Row/View set flet's `host_expanded`: column.py:88, row.py:104,
+    # view.py:163), the list would shrink-wrap to all 5,200 rows, and a
+    # Column without `scroll=` never scrolls — the screen clipped and could
+    # not be scrolled at all. Header controls ride inside the list instead.
     header_block = [search_bar, category_chips, bulk_actions, stats_header]
 
     if state.sites_version == 0 and not checked_states:

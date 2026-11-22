@@ -52,12 +52,16 @@ def _flatten(value, prefix: str = "") -> list[tuple[str, str]]:
     """Flatten nested dicts/lists into (label, text) rows — nothing dropped."""
     rows: list[tuple[str, str]] = []
     if isinstance(value, dict):
+        if not value:
+            rows.append((prefix or "Value", "—"))
+            return rows
         for k, v in value.items():
             label = f"{prefix} {_label(k)}".strip() if prefix else _label(k)
             rows.extend(_flatten(v, label))
         return rows
     if isinstance(value, (list, tuple, set)):
         if not value:
+            rows.append((prefix or "List", "—"))
             return rows
         if all(isinstance(v, dict) for v in value):
             for i, v in enumerate(value, 1):

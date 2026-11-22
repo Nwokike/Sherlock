@@ -6,27 +6,19 @@ here because they were wrong: `except A, B:` is valid Python 3.14 (PEP 758,
 the whole repo compiles under 3.14.7) and the two maigret
 `WindowsSelectorEventLoopPolicy` warnings are kept visible on purpose.
 
-1. **The permission dialog was bounded by the 1.5s fast probe.** It is a
-   human interaction — flet's own call allows 300s for exactly that reason
-   (`request_permissions(..., timeout=300)` in the installed package). A
-   first-run user slower than 1.5s got the request cancelled AND
-   `_unavailable` latched for the session, so tapping Allow granted nothing
-   until the app restarted and every later scan short-circuited before even
-   asking.
-2. **The supersede early-return was unguarded.** `is_cancelled` cannot tell
+1. **The supersede early-return was unguarded.** `is_cancelled` cannot tell
    a user cancel from a supersede — `_kill_all_activity` marks every live
    progress object cancelled — so a dying scan could clear the live
-   replacement's `is_searching`, stop its shared render flusher and retract
-   its notification bar.
-3. **The mode chip could flip the running scan's identity.** `search_mode`
+   replacement's `is_searching` and stop its shared render flusher.
+2. **The mode chip could flip the running scan's identity.** `search_mode`
    is the tick pipeline's notion of which engine is live, so a mid-scan chip
-   tap froze the progress shade.
-4. **The result-list memo fingerprints were too narrow.** Enrichment VALUES
+   tap froze the live progress display.
+3. **The result-list memo fingerprints were too narrow.** Enrichment VALUES
    and the email card's recovery/phone/domain fields sat outside the deps,
    so a later enrichment pass or a re-scan kept rendering the old card.
-5. **`section.setFolded(True)`** — the installed xmind signature takes no
+4. **`section.setFolded(True)`** — the installed xmind signature takes no
    argument, so the TypeError landed in the guard and the fold never applied.
-6. **The kill left the dead scan's target scope behind**, so a dying scan's
+5. **The kill left the dead scan's target scope behind**, so a dying scan's
    secondary tick stayed admissible until the replacement's engine rebound
    the list.
 """
@@ -85,81 +77,13 @@ def _texts_under(node) -> list[str]:
     ]
 
 
-# ── 1. The permission dialog is not a transport delay ────────────────────
-
-
-def _notifier(svc):
-    from services.scan_notify import ScanNotifier
-
-    page = MagicMock()
-    page.services = []
-    n = ScanNotifier(page)
-    n._service = svc
-    return n
-
-
-def test_permission_dialog_is_not_bounded_by_the_fast_probe(monkeypatch):
-    """A slow-but-real answer must still count as granted.
-
-    The old code wrapped `request_permissions` in `_PROBE_TIMEOUT`; a
-    first-run user who took longer than that to read the dialog had the
-    request cancelled and the module latched off, so the grant was lost.
-    """
-    import services.scan_notify as sn
-
-    monkeypatch.setattr(sn, "_PROBE_TIMEOUT", 0.05)
-
-    class _SlowDialog(sn._FakeBackend):
-        async def request_permissions(self) -> bool:
-            await asyncio.sleep(0.2)  # the user reads the dialog
-            return True
-
-    notifier = _notifier(_SlowDialog(enabled=False, granted=True))
-    assert asyncio.run(notifier.ensure_ready()) is True, (
-        "the permission dialog was cancelled by the fast probe — a real "
-        "first-run grant would be lost for the whole session"
-    )
-    assert notifier._ready is True
-    assert notifier._unavailable is False
-
-
-def test_unanswered_permission_dialog_is_not_latched_off(monkeypatch):
-    """An ignored dialog is not "no native layer".
-
-    It must not latch `_unavailable`: the next scan has to re-probe and pick
-    up a grant the user made in OS settings.
-    """
-    import services.scan_notify as sn
-
-    monkeypatch.setattr(sn, "_PERMISSION_TIMEOUT", 0.05)
-
-    class _HangingDialog(sn._FakeBackend):
-        async def request_permissions(self) -> bool:
-            await asyncio.sleep(3600)  # nobody answered
-            return False
-
-    svc = _HangingDialog(enabled=False, granted=False)
-    notifier = _notifier(svc)
-
-    assert asyncio.run(notifier.ensure_ready()) is False
-    assert notifier._unavailable is False, (
-        "an unanswered dialog latched the module off for the session"
-    )
-
-    # The user grants later (dialog answered, or OS settings). Next scan ok.
-    svc.enabled = True
-    assert asyncio.run(notifier.ensure_ready()) is True
-    assert notifier._ready is True
-
-
-# ── 2. A superseded scan must not touch the replacement ──────────────────
+# ── 1. A superseded scan must not touch the replacement ──────────────────
 
 
 def _controller() -> AppController:
     controller = AppController(MagicMock())
     controller._controller_methods = MagicMock()
     controller._controller_methods.show_results = lambda: None
-    controller.scan_notify = MagicMock()
     return controller
 
 
@@ -168,8 +92,7 @@ def test_superseded_username_return_cannot_touch_the_replacement():
 
     `is_cancelled` is not a supersede test: the kill path marks every live
     progress cancelled. Reaching that branch while a replacement is live must
-    not clear its flags, stop its shared render flusher, or retract its
-    notification bar.
+    not clear its flags or stop its shared render flusher.
     """
     controller = _controller()
     controller.sherlock_service = MagicMock()
@@ -210,9 +133,6 @@ def test_superseded_username_return_cannot_touch_the_replacement():
         assert state.current_username == "newtarget", "the kill never landed"
         assert state.is_searching is True, (
             "the superseded scan cleared the LIVE replacement's is_searching"
-        )
-        assert controller.scan_notify.scan_cancelled.call_count == 0, (
-            "the superseded scan retracted the replacement's notification"
         )
         assert stopped == [], "the superseded scan stopped the shared flusher"
         task_b.cancel()
@@ -275,9 +195,6 @@ def test_superseded_same_target_return_cannot_touch_the_replacement():
         assert state.is_searching is True, (
             "the dying same-target scan cleared the LIVE retry's is_searching"
         )
-        assert controller.scan_notify.scan_cancelled.call_count == 0, (
-            "the dying same-target scan retracted the retry's notification"
-        )
         assert stopped == [], "the dying same-target scan stopped the flusher"
         task_b.cancel()
         await asyncio.gather(task_b, return_exceptions=True)
@@ -325,9 +242,6 @@ def test_superseded_email_return_cannot_touch_the_replacement():
         assert state.is_searching is True, (
             "the superseded email scan cleared the LIVE replacement's is_searching"
         )
-        assert controller.scan_notify.scan_cancelled.call_count == 0, (
-            "the superseded email scan retracted the replacement's notification"
-        )
         assert stopped == [], "the superseded email scan stopped the shared flusher"
         task_b.cancel()
         await asyncio.gather(task_b, return_exceptions=True)
@@ -335,7 +249,7 @@ def test_superseded_email_return_cannot_touch_the_replacement():
     asyncio.run(run())
 
 
-# ── 3. The chip must not flip a running scan's identity ──────────────────
+# ── 2. The chip must not flip a running scan's identity ──────────────────
 
 
 def _render_home():
@@ -392,7 +306,7 @@ def test_mode_chip_is_visibly_locked_and_ignored_while_a_scan_is_live():
         email_pill = next(p for p in pills if "Email" in _texts_under(p))
         assert email_pill.on_click is None, (
             "the locked pill still takes taps — a mid-scan flip freezes the "
-            "progress shade (every tick fails the cross-mode guard)"
+            "live progress (every tick fails the cross-mode guard)"
         )
         assert email_pill.opacity == 0.45, "the lock must be visible, not silent"
 
@@ -429,7 +343,7 @@ def test_mode_chip_is_visibly_locked_and_ignored_while_a_scan_is_live():
         state.search_mode, state.is_searching, state.search_progress = snap
 
 
-# ── 4. Memo fingerprints must cover what the cards render ────────────────
+# ── 3. Memo fingerprints must cover what the cards render ────────────────
 
 
 def _render_results():
@@ -555,7 +469,7 @@ def test_username_card_refreshes_when_an_enrichment_value_changes():
         ) = snap
 
 
-# ── 5. The kill drops the dead scan's target scope ───────────────────────
+# ── 4. The kill drops the dead scan's target scope ───────────────────────
 
 
 def test_kill_drops_the_dead_scans_target_scope():
@@ -602,7 +516,7 @@ def test_kill_drops_the_dead_scans_target_scope():
         ) = snap
 
 
-# ── 6. The XMind fold actually applies ──────────────────────────────────
+# ── 5. The XMind fold actually applies ──────────────────────────────────
 
 
 def test_xmind_folds_the_uncategorized_section(tmp_path):

@@ -1,8 +1,10 @@
 """Structure tests for the flet 1.0.4 no-scroll bug class.
 
-`expand=True` on a child of `ft.Column` is a NO-OP in flet 1.0.4 (verified in
-flet's Dart `_expandable`: it only wraps in `Expanded` when the parent sets
-`host_expanded`, and no control sets it). A Column also does not scroll unless
+`expand=True` is honoured only when the DIRECT parent sets flet's
+`host_expanded` — installed flet sets it in Column/Row/View
+(column.py:88, row.py:104, view.py:163), never in Container or SafeArea.
+A plain Column gives its children unbounded main-axis height, and a Column
+does not scroll unless
 it has a `scroll` property (`ScrollableControl` returns the child unwrapped
 otherwise).
 
@@ -179,30 +181,30 @@ def test_sites_list_root_is_bounded():
         state.sites_cache = []
 
 
-def test_results_tab_list_is_not_trapped_in_a_plain_column():
-    """Results nests its ListView in TabBarView. Flutter's PageView bounds
-    its children, so a Column in the chain must not be the unbounded one —
-    the check is that the list is not a direct child of a scroll-less Column.
+def test_results_card_fingerprint_sees_late_field_changes():
+    """A late URL/tag change must invalidate the memoized card list.
+
+    The old structural test returned early when no ListView was rendered,
+    so it asserted nothing. This checks the actual 2.3.0 fix: the memo dep
+    fingerprint covers every field the card renders.
     """
-    from screens.results_screen import ResultsScreen
+    from screens.results_screen import _username_fingerprint
+    from services.sherlock_service import SiteResult
 
-    # A live username scan makes the tabs branch render.
-    state.is_searching = True
-    state.search_mode = MODE_USERNAME
-    state.current_username = "alice"
-    try:
-        nodes = _mount(ResultsScreen)
-        lv = _shortest_chain(nodes, "ListView")
-        if lv is None:
-            return  # small/empty result set: no list rendered
-        # TabBarView (a PageView) counts as a bounding ancestor
-        assert any(name in lv for name in ("TabBarView",)), lv
-    finally:
-        state.is_searching = False
-        state.search_progress = None
-        state.current_username = ""
-
-
+    before = SiteResult(
+        site_name="GitHub", url_main="", url_user="https://github.com/alice",
+        status="Claimed", http_status="200"
+    )
+    after = SiteResult(
+        site_name="GitHub",
+        url_main="",
+        url_user="https://github.com/alice",
+        status="Claimed",
+        http_status="200",
+        tags=["social"],
+        error_hint="follow-up",
+    )
+    assert _username_fingerprint([before]) != _username_fingerprint([after])
 def test_no_screen_puts_a_listview_directly_under_a_plain_column():
     """One structural rule covering every screen: no ListView whose nearest
     Column ancestor is itself scroll-less and un-nested is fine, but a
@@ -220,7 +222,8 @@ def test_no_screen_puts_a_listview_directly_under_a_plain_column():
         for node, chain in nodes:
             if type(node).__name__ != "ListView" or not chain:
                 continue
-            parent = chain[-2] if len(chain) >= 2 else None
+            # chain excludes the node itself: chain[-1] is the direct parent
+            parent = chain[-1] if chain else None
             assert parent != "Column", (
                 f"{fn.__name__}: ListView directly inside a Column "
                 "(unbounded height, no scroll)"

@@ -62,8 +62,7 @@ class AppState:
 
     # --- History & Result Cache ---
     # Entries added to history since the user last opened the History tab.
-    # Drives the nav badge (zero-dep alternative to OS notifications);
-    # cleared on mount and on open.
+    # Drives the nav badge; cleared on mount and on open.
     history_unseen: int = 0
     history: list | None = None
     # {f"{mode}:{query.lower()}": {found: [...], not_found: [...], errors: [...], ...}}
@@ -86,6 +85,11 @@ class AppState:
     cookies_path: str = ""
     i2p_proxy: str = ""
     check_domains: bool = False
+    # Cloudflare webgate bypass via a self-hosted FlareSolverr instance.
+    # Opt-in: the solver must be reachable, otherwise maigret logs the
+    # failure and continues without it (never fatal to the scan).
+    cloudflare_bypass: bool = False
+    flaresolverr_url: str = ""
     # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
     unhealthy_sites: list[str] | None = None
     selected_sites: list[str] | None = None

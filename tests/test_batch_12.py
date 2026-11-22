@@ -33,14 +33,6 @@ def test_maigret_kwargs_passthrough_and_filter():
     assert _maigret_kwargs(_strict, **kw) == {"a": 1}
 
 
-def test_clamp_helpers():
-    # Clamps live inline in search(); verify the expressions directly.
-    assert max(1, min(200, 0)) == 1
-    assert max(1, min(200, 500)) == 200
-    assert max(1, min(120, -5)) == 1
-    assert max(0, min(5, 99)) == 5
-
-
 def test_resolve_local_db_prefers_cache_tier(tmp_path, monkeypatch):
     """Materialized copy lands in cache/, legacy data/ orphans removed."""
     from types import SimpleNamespace
@@ -98,22 +90,6 @@ def test_db_health_clamp_and_cancel():
         assert out["sample"] == 0
 
     asyncio.run(_run())
-
-
-def test_recording_wrapper_stores_truth():
-    """_recording_progress equivalent: per-target ticks land in target_results."""
-    from core.state import state
-    from services.sherlock_service import SearchProgress
-
-    prev = dict(state.target_results)
-    try:
-        state.target_results.clear()
-        prog = SearchProgress(username="bob", total_sites=10)
-        state.target_results[prog.username] = prog
-        assert state.target_results["bob"] is prog
-    finally:
-        state.target_results.clear()
-        state.target_results.update(prev)
 
 
 def test_stale_loop_reset():

@@ -96,17 +96,38 @@ if _HOLEHE_AVAILABLE:
         import holehe_v2.core.impersonate as _imp
 
         if not getattr(_imp, "_sherlock_wrapped", False):
-            _orig_impersonate = _imp.impersonate_request_async
+            # The upstream helper's signature is
+            #   (url, method="GET", headers=None, data=None,
+            #    allow_redirects=True, impersonate="chrome120")
+            # and it has NO **kwargs. Several shipped holehe-v2 modules pass
+            # `params=` or `json=` (annaabi, gumroad, patreon, pornhub, quora),
+            # so forwarding to it raises TypeError and those validators can
+            # never succeed. Call curl_cffi directly with the same defaults:
+            # its request() accepts the full superset, and the per-scan
+            # fingerprint still comes from the ContextVar.
+            async def _impersonate_wrapped(
+                url,
+                method="GET",
+                headers=None,
+                data=None,
+                allow_redirects=True,
+                impersonate=None,
+                **kwargs,
+            ):
+                from curl_cffi.requests import AsyncSession
 
-            async def _impersonate_wrapped(url, method="GET", *args, **kwargs):
-                # Fingerprint default preserved: explicit arg wins, else the
-                # per-scan ContextVar, else upstream's chrome120. Everything
-                # else passes through untouched for forward-compat with new
-                # upstream params (proxy/timeout/cookies/...).
-                kwargs["impersonate"] = (
-                    kwargs.get("impersonate") or _SCAN_FINGERPRINT.get() or "chrome120"
+                fingerprint = (
+                    impersonate or _SCAN_FINGERPRINT.get() or "chrome150"
                 )
-                return await _orig_impersonate(url, method, *args, **kwargs)
+                async with AsyncSession(impersonate=fingerprint) as session:
+                    return await session.request(
+                        method,
+                        url,
+                        headers=headers or {},
+                        data=data,
+                        allow_redirects=allow_redirects,
+                        **kwargs,
+                    )
 
             _imp.impersonate_request_async = _impersonate_wrapped
             _imp._sherlock_wrapped = True
@@ -121,11 +142,12 @@ if _HOLEHE_AVAILABLE:
 # could not be checked, which is a different fact than being blocked.
 # (403/429 use word boundaries so "HTTP Error: 404" never matches.)
 _RATE_LIMITED_RE = re.compile(
-    r"\b(?:403|429)\b"
+    r"\b(?:403|412|429)\b"
     r"|rate.?limit|too many requests|rate exceeded|limit exceeded"
     r"|try again later|temporarily blocked|throttl"
     r"|waf|cloudflare|datadome|captcha"
-    r"|forbidden|bot challenge"
+    r"|forbidden|bot challenge|bot protection"
+    r"|\bbots?\b|\bblocked\b"
     r"|ip (?:has been |may be )?flagged"
     r"|registration attempt has been blocked"
     r"|blocked by \w+ waf",
@@ -333,6 +355,9 @@ class EmailService:
         self._progress: EmailSearchProgress | None = None
         self._tasks: list[asyncio.Task] = []
         self._worker_loop: asyncio.AbstractEventLoop | None = None
+        # Monotonic scan generation: a superseded worker's teardown must not
+        # cancel or clear the handles of the replacement that took its slot.
+        self._run_id: int = 0
 
     @property
     def is_available(self) -> bool:
@@ -441,6 +466,8 @@ class EmailService:
             )
         self._thread_cancel.clear()
         self._tasks.clear()
+        self._run_id += 1
+        run_id = self._run_id
 
         try:
             return await asyncio.to_thread(
@@ -452,6 +479,7 @@ class EmailService:
                 proxy,
                 on_progress,
                 fingerprint,
+                run_id,
             )
         except asyncio.CancelledError:
             # Outer cancellation (Flet side): stop the worker too, or it
@@ -468,6 +496,7 @@ class EmailService:
         proxy: str,
         on_progress: Callable[[EmailSearchProgress], None],
         fingerprint: str | None = None,
+        run_id: int = 0,
     ) -> EmailSearchProgress:
         """Run the whole holehe-v2 scan on this worker thread's private loop."""
         token = _SCAN_FINGERPRINT.set(fingerprint)
@@ -593,12 +622,14 @@ class EmailService:
                             return
                         await _run_one(name, fn)
 
-                self._tasks = [
+                tasks = [
                     spawn(_bounded(name, fn), name=f"holehe-{name}")
                     for name, fn in modules.items()
                 ]
-                await asyncio.gather(*self._tasks, return_exceptions=True)
-                self._tasks.clear()
+                self._tasks = tasks
+                await asyncio.gather(*tasks, return_exceptions=True)
+                if self._run_id == run_id:
+                    self._tasks.clear()
             finally:
                 restore_proxy()
             return progress
@@ -610,15 +641,19 @@ class EmailService:
             raise
         finally:
             progress.is_running = False
-            pending = [t for t in self._tasks if not t.done()]
+            # Snapshot OUR tasks: a replacement scan may already have replaced
+            # self._tasks, and cancelling those would kill the live scan.
+            tasks = list(self._tasks) if self._run_id == run_id else []
+            pending = [t for t in tasks if not t.done()]
             for t in pending:
                 t.cancel()
             if pending:
                 worker_loop.run_until_complete(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
-            self._tasks.clear()
-            self._worker_loop = None
+            if self._run_id == run_id:
+                self._tasks.clear()
+                self._worker_loop = None
             _SCAN_FINGERPRINT.reset(token)
             with contextlib.suppress(Exception):
                 asyncio.set_event_loop(None)

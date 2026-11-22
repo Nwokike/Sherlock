@@ -19,6 +19,57 @@ from core.theme import AppColors, is_dark_mode
 
 logger = logging.getLogger("AppHeader")
 
+# Navigation hook for the tiny "Scanning…" pill. AppController.init() sets it
+# so the header (shared by every screen) can open Results without each screen
+# passing a callback — same pattern as main._AD_SERVICE_REF.
+_SCAN_NAV: dict = {}
+
+
+def set_scan_navigation(show_results: Callable | None) -> None:
+    _SCAN_NAV["show_results"] = show_results
+
+
+def _scan_pill(on_tap: Callable) -> ft.Control:
+    """Tiny tappable chip — the ONLY in-app scan indicator.
+
+    No progress, no spinner, no counters: the OS shade owns progress and the
+    Cancel action. Tapping it opens the Results screen (proot-distro pattern).
+    """
+    return ft.Container(
+        content=ft.Row(
+            controls=[
+                ft.Icon(
+                    ft.Icons.RADAR_ROUNDED,
+                    size=tokens.ICON_XS,
+                    color=AppColors.PRIMARY,
+                ),
+                ft.Text(
+                    "Scanning…",
+                    size=tokens.FONT_XS,
+                    weight=ft.FontWeight.W_600,
+                    color=AppColors.PRIMARY,
+                ),
+                ft.Icon(
+                    ft.Icons.ARROW_FORWARD_ROUNDED,
+                    size=tokens.ICON_XS,
+                    color=AppColors.PRIMARY,
+                ),
+            ],
+            spacing=tokens.SPACE_XXS,
+            tight=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        padding=ft.Padding(
+            left=tokens.SPACE_SM, top=4, right=tokens.SPACE_SM, bottom=4
+        ),
+        border_radius=tokens.RADIUS_FULL,
+        bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.PRIMARY),
+        ink=True,
+        on_click=lambda e: on_tap(),
+        tooltip="A scan is running — tap to view results",
+    )
+
+
 
 def _theme_icon(page: ft.Page | None) -> str:
     if page is None or page.theme_mode == ft.ThemeMode.DARK:
@@ -143,7 +194,7 @@ def AppHeader(
             try:
                 from services.storage_service import StorageService
 
-                storage = StorageService(page)
+                storage = StorageService.for_page(page)
                 await storage.set(STORAGE_THEME, mode_str)
             except Exception as ex:
                 logger.warning("Failed to persist cycled theme: %s", ex)
@@ -223,26 +274,46 @@ def AppHeader(
             )
         )
 
+    header_row = ft.Row(
+        controls=[
+            ft.Row(
+                left_controls,
+                spacing=tokens.SPACE_XS,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Row(
+                right_controls,
+                spacing=tokens.SPACE_XXS,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+        ],
+        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        # Owner: header must scroll horizontally when extra action
+        # buttons make it overflow narrow screens (instead of clipping).
+        scroll=ft.ScrollMode.AUTO,
+    )
+
+    # While a scan runs the shade owns progress; in-app shows only this pill.
+    show_pill = bool(core_state.is_searching and core_state.search_progress)
+    pill = None
+    if show_pill:
+        nav = _SCAN_NAV.get("show_results")
+        if nav is not None:
+            pill = _scan_pill(nav)
+
+    if pill is not None:
+        return ft.Container(
+            content=ft.Column(controls=[pill, header_row], spacing=0, tight=True),
+            padding=ft.Padding(
+                left=tokens.SPACE_LG,
+                top=tokens.SPACE_SM,
+                right=tokens.SPACE_LG,
+                bottom=tokens.SPACE_SM,
+            ),
+        )
     return ft.Container(
-        content=ft.Row(
-            controls=[
-                ft.Row(
-                    left_controls,
-                    spacing=tokens.SPACE_XS,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                ft.Row(
-                    right_controls,
-                    spacing=tokens.SPACE_XXS,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-            ],
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            # Owner: header must scroll horizontally when extra action
-            # buttons make it overflow narrow screens (instead of clipping).
-            scroll=ft.ScrollMode.AUTO,
-        ),
+        content=header_row,
         padding=ft.Padding(
             left=tokens.SPACE_LG,
             top=tokens.SPACE_SM,

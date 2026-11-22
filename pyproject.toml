@@ -5,13 +5,16 @@ description = "Sherlock: Hunt down social media accounts by username across 5,20
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "flet>=1.0.4",
-    "flet-ads>=1.0.4",
-    "flet-notifications>=0.1.4",
+    "flet>=1.1.2",
+    "flet-ads>=1.1.2",
+    "flet-notifications>=1.1.2",
     "holehe-v2>=1.0.3",
     "httpx[http2,socks]>=0.28.1",
-    "maigret>=0.6.6",
-    "socid-extractor>=0.1.1",
+    "maigret>=0.6.7",
+    # maigret 0.6.7 pins networkx <3.0.0, so 2.8.8 is the latest compatible.
+    # (networkx 3.x would also give a scipy-free pagerank, but it conflicts.)
+    "networkx>=2.8.8,<3.0.0",
+    "socid-extractor>=0.1.2",
 ]
 
 [tool.flet]
@@ -20,14 +23,13 @@ product = "Sherlock"
 description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
 company = "Kiri"
 build_number = 13
-icon = "src/assets/icon.png"
 
 [tool.flet.app]
 path = "src"
-# No `assets_dir` here on purpose: the CLI resolves it relative to `path`,
-# so any value produces src/src/assets under `flet run`. main() passes
-# `assets_dir="src/assets"` to ft.run() directly, which is the only place it
-# is needed.
+# No `assets_dir` here: flet-cli 1.0.4 does not read that key at all
+# (run.py/build_base.py read only path/module). main() resolves
+# Path(__file__).parent/"assets" and passes it to ft.run() directly, which
+# works under `flet run`, a direct launch, and a build.
 
 [tool.flet.boot_screen]
 name = "flet"
@@ -49,10 +51,9 @@ jni = "1.1.0"
 legacy_packaging = true
 bundle_id = "ng.kiri.sherlock"
 target_arch = ["arm64-v8a", "x86_64"]
-
-[tool.flet.android.manifest_application]
-usesCleartextTraffic = "true"
-requestLegacyExternalStorage = "true"
+# Our own Android resources (notification small icon drawables), copied into
+# the generated android/app/src/main/res by `flet build`.
+res_dir = "android_res"
 
 [tool.flet.android.meta_data]
 "com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~1261089274"
@@ -60,16 +61,28 @@ requestLegacyExternalStorage = "true"
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true
 "android.permission.ACCESS_NETWORK_STATE" = true
+# Screen stays on while a scan runs (ft.Wakelock).
 "android.permission.WAKE_LOCK" = true
-"android.permission.USE_BIOMETRIC" = true
+# Scan progress in the shade: the foreground service keeps the engine alive
+# when the user leaves the app (flet-notifications 1.1.x).
+"android.permission.FOREGROUND_SERVICE" = true
+"android.permission.FOREGROUND_SERVICE_SPECIAL_USE" = true
+"android.permission.POST_NOTIFICATIONS" = true
+
+[tool.flet.android.service."com.dexterous.flutterlocalnotifications.ForegroundService"]
+exported = false
+foregroundServiceType = "specialUse"
+
+# The special-use SUBTYPE is a <property> INSIDE the <service>, not an
+# application-level <meta-data> — the installed plugin prescribes this exact
+# nested table and flet-cli renders it as <property> under <service>.
+[tool.flet.android.service."com.dexterous.flutterlocalnotifications.ForegroundService".property]
+"android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" = "Username/email OSINT scans stay alive in the background"
 
 [tool.flet.android.feature]
 "android.software.leanback" = false
 "android.hardware.touchscreen" = true
 
-[tool.flet.android.signing]
-key_store = "../../../../kiri_keystore.jks"
-key_alias = "upload"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -93,9 +106,9 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=9.2.0",
     "pytest-timeout>=2.4",
-    "ruff>=0.15.14",
+    "ruff>=0.17.6",
 ]
 
 [tool.ruff.lint]
@@ -122,14 +135,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests assert by design (pytest); S105 is a storage-KEY name, not a secret.
 "tests/**" = ["S101"]
-# `id` mirrors the flet_notifications.show/cancel signature it stands in
-# for; renaming it would hide the correspondence.
-"src/services/scan_notify.py" = ["A002"]
 
 # Build-time pruning: serious_python cleanup globs — the ONLY channel that
 # shrinks artifacts (post-build rm cannot; deps are re-packaged from
 # project.dependencies into build/site-packages). Verified safe in
-# docs/dependency-study.md §4/§5: locales are gettext our paths never read;
+# the dependency audit §4/§5 (docs were removed in 2.3.0): locales are gettext our paths never read;
 # oauthlib = flet OAuth (no login flow here); flask stack = maigret/web only.
 [tool.flet.cleanup]
 package_files = [

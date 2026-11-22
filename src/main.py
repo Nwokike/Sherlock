@@ -38,6 +38,7 @@ from core.constants import (
     STORAGE_CACHED_RESULTS,
     STORAGE_CACHED_SITES,
     STORAGE_CHECK_DOMAINS,
+    STORAGE_CLOUDFLARE_BYPASS,
     STORAGE_COOKIES_PATH,
     STORAGE_DB_UNHEALTHY,
     STORAGE_DEEP_ENRICH,
@@ -48,6 +49,7 @@ from core.constants import (
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_EXTRACT_INFO,
+    STORAGE_FLARESOLVERR_URL,
     STORAGE_HISTORY,
     STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
@@ -80,7 +82,11 @@ from services.email_service import EmailResult, EmailSearchProgress, EmailServic
 from services.enrich_service import EnrichService
 from services.scan_notify import ScanNotifier
 from services.sherlock_service import SearchProgress, SherlockService, SiteResult
-from services.storage_service import StorageService
+from services.storage_service import (
+    StorageService,
+    decode_stored_history,
+    encode_history_entries,
+)
 from services.update_service import UpdateService
 from state.controller_ctx import (
     ControllerMethods,
@@ -90,10 +96,7 @@ from state.controller_ctx import (
 logger = logging.getLogger("sherlock")
 
 
-# The one AdService instance for this session. app_shell's export flow needs
-# it for the export interstitial and has no controller reference of its own,
-# so AppController.init() publishes it here. .get("service") -> AdService|None.
-_AD_SERVICE_REF: dict = {}
+
 
 
 class AppController:
@@ -103,10 +106,11 @@ class AppController:
         self.page = page
         self.storage: StorageService | None = None
         self.ad_service: AdService | None = None
-        # Built in init() (needs page context); a no-op stand-in until then
-        # so cancel/close paths are safe on a partially-constructed object
-        # (tests build AppController directly).
+        # OS-shade scan progress (foreground service + progress bar + Cancel)
+        # and the wake lock that keeps the screen on while a scan runs.
         self.scan_notify: ScanNotifier = ScanNotifier(page)
+        self.wakelock: ft.Wakelock | None = None
+        self._last_notify_progress: float = 0.0
         self.sherlock_service: SherlockService | None = None
         self.email_service: EmailService | None = None
         self.enrich_service: EnrichService | None = None
@@ -215,12 +219,30 @@ class AppController:
         # append and the tick would re-enter scope. The next `search()` binds
         # the fresh list.
         state.search_targets = []
-        # The old scan's foreground service must die with its engine. Without
-        # this the superseding scan posted a second start_foreground_service
-        # while the previous one kept running, and the orphaned bar looked
-        # exactly like a scan stuck at 99%. Idempotent when nothing runs.
-        self.scan_notify.stop_service()
+        # The old scan's shade entry and wake lock die with its engine. The
+        # replacement re-opens both in its own start path. Loop-safe: cancel
+        # and supersede can arrive from a sync context (tests, UI handlers).
+        self._spawn_bg(self.scan_notify.stop_service(), "scan-notify-stop")
+        self._spawn_bg(self._set_wakelock(False), "wakelock-off")
         logger.info("KILL %s → cancelled: %s", reason, ", ".join(killed) or "nothing")
+
+    def _spawn_bg(self, coro, name: str = "bg-task"):
+        """Spawn when a loop is running; otherwise close the coro and skip.
+
+        Cancelling/superseding can happen from synchronous UI callbacks where
+        no loop is current — a bare create_task would leak the coroutine and
+        trip the warning-escalation filter.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                coro.close()
+            except Exception:
+                pass
+            logger.debug("No running loop; skipped %s", name)
+            return None
+        return spawn(coro, name=name)
 
     def _live_username_progress(self) -> bool:
         """True when a username scan is genuinely mid-flight.
@@ -235,105 +257,15 @@ class AppController:
             return False  # email progress or nothing at all
         return bool(getattr(prog, "is_running", False))
 
-    async def _ensure_notifications_ready(self, target: str, *, is_email: bool) -> bool:
-        """Bring the OS notification up and ask for permission, once.
-
-        Must be **awaited**: the service construction and the POST_NOTIFICATIONS
-        request are coroutines, and firing them through `page.run_task` returns
-        a Future immediately — so a `show()` on the next synchronous line sees
-        no service and the first notification of the session is dropped
-        silently. Called from the spawned search task, before the engine
-        starts, so the sequence is guaranteed.
-
-        A declined permission never blocks the scan: the user gets one snack
-        offering the OS settings page instead.
-        """
-        target = (target or "").strip()
-        if not target:
-            return False
-        try:
-            self.scan_notify.set_handlers(
-                on_cancel=self.cancel_search
-                if not is_email
-                else self.cancel_email_search,
-                on_view=(
-                    self._controller_methods.show_results
-                    if self._controller_methods
-                    else None
-                ),
-                on_copy=self._copy_scan_summary,
-                on_permission_denied=self._notify_permission_denied,
-            )
-            ready = await self.scan_notify.ensure_ready()
-            if not ready:
-                return False
-            self.scan_notify.scan_started(target, is_email=is_email)
-            return True
-        except Exception as exc:
-            logger.warning("ScanNotifier: start failed: %s", exc)
-            return False
-
-    def _copy_scan_summary(self) -> None:
-        """Put the finished-scan one-liner on the clipboard.
-
-        The Copy-report notification action's target: the summary line is
-        the same one the resume snack shows, so the user gets the result
-        without opening anything.
-        """
-        summary = getattr(self, "_last_scan_summary", None)
-        if not summary:
-            return
-        mode, target, found = summary
-        noun = "accounts" if mode == "username" else "results"
-        line = f"Sherlock: {found} {noun} for {target}"
-
-        async def _copy():
-            try:
-                from core.shared_services import shared_clipboard
-
-                await shared_clipboard(self.page).set_text(line)
-                from core.notify import show_snack
-
-                show_snack(self.page, "Scan summary copied")
-            except Exception as exc:
-                logger.warning("Scan summary copy failed: %s", exc)
-
-        spawn(_copy())
-
-    def _notify_permission_denied(self) -> None:
-        """Offer the OS settings page once POST_NOTIFICATIONS is declined."""
-        from core.notify import show_snack
-        from core.theme import AppColors
-
-        show_snack(
-            self.page,
-            "Notifications are off for Sherlock — scans won't show progress",
-            bgcolor=AppColors.WARNING,
-            duration=6000,
-            action_label="Settings",
-            on_action=lambda _e: self._open_notification_settings(),
-        )
-
-    def _open_notification_settings(self) -> None:
-        """Async hop into the app's own notification settings page."""
-        page = self.page
-        if page is None:
-            return
-
-        async def _open():
-            await self.scan_notify.open_settings()
-
-        spawn(_open())
-
     def _owns_scan(self) -> bool:
         """True while the CALLING task is still the registered search task.
 
         Target equality alone is not ownership: the retry button and a
         history re-search can start a scan for the SAME target, and a dying
         scan that only compares names would then clear the live
-        replacement's flags, stop its shared render flusher and retract its
-        notification bar. `_search_task` is set by every start, so a
-        superseded scan fails this test however its result arrives.
+        replacement's flags and stop its shared render flusher.
+        `_search_task` is set by every start, so a superseded scan fails
+        this test however its result arrives.
 
         Outside a running loop (direct calls from teardown/tests) there is no
         calling task to compare, and the caller's own target guard decides.
@@ -362,11 +294,6 @@ class AppController:
                 progress_obj.is_running = False
             state.progress_version += 1
             self._stop_render_flusher()
-            # The notification was already posted (ensure_ready + scan_started
-            # run before the interstitial/site-load window this guard covers),
-            # so it must be retracted too — otherwise a cancel during that
-            # window strands a live foreground service with nothing to show.
-            self.scan_notify.stop_service()
         except Exception as exc:  # never mask the cancellation
             logger.warning("abandon_search cleanup failed: %s", exc)
 
@@ -413,7 +340,7 @@ class AppController:
 
         Every bump invalidates every use_context(AppStateCtx) component and
         re-renders + re-diffs + re-encodes the whole tree on the main loop —
-        Flet 0.86.5 has zero internal batching (session.py __updates_scheduler
+        Installed flet 1.0.4 coalesces updates per wake (session.py __updates_scheduler
         drains per wake, MessagePack encode inline). Funneling all scan-time
         mutations through this one window keeps the loop free for socket
         receive and click dispatch.
@@ -493,13 +420,36 @@ class AppController:
         # mount one of each so per-click helpers reuse instead of registering
         # a new service on every tap.
         mount_shared_services(self.page)
+
+        # Wake lock: keeps the display awake while a scan runs, so the user
+        # can leave the app mid-scan (the foreground service keeps the engine
+        # alive; this keeps the screen on).
+        self.wakelock = ft.Wakelock()
+        if self.wakelock not in self.page.services:
+            self.page.services.append(self.wakelock)
+
+        # Scan progress in the shade: mount the notification service and
+        # channels up front so the first scan does not pay for it.
+        self.scan_notify.set_handlers(
+            on_cancel=self.cancel_search,
+            on_view=self._show_results_from_notification,
+            on_permission_denied=self._notify_permission_denied,
+        )
+        # The shared AppHeader pill uses this to open Results.
+        from components.app_header import set_scan_navigation
+
+        set_scan_navigation(self._show_results_from_notification)
+        self.page.run_task(self.scan_notify.mount)
+
         self.page.run_task(self._init_connectivity)
         self.page.on_app_lifecycle_state_change = self._on_lifecycle_change
 
         # Init services
-        self.storage = StorageService(self.page)
+        self.storage = StorageService.for_page(self.page)
         self.ad_service = AdService(self.page)
-        _AD_SERVICE_REF["service"] = self.ad_service
+        from services.ad_service import AD_SERVICE_REF
+
+        AD_SERVICE_REF["service"] = self.ad_service
         self.sherlock_service = SherlockService()
         self.email_service = EmailService()
         self.enrich_service = EnrichService()
@@ -755,6 +705,12 @@ class AppController:
             i2p_raw = await self.storage.get(STORAGE_I2P_PROXY)
             if i2p_raw:
                 state.i2p_proxy = i2p_raw
+            cf_raw = await self.storage.get(STORAGE_CLOUDFLARE_BYPASS)
+            if cf_raw is not None:
+                state.cloudflare_bypass = cf_raw == "true"
+            solver_raw = await self.storage.get(STORAGE_FLARESOLVERR_URL)
+            if solver_raw is not None:
+                state.flaresolverr_url = solver_raw
             cd_raw = await self.storage.get(STORAGE_CHECK_DOMAINS)
             if cd_raw is not None:
                 state.check_domains = cd_raw == "true"
@@ -883,7 +839,7 @@ class AppController:
         # owns it after its own gates"). Without this, a start whose mode
         # disagrees with the running engine (hydrated default, a chip set
         # elsewhere) made _apply_progress's cross-mode guard drop EVERY tick
-        # of a perfectly live scan — screen and shade both frozen.
+        # of a perfectly live scan — the Results screen froze.
         state.search_mode = MODE_USERNAME
         state.is_searching = True
         state.search_error = None
@@ -897,11 +853,10 @@ class AppController:
             "WATCHDOG: username search START %r (total_sites pending)",
             target_clean,
         )
-        # Awaited (not run_task): the service and the POST_NOTIFICATIONS
-        # request are coroutines that must land before the first show(),
-        # or the first notification of the session is silently dropped.
-        await self._ensure_notifications_ready(target_clean, is_email=False)
-
+        # Shade progress (foreground service) + keep the screen awake: the
+        # scan must survive the user leaving the app.
+        await self.scan_notify.scan_started(target_clean, is_email=False)
+        await self._set_wakelock(True)
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
             try:
@@ -958,6 +913,8 @@ class AppController:
                 on_progress=self._progress_from_thread,
                 timeout=state.timeout,
                 after_primary=self._on_username_primary_done,
+                on_secondary_target=self._on_secondary_target,
+                on_target_result=self._on_target_result,
             )
             # If this scan was cancelled or superseded by another search, do not clobber state
             if (
@@ -973,25 +930,16 @@ class AppController:
                 # superseded scan reaches here after its replacement started,
                 # and `is_cancelled` alone cannot tell the two apart: the kill
                 # path marks every live progress cancelled, supersede included.
-                # The replacement owns the flags, the shared render flusher,
-                # the notification id and the foreground service — a dying
-                # scan must not clear, stop or retract any of them.
+                # The replacement owns the flags and the shared render
+                # flusher — a dying scan must not clear or stop either.
                 if self._owns_scan():
                     state.is_searching = False
                     username_progress.is_running = False
                     state.progress_version += 1
-                    # Only a USER cancel takes the bar with it: the cancel
-                    # path marks a still-owned scan, a supersede fails the
-                    # ownership check above.
-                    if getattr(result, "is_cancelled", False):
-                        self.scan_notify.scan_cancelled()
                     self._stop_render_flusher()
                 return
 
             state.is_searching = False
-            self.scan_notify.scan_finished(
-                len(result.found), result.total_sites or result.checked_sites
-            )
             merged_results: dict = {}
 
             def _merge_result(r) -> None:
@@ -1009,49 +957,83 @@ class AppController:
                 _merge_result(r)
             state.last_results = merged_results
             state.last_results_username = target_clean
+            # Aggregate across targets: for a recursive/permuted scan `result`
+            # is only the LAST secondary, so its counters describe one handle,
+            # not the scan. Found is deduped by site (a claimed row wins).
+            progs = list((state.target_results or {}).values())
+            if len(progs) > 1:
+                checked_total = sum(
+                    min(
+                        getattr(p, "checked_sites", 0) or 0,
+                        getattr(p, "total_sites", 0) or 0,
+                    )
+                    for p in progs
+                )
+                sites_total = sum(getattr(p, "total_sites", 0) or 0 for p in progs)
+            else:
+                checked_total = result.checked_sites
+                sites_total = result.total_sites
+            found_count = sum(
+                1 for r in merged_results.values() if r.status == "Claimed"
+            )
             logger.info(
                 "WATCHDOG: username search COMPLETE %r — %d/%d checked, %d found",
                 target_clean,
-                result.checked_sites,
-                result.total_sites,
-                len(result.found),
+                checked_total,
+                sites_total,
+                found_count,
             )
 
             await self._save_to_history(
-                target_clean, len(result.found), result.total_sites, mode=MODE_USERNAME
+                target_clean, found_count, sites_total, mode=MODE_USERNAME
             )
 
             # Final progress apply (enqueues any remaining found URLs).
-            # Explicit bump: the flusher only renders while is_searching,
-            # and the final result object may be the live one (silent assign).
+            # Explicit bump: completion must render even though is_searching
+            # is now False, and the result object may be the live one (silent
+            # assign).
             await self._apply_progress(result)
             state.progress_version += 1
             self._stop_render_flusher()
             self._last_scan_summary = (
                 "username",
                 target_clean,
-                len(result.found),
+                found_count,
             )
+            # Shade: stop the FGS and post the result row; drop the wake lock.
+            await self.scan_notify.scan_finished(
+                found_count, sites_total or result.total_sites
+            )
+            await self._set_wakelock(False)
         except asyncio.CancelledError:
             # BaseException in 3.8+ — `except Exception` does NOT catch
             # this. Without clearing the flag here, a cancelled scan left
             # is_searching stuck True and the Search button disabled
             # forever ("the scan is not starting").
             logger.info("WATCHDOG: username search %r killed mid-flight", target_clean)
-            if getattr(state, "current_username", None) == target_clean:
+            # Ownership, not just target equality: a cancel-then-retry of the
+            # SAME handle leaves a dying scan whose target still matches, and
+            # clearing unconditionally would flip the LIVE replacement's
+            # is_searching and stop its flusher (the stuck-search wedge).
+            if (
+                self._owns_scan()
+                and getattr(state, "current_username", None) == target_clean
+                and state.search_mode == MODE_USERNAME
+            ):
                 state.is_searching = False
                 username_progress.is_running = False
                 state.search_error = None
                 state.progress_version += 1
                 self._stop_render_flusher()
-                # A crash/cancel between scan_started() and completion
-                # never reaches scan_finished(), so the foreground service
-                # has to be retracted here or it outlives the failure with
-                # a frozen percentage in the shade.
-                self.scan_notify.stop_service()
+                await self.scan_notify.stop_service()
+                await self._set_wakelock(False)
             raise
         except Exception as e:
-            if getattr(state, "current_username", None) == target_clean:
+            if (
+                self._owns_scan()
+                and getattr(state, "current_username", None) == target_clean
+                and state.search_mode == MODE_USERNAME
+            ):
                 logger.exception("Search failed")
                 state.is_searching = False
                 username_progress.is_running = False
@@ -1077,10 +1059,8 @@ class AppController:
                 )
                 self._show_snack(msg, duration=10000)
                 self._stop_render_flusher()
-                # Same contract as the CancelledError handler above: a hard
-                # failure is not a completion, so retract the service rather
-                # than leaving a dead bar claiming a scan still runs.
-                self.scan_notify.stop_service()
+                await self.scan_notify.stop_service()
+                await self._set_wakelock(False)
 
     async def _drain_enrich_queue(self) -> None:
         """Stream profile enrichment in real-time as sites are found."""
@@ -1179,6 +1159,53 @@ class AppController:
         # Final wait for in-flight tasks when scan completes
         if pending_tasks and gen == self._enrich_gen:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+    def _record_target_result(self, progress) -> None:
+        """MAIN LOOP: store per-target truth marshalled from the scan worker.
+
+        `state.target_results` is an observable; writing it on the worker
+        thread schedules UI updates off-loop. Every tick is recorded here
+        (uncoalesced) so no target of a multi-target/recursive scan is lost.
+        """
+        try:
+            state.target_results[progress.username] = progress
+        except Exception as exc:
+            logger.warning("Per-target record failed: %s", exc)
+
+    def _append_search_target(self, name: str) -> None:
+        """MAIN LOOP: widen the tick-admission scope with a recursive secondary.
+
+        The engine appends secondaries to its OWN plain list; the observable
+        `state.search_targets` holds a copy made at assignment, so without
+        this the scope filter in `_apply_progress` drops every secondary tick
+        and the recursive tail freezes at the primary's 100%.
+        """
+        targets = state.search_targets
+        if targets is None:
+            state.search_targets = [name]
+            return
+        if name not in targets:
+            targets.append(name)
+
+    def _on_secondary_target(self, name: str) -> None:
+        """WORKER THREAD: hand a newly discovered secondary to the main loop."""
+        loop = self._main_loop
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self._append_search_target, name)
+        except RuntimeError:
+            pass  # main loop already tearing down
+
+    def _on_target_result(self, progress) -> None:
+        """WORKER THREAD: hand per-target truth to the main loop, uncoalesced."""
+        loop = self._main_loop
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self._record_target_result, progress)
+        except RuntimeError:
+            pass
 
     def _progress_from_thread(self, progress) -> None:
         """Bridge a scan-worker progress tick onto the main event loop.
@@ -1288,17 +1315,7 @@ class AppController:
                     )
                     return
         state.search_progress = progress
-
-        # Mirror the tick into the OS notification (the shade owns live
-        # progress), at the same 2Hz budget as the render flusher.
-        if state.is_searching:
-            checked = getattr(progress, "checked_sites", None)
-            if checked is None:
-                checked = getattr(progress, "checked_modules", 0) or 0
-            total = getattr(progress, "total_sites", None)
-            if not total:
-                total = getattr(progress, "total_modules", 0) or 0
-            self.scan_notify.progress(checked, total)
+        self._notify_scan_progress(progress)
 
         # Stream newly discovered found URLs into the enrichment queue
         if (
@@ -1312,6 +1329,25 @@ class AppController:
                 if url and url not in self._enriched_seen:
                     self._enriched_seen.add(url)
                     self._enrich_queue.put_nowait(url)
+
+    def _notify_scan_progress(self, progress) -> None:
+        """Mirror a tick into the shade, throttled to the ~2 Hz render budget.
+
+        The shade owns progress; the app shows only the tiny pill. The FGS
+        notification is updated in place (reused id + only_alert_once), so
+        advancing progress never re-alerts.
+        """
+        now = time.monotonic()
+        if now - self._last_notify_progress < 0.5:
+            return
+        self._last_notify_progress = now
+        checked = getattr(progress, "checked_sites", None)
+        if checked is None:
+            checked = getattr(progress, "checked_modules", 0) or 0
+        total = getattr(progress, "total_sites", None)
+        if not total:
+            total = getattr(progress, "total_modules", 0) or 0
+        self.scan_notify.progress(checked, total)
 
     def _cancel_task_threadsafe(self, task: asyncio.Task | None) -> None:
         """Cancel a task from any thread (sync UI callbacks may run off-loop)."""
@@ -1333,7 +1369,6 @@ class AppController:
         """Cancel a running search (sync — called from UI)."""
         logger.info("CANCEL requested by user (username mode)")
         self._kill_all_activity("user-cancel[username]")
-        self.scan_notify.scan_cancelled()
         prog = state.search_progress
         if prog is not None and getattr(prog, "is_running", False):
             # Only mark a LIVE scan: a cancel landing after completion
@@ -1403,8 +1438,8 @@ class AppController:
         state.search_progress = email_progress
         state.progress_version += 1
         logger.info("WATCHDOG: email search START %r", email_clean)
-        # Awaited, for the same reason as the username path above.
-        await self._ensure_notifications_ready(email_clean, is_email=True)
+        await self.scan_notify.scan_started(email_clean, is_email=True)
+        await self._set_wakelock(True)
 
         # Interstitial on every email search too — same v1.4.0 behavior
         if self.ad_service:
@@ -1443,14 +1478,12 @@ class AppController:
                 )
                 # Same rule as the username path: only the scan that still
                 # OWNS the slot may touch it, because a superseded scan
-                # reaches here after its replacement owns the flags, the
-                # shared render flusher, the notification id and the service.
+                # reaches here after its replacement owns the flags and the
+                # shared render flusher.
                 if self._owns_scan():
                     state.is_searching = False
                     email_progress.is_running = False
                     state.progress_version += 1
-                    if getattr(result, "is_cancelled", False):
-                        self.scan_notify.scan_cancelled()
                     self._stop_render_flusher()
                 return
 
@@ -1462,10 +1495,12 @@ class AppController:
                 result.total_modules,
                 len(result.found),
             )
-            self.scan_notify.scan_finished(
-                len(result.found), result.total_modules or result.checked_modules
-            )
             self._last_scan_summary = ("email", email_clean, len(result.found))
+            await self.scan_notify.scan_finished(
+                len(result.found),
+                result.total_modules or result.checked_modules,
+            )
+            await self._set_wakelock(False)
 
             # Convert to result list for state
             all_results = [
@@ -1543,64 +1578,67 @@ class AppController:
             # would flip the LIVE replacement's is_searching to False and
             # stop its render flusher, stranding it with a dead UI.
             logger.info("WATCHDOG: email search %r killed mid-flight", email)
-            if state.current_username.strip().lower() == email_clean.lower() and (
-                state.search_mode == MODE_EMAIL
+            if (
+                self._owns_scan()
+                and state.current_username.strip().lower() == email_clean.lower()
+                and state.search_mode == MODE_EMAIL
             ):
                 state.is_searching = False
                 email_progress.is_running = False
                 state.search_error = None
                 state.progress_version += 1
                 self._stop_render_flusher()
-                # Retract the foreground service on this exit path too —
-                # inside the ownership guard so a superseded task's late
-                # cancellation cannot kill the live replacement's service.
-                self.scan_notify.stop_service()
+                await self.scan_notify.stop_service()
+                await self._set_wakelock(False)
             raise
         except ValueError as ve:
-            if state.current_username.strip().lower() == email_clean.lower() and (
-                state.search_mode == MODE_EMAIL
+            if (
+                self._owns_scan()
+                and state.current_username.strip().lower() == email_clean.lower()
+                and state.search_mode == MODE_EMAIL
             ):
                 state.is_searching = False
                 email_progress.is_running = False
                 state.progress_version += 1
                 self._stop_render_flusher()
-                self.scan_notify.stop_service()
             logger.warning("Email search rejected: %s", ve)
             self._show_snack(str(ve))
         except Exception as e:
             logger.exception("Email search failed")
-            if state.current_username.strip().lower() == email_clean.lower() and (
-                state.search_mode == MODE_EMAIL
+            if (
+                self._owns_scan()
+                and state.current_username.strip().lower() == email_clean.lower()
+                and state.search_mode == MODE_EMAIL
             ):
                 state.is_searching = False
                 email_progress.is_running = False
                 state.progress_version += 1
                 state.search_error = str(e)
-                self.scan_notify.stop_service()
-            msg = (
-                ERR_NETWORK
-                if any(
-                    kw in str(e).lower()
-                    for kw in (
-                        "dns",
-                        "connect",
-                        "network",
-                        "offline",
-                        "unreachable",
-                        "timeout",
-                        "timed out",
+                msg = (
+                    ERR_NETWORK
+                    if any(
+                        kw in str(e).lower()
+                        for kw in (
+                            "dns",
+                            "connect",
+                            "network",
+                            "offline",
+                            "unreachable",
+                            "timeout",
+                            "timed out",
+                        )
                     )
+                    else ERR_GENERIC
                 )
-                else ERR_GENERIC
-            )
-            self._show_snack(msg, duration=10000)
-            self._stop_render_flusher()
+                self._show_snack(msg, duration=10000)
+                self._stop_render_flusher()
+                await self.scan_notify.stop_service()
+                await self._set_wakelock(False)
 
     def cancel_email_search(self) -> None:
         """Cancel a running email search (sync — called from UI)."""
         logger.info("CANCEL requested by user (email mode)")
         self._kill_all_activity("user-cancel[email]")
-        self.scan_notify.scan_cancelled()
         prog = state.search_progress
         if prog is not None and getattr(prog, "is_running", False):
             prog.is_running = False
@@ -1665,6 +1703,11 @@ class AppController:
         # Cancel any active scan if opening a different target
         if state.is_searching:
             self._kill_all_activity(f"open-cached-result[{query}]")
+
+        # Major action: a full past result set is delivered instantly.
+        from services.ad_service import fire_major_action_interstitial
+
+        fire_major_action_interstitial()
 
         if mode == MODE_USERNAME:
             found_objs = [
@@ -1920,21 +1963,31 @@ class AppController:
             # The whole read-modify-write runs under the history lock so the
             # primary-done bridge and the final save can't interleave.
             async with self._history_lock:
-                raw = await self.storage.get(STORAGE_HISTORY)
-                entries = json.loads(raw) if raw else []
-                # Upsert: a username scan saves when its PRIMARY pass completes
-                # (so Recent appears immediately) and again after the recursive
-                # tail with final counts — same query+mode replaces, no dupes.
-                if (
-                    entries
-                    and entries[-1].get("query") == entry["query"]
-                    and entries[-1].get("mode") == entry["mode"]
-                ):
-                    entries[-1] = entry
-                else:
+                # Work in the STORED order (oldest-first). load_history_entries
+                # reverses for DISPLAY and must never be used in a writer —
+                # that asymmetry is how swipe-delete flipped the order.
+                entries = decode_stored_history(
+                    await self.storage.get(STORAGE_HISTORY)
+                )
+                # Upsert across ALL entries: a stale primary-done save from a
+                # killed scan can land after a newer save of the same handle,
+                # so checking only entries[-1] allowed duplicates.
+                match = next(
+                    (
+                        i
+                        for i, e in enumerate(entries)
+                        if e.get("query") == entry["query"]
+                        and e.get("mode") == entry["mode"]
+                    ),
+                    None,
+                )
+                if match is None:
                     entries.append(entry)
-                entries = entries[-50:]
-                await self.storage.set(STORAGE_HISTORY, json.dumps(entries))
+                else:
+                    entries[match] = entry
+                await self.storage.set(
+                    STORAGE_HISTORY, encode_history_entries(entries)
+                )
             # Observable mirror is newest-first (display order); the
             # stored list stays oldest-first. Loaders must reverse.
             if (
@@ -2055,13 +2108,70 @@ class AppController:
             logger.info("Connectivity restored")
             self._show_snack(MSG_ONLINE)
 
+    def _scan_in_progress(self) -> bool:
+        """True while either engine is genuinely mid-flight."""
+        return bool(
+            state.is_searching
+            and (self._live_username_progress() or self._live_email_progress())
+        )
+
+    async def _set_wakelock(self, on: bool) -> None:
+        """Keep the screen awake while a scan runs (ft.Wakelock)."""
+        wl = self.wakelock
+        if wl is None:
+            return
+        try:
+            if on:
+                await wl.enable()
+            else:
+                await wl.disable()
+        except Exception as exc:
+            logger.debug("Wakelock set(%s) failed: %s", on, exc)
+
+    def _show_results_from_notification(self) -> None:
+        methods = self._controller_methods
+        if methods is not None and methods.show_results:
+            try:
+                methods.show_results()
+            except Exception as exc:
+                logger.warning("show_results failed: %s", exc)
+
+    def _notify_permission_denied(self) -> None:
+        """A denial must not look like a crash; offer the OS settings route."""
+        from core.notify import show_snack
+        from core.theme import AppColors
+
+        show_snack(
+            self.page,
+            "Notifications are off — scans still run, progress stays in the app",
+            bgcolor=AppColors.WARNING,
+            duration=6000,
+            action_label="Settings",
+            on_action=lambda _e: spawn(self._open_notification_settings()),
+        )
+
+    async def _open_notification_settings(self) -> None:
+        try:
+            await self.scan_notify.open_settings()
+        except Exception as exc:
+            logger.warning("open notification settings failed: %s", exc)
+
     async def _on_lifecycle_change(self, e: ft.AppLifecycleStateChangeEvent) -> None:
-        """Re-probe on resume — the OS can drop the connection while we're
-        backgrounded and the connectivity listener may not fire for it."""
+        """Re-probe on resume; keep the wake lock in step with a live scan.
+
+        The foreground service keeps the engine alive in the background; the
+        wake lock only needs to hold the screen while a scan is running, so
+        it is dropped the moment the app is backgrounded and re-armed on
+        resume only if a scan is still live.
+        """
+        if e.state in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):
+            await self._set_wakelock(self._scan_in_progress())
+        else:
+            await self._set_wakelock(False)
         if e.state not in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):
             return
-        # "Your scan finished while you were away" — the in-app stand-in for
-        # an OS notification (flet has none; see docs/notification-research.md).
+        # "Your scan finished while you were away" — an in-app snackbar on
+        # resume, so a scan that completed in the background is not missed.
         summary = getattr(self, "_last_scan_summary", None)
         if summary:
             self._last_scan_summary = None
@@ -2122,13 +2232,17 @@ async def main(page: ft.Page) -> None:
     async def _on_close(e=None):
         with contextlib.suppress(Exception):
             if controller.storage:
-                await controller.storage.flush()
+                # close() cancels the debounce timer then flushes, so the
+                # trailing 1s write window is never lost on exit.
+                await controller.storage.close()
+        with contextlib.suppress(Exception):
+            if controller.scan_notify:
+                await controller.scan_notify.shutdown()
+        with contextlib.suppress(Exception):
+            await controller._set_wakelock(False)
         with contextlib.suppress(Exception):
             if controller.ad_service:
                 await controller.ad_service.close()
-        # A live scan's shade notification must not outlive the app.
-        with contextlib.suppress(Exception):
-            controller.scan_notify.shutdown()
         # Pooled httpx client — logs its own failures at WARNING
         # (no suppression inside close_client).
         from services.http_client import close_client

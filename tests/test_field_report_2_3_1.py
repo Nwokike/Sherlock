@@ -16,8 +16,8 @@ Three device bugs, each reproduced from the owner's terminal log:
    app at startup (it became the render target when inserted before
    page.render) and left the blank view visible after back popped the shell.
 3. **Networks screen could not scroll vertically** — flet 1.0.4 ignores
-   `expand` on Column children (no control sets `host_expanded`, verified
-   against the installed Dart-side wrapper), so the ListView got unbounded
+   `expand` under a plain Column parent (only Column/Row/View set
+   `host_expanded` in installed flet), so the ListView got unbounded
    height, shrink-wrapped to all 5,200 rows, and the enclosing Column (no
    `scroll=`) never scrolled. The list is now the screen root.
 """

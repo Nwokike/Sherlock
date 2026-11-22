@@ -194,10 +194,17 @@ def _resolve_local_db(check_synced: bool = True) -> str:
                 "Bundled DB materialize failed, using in-memory fallback: %s", exc
             )
             import tempfile as _tf
+            from pathlib import Path as _Path
 
-            with _tf.NamedTemporaryFile(delete=False, suffix=".json") as fallback:
-                fallback.write(raw)
-            return fallback.name
+            # Fixed name: a fresh NamedTemporaryFile(delete=False) per call
+            # leaked an orphan each time and made the cache key a new path.
+            try:
+                fallback = _Path(_tf.gettempdir()) / "sherlock_bundled_maigret_data.json"
+                fallback.write_bytes(raw)
+                return str(fallback)
+            except OSError as exc2:
+                logger.warning("Bundled DB temp fallback failed: %s", exc2)
+                raise
     logger.info("Using extracted package database: %s", db_path)
     return str(db_path)
 
@@ -336,8 +343,16 @@ class _MaigretQueryNotify:
         self.on_progress = on_progress
         # Site objects for protection metadata (bot-wall badges).
         self.sites_lookup = sites_lookup or {}
+        # maigret reports site.pretty_name ("Picuki [TikTok]") while the
+        # lookup is keyed by lower-case site.name. Normalize once so the
+        # fallback below can recover protection/url_main for those sites.
+        self._lookup_normalized = {
+            str(k).lower(): v for k, v in self.sites_lookup.items()
+        }
         self.last_update_time = time.monotonic()
-        self.collector: list[SiteResult] = []
+        # site_name -> (bucket, row) so a maigret RETRY re-check replaces the
+        # row instead of double-counting the check and duplicating the result.
+        self._seen: dict[str, tuple[list, SiteResult]] = {}
         self._enrich_requests = 0
 
     def start(
@@ -371,6 +386,13 @@ class _MaigretQueryNotify:
         if error_type is not None and not isinstance(error_type, str):
             error_type = str(error_type)
         site_obj = self.sites_lookup.get(site_name)
+        if site_obj is None:
+            # maigret reports site.pretty_name ("Picuki [TikTok]") while the
+            # lookup is keyed by site.name — without this fallback those sites
+            # lose url_main and their protection tags (badges).
+            site_obj = self._lookup_normalized.get(
+                site_name.split(" [", 1)[0].lower()
+            )
         url_main = getattr(site_obj, "url_main", "") or ""
         protection = list(getattr(site_obj, "protection", []) or []) if site_obj else []
         kw_status = getattr(result, "keyword_match_status", None)
@@ -418,16 +440,29 @@ class _MaigretQueryNotify:
             badge=badge,
             keyword_hit=keyword_hit,
         )
-        self.collector.append(sr)
-
         if self.progress:
-            self.progress.checked_sites += 1
-            if status_str == "Claimed":
-                self.progress.found.append(sr)
-            elif status_str == "Available":
-                self.progress.not_found.append(sr)
-            else:
-                self.progress.errors.append(sr)
+            bucket = (
+                self.progress.found
+                if status_str == "Claimed"
+                else self.progress.not_found
+                if status_str == "Available"
+                else self.progress.errors
+            )
+            prior = self._seen.get(site_name)
+            if prior is not None:
+                # A retry re-check of the same site: replace the previous row
+                # (it may move bucket) and do NOT count the check again —
+                # otherwise checked_sites exceeds total_sites and the progress
+                # fraction goes past 1.
+                old_bucket, old_sr = prior
+                try:
+                    old_bucket.remove(old_sr)
+                except ValueError:
+                    pass
+            elif self.progress.checked_sites < self.total:
+                self.progress.checked_sites += 1
+            bucket.append(sr)
+            self._seen[site_name] = (bucket, sr)
 
             if self.on_progress:
                 now = time.monotonic()
@@ -535,11 +570,15 @@ class _CancelHandle:
     why a cancelled username scan kept running to completion.
     """
 
-    __slots__ = ("loop", "task")
+    __slots__ = ("loop", "owner", "task")
 
     def __init__(self) -> None:
         self.loop: Any = None
         self.task: Any = None
+        # Identity of the worker that currently owns this handle. A superseded
+        # worker's teardown must not wipe the REPLACEMENT's handle, or the
+        # live scan's cancel() becomes a no-op.
+        self.owner: Any = None
 
     def cancel(self) -> None:
         """Cancel the running task from any thread. Safe when idle."""
@@ -553,9 +592,13 @@ class _CancelHandle:
         except RuntimeError:
             pass  # worker loop already tearing down
 
-    def clear(self) -> None:
+    def clear(self, owner: Any = None) -> None:
+        """Release the handle — only for the worker that owns it."""
+        if owner is not None and self.owner is not owner:
+            return
         self.loop = None
         self.task = None
+        self.owner = None
 
 
 def _maigret_kwargs(func: Any, **kwargs: Any) -> dict[str, Any]:
@@ -673,6 +716,8 @@ def _run_maigret_worker_thread(
     i2p_proxy: str | None = None,
     check_domains: bool = False,
     after_primary: Callable[[str, Any], None] | None = None,
+    on_secondary_target: Callable[[str], None] | None = None,
+    cloudflare_bypass: dict[str, Any] | None = None,
 ) -> SearchProgress | None:
     """Run Maigret scan inside an isolated background OS thread with its own event loop.
 
@@ -694,6 +739,7 @@ def _run_maigret_worker_thread(
     asyncio.set_event_loop(worker_loop)
     # Publish the loop so cancel() can reach into it from the main thread.
     cancel_handle.loop = worker_loop
+    cancel_handle.owner = worker_loop
 
     last_prog: SearchProgress | None = None
     total_sites = len(sites_to_scan)
@@ -771,6 +817,7 @@ def _run_maigret_worker_thread(
                             keywords=keywords,
                             cookies=cookies_path,
                             i2p_proxy=i2p_proxy,
+                            cloudflare_bypass=cloudflare_bypass,
                             check_domains=check_domains,
                         ),
                     ),
@@ -865,13 +912,20 @@ def _run_maigret_worker_thread(
                 if not sites2:
                     continue
 
-                # Same list object as state.search_targets (assigned by
-                # reference in search()) — appending keeps the staleness
-                # filter in main._apply_progress from dropping secondary ticks.
-                # THREADING: worker thread appends while the main loop may
-                # iterate state.search_targets; CPython makes append itself
-                # atomic, but readers must iterate a snapshot, never live.
+                # Publish the secondary to the caller so it can widen the
+                # tick-admission scope on the MAIN loop. Appending to this
+                # plain list is NOT enough: `state.search_targets = targets`
+                # in search() stores a COPY (flet's observable wraps on
+                # assignment), so the scope filter in main._apply_progress
+                # would never see this id and would drop every secondary
+                # tick — the "stuck at 98/99%" recursive-tail freeze.
+                # THREADING: readers on the main loop iterate a snapshot.
                 targets.append(new_id)
+                if on_secondary_target is not None:
+                    try:
+                        on_secondary_target(new_id)
+                    except Exception as exc:
+                        logger.warning("Secondary-target publish failed: %s", exc)
 
                 progress2 = SearchProgress(
                     username=new_id,
@@ -911,6 +965,7 @@ def _run_maigret_worker_thread(
                                 keywords=keywords,
                                 cookies=cookies_path,
                                 i2p_proxy=i2p_proxy,
+                                cloudflare_bypass=cloudflare_bypass,
                                 check_domains=check_domains,
                             ),
                         ),
@@ -968,8 +1023,9 @@ def _run_maigret_worker_thread(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
         worker_loop.close()
-        # Nothing to cancel on a dead loop any more.
-        cancel_handle.clear()
+        # Nothing to cancel on a dead loop any more — but only if this worker
+        # still owns the handle (a replacement scan may already have taken it).
+        cancel_handle.clear(worker_loop)
         try:
             asyncio.set_event_loop(_old_loop)
         except Exception:
@@ -1117,16 +1173,28 @@ class SherlockService:
         on_progress: Callable[[SearchProgress], None],
         timeout: int = 10,
         after_primary: Callable[[str, int, int], None] | None = None,
+        on_secondary_target: Callable[[str], None] | None = None,
+        on_target_result: Callable[[SearchProgress], None] | None = None,
     ) -> SearchProgress:
         """Run Maigret search on an isolated worker thread with active settings filters.
 
         Returns the LAST target's SearchProgress only. Per-target truth is
-        ``state.target_results`` ({target: SearchProgress}), populated on
-        every progress tick via the recording wrapper below. Multi-target
+        ``state.target_results`` ({target: SearchProgress}). Multi-target
         callers must read state.target_results, not the return value.
 
         `after_primary(target, found, total)` fires per finished primary
         target (first arg is the per-target id, not the raw query).
+
+        `on_secondary_target(id)` fires from the WORKER thread when a
+        recursive secondary joins the scan; the caller must marshal it onto
+        the main loop and widen `state.search_targets` there (the observable
+        stores a copy of the list assigned here, so worker-side appends are
+        invisible to the tick-admission filter).
+
+        `on_target_result(prog)` fires for EVERY tick, uncoalesced, from the
+        worker thread; the caller marshals it to the main loop to record
+        per-target truth. Without it the write happens here on the worker
+        thread, which mutates an observable off-loop.
         """
         if not _MAIGRET_AVAILABLE:
             raise RuntimeError("Maigret search engine is not available")
@@ -1197,6 +1265,18 @@ class SherlockService:
         # Domain checks use aiodns — dead on Android (/etc/resolv.conf).
         check_domains = bool(getattr(state, "check_domains", False)) and not is_mobile
 
+        # Cloudflare webgate bypass via a self-hosted FlareSolverr. Only
+        # built when the user opts in AND configured a solver URL; maigret
+        # logs an unreachable solver and carries on, so this is never fatal.
+        cloudflare_bypass = None
+        if bool(getattr(state, "cloudflare_bypass", False)):
+            _solver = (getattr(state, "flaresolverr_url", "") or "").strip()
+            if _solver:
+                cloudflare_bypass = {
+                    "enabled": True,
+                    "modules": [{"method": "json_api", "url": _solver}],
+                }
+
         # Bridge the worker-thread primary-completion hook to the caller's
         # (target, found, total) signature — main saves history through it.
         # First arg is the per-target id, NOT the raw multi-target query.
@@ -1210,13 +1290,25 @@ class SherlockService:
             Gated on cancel: a scan that is cancelling still has a tick or
             two in flight, and those must not land in `state.target_results`
             or reach the UI after the user asked it to stop.
+
+            The store is delegated to the caller when provided so it happens
+            on the MAIN loop: `state.target_results` is an observable, and
+            writing it from this worker thread schedules UI updates off-loop.
+            It is deliberately NOT routed through `on_progress` — that path
+            is coalesced, so intermediate targets would be lost.
             """
             if self._thread_cancel.is_set():
                 return
-            try:
-                state.target_results[prog.username] = prog
-            except Exception:
-                pass
+            if on_target_result is not None:
+                try:
+                    on_target_result(prog)
+                except Exception as exc:
+                    logger.warning("Per-target record failed: %s", exc)
+            else:
+                try:
+                    state.target_results[prog.username] = prog
+                except Exception:
+                    pass
             on_progress(prog)
 
         # Execute on isolated background thread
@@ -1239,8 +1331,10 @@ class SherlockService:
             keywords=keywords,
             cookies_path=cookies_path,
             i2p_proxy=i2p_proxy,
+            cloudflare_bypass=cloudflare_bypass,
             check_domains=check_domains,
             after_primary=_after_primary if after_primary else None,
+            on_secondary_target=on_secondary_target,
         )
 
         for tgt in targets:
@@ -1254,10 +1348,13 @@ class SherlockService:
                 _mark_cancelled(state.target_results[tgt])
 
         # Last-target-only by contract; see docstring. Multi-target callers
-        # must read state.target_results.
+        # must read state.target_results. A cancel that landed before the
+        # engine produced anything must still report as cancelled, or the
+        # controller treats the synthetic result as a completed scan.
         return res or SearchProgress(
             username=targets[0] if targets else username.strip(),
             total_sites=total_sites,
+            is_cancelled=self._thread_cancel.is_set(),
         )
 
     async def run_db_health(
@@ -1324,7 +1421,7 @@ class SherlockService:
             res = await self_check(
                 self._db,
                 site_data,
-                logger,
+                engine_logger,
                 silent=True,
                 max_connections=10,
                 no_progressbar=True,
@@ -1380,7 +1477,6 @@ class SherlockService:
 
         from core.state import state
 
-        for tgt in state.target_results:
-            prog = state.target_results[tgt]
+        for _tgt, prog in list(state.target_results.items()):
             if prog.is_running:
                 _mark_cancelled(prog)

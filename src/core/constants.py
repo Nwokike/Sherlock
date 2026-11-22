@@ -18,7 +18,8 @@ APP_VERSION = "2.3.0"
 APP_BUILD_NUMBER = 13
 
 # Fallback site count shown before the database load lands.
-SITES_TOTAL_FALLBACK = 5203
+# Pre-load placeholder; the live DB count (state.sites_total) replaces it.
+SITES_TOTAL_FALLBACK = 11071
 
 # ── Update & Distribution URLs ─────────────────────────────────────────
 UPDATE_CONFIG_URL = (
@@ -49,6 +50,8 @@ STORAGE_SEARCH_KEYWORDS = "sherlock_search_keywords"
 STORAGE_DEEP_ENRICH = "sherlock_deep_enrich"
 STORAGE_COOKIES_PATH = "sherlock_cookies_path"
 STORAGE_I2P_PROXY = "sherlock_i2p_proxy"
+STORAGE_CLOUDFLARE_BYPASS = "sherlock_cloudflare_bypass"
+STORAGE_FLARESOLVERR_URL = "sherlock_flaresolverr_url"
 STORAGE_CHECK_DOMAINS = "sherlock_check_domains"
 STORAGE_DB_UNHEALTHY = "sherlock_db_unhealthy"
 STORAGE_SCAN_DEPTH = "sherlock_scan_depth"
@@ -91,4 +94,8 @@ MSG_SEARCH_OFFLINE = (
 # from; adobe is the only platform from the original set that still
 # ships a validator (mail_ru / odnoklassniki / samsung are absent from
 # v2's 181 modules — kept as no-ops in case they return).
-EMAIL_PW_RECOVERY_MODULES = frozenset({"adobe", "mail_ru", "odnoklassniki", "samsung"})
+# Verified against installed holehe-v2 1.0.3: 181 validators are discovered,
+# and only `adobe` of the historical names still exists. mail_ru /
+# odnoklassniki / samsung were removed upstream — keeping them made the
+# "skip password recovery" toggle silently filtering a single module.
+EMAIL_PW_RECOVERY_MODULES = frozenset({"adobe"})

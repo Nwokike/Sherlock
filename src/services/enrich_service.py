@@ -32,14 +32,25 @@ except ImportError:
 # Shared bound on parse-thread offload (P5-4): caps total worker threads
 # across overlapping enrichment jobs no matter how many caller semaphores
 # are in flight.
-_PARSE_LIMITER = anyio.CapacityLimiter(12)
+# asyncio primitives are bound to their creating event loop: a module-global
+# limiter breaks the moment a second loop uses it (tests, app restart).
+_PARSE_LIMITERS: dict[asyncio.AbstractEventLoop, anyio.CapacityLimiter] = {}
+
+
+def _parse_limiter() -> anyio.CapacityLimiter:
+    loop = asyncio.get_running_loop()
+    limiter = _PARSE_LIMITERS.get(loop)
+    if limiter is None:
+        limiter = anyio.CapacityLimiter(12)
+        _PARSE_LIMITERS[loop] = limiter
+    return limiter
 
 _TIMEOUT_MIN, _TIMEOUT_MAX = 1, 30
 _OUTER_SLACK = 5  # seconds over the clamped timeout for the outer wait_for
 _HOST_LIMIT = 2  # max concurrent fetches per host
 _RETRYABLE = {429, 500, 502, 503, 504}
 
-_HOST_SEMS: dict[str, asyncio.Semaphore] = {}
+_HOST_SEMS: dict[tuple[asyncio.AbstractEventLoop, str], asyncio.Semaphore] = {}
 
 
 def _clamp_timeout(timeout: object, default: int = 5) -> int:
@@ -52,10 +63,11 @@ def _clamp_timeout(timeout: object, default: int = 5) -> int:
 
 def _host_sem(url: str) -> asyncio.Semaphore:
     host = urlparse(url).netloc.lower() or "_default"
-    sem = _HOST_SEMS.get(host)
+    key = (asyncio.get_running_loop(), host)
+    sem = _HOST_SEMS.get(key)
     if sem is None:
         sem = asyncio.Semaphore(_HOST_LIMIT)
-        _HOST_SEMS[host] = sem
+        _HOST_SEMS[key] = sem
     return sem
 
 
@@ -91,7 +103,7 @@ async def _parse_in_thread(
     cookies_str: str = "",
 ):
     timeout = _clamp_timeout(timeout)
-    async with _PARSE_LIMITER:
+    async with _parse_limiter():
         kw: dict = {"timeout": timeout}
         if headers:
             kw["headers"] = dict(headers)  # copy; upstream has mutable default
@@ -102,7 +114,7 @@ async def _parse_in_thread(
 
 async def _extract_in_thread(page_text: str) -> dict:
     """BS4/regex extraction off the event loop (CPU-bound over 164 schemes)."""
-    async with _PARSE_LIMITER:
+    async with _parse_limiter():
         result = await asyncio.to_thread(_extract, page_text)
         return result if result else {}
 
@@ -210,7 +222,7 @@ class EnrichService:
         try:
             page_text, status_code = await asyncio.wait_for(
                 _fetch_with_retry(url, timeout, req_headers, cookies_str),
-                timeout + _OUTER_SLACK,
+                2 * timeout + 1 + _OUTER_SLACK,
             )
             if status_code and 200 <= status_code < 300 and page_text:
                 result = await _extract_in_thread(page_text)
@@ -273,7 +285,7 @@ class EnrichService:
                 merged.update(m_headers or {})
                 page_text, status_code = await asyncio.wait_for(
                     _fetch_with_retry(api_url, timeout, merged or None, cookies_str),
-                    timeout + _OUTER_SLACK,
+                    2 * timeout + 1 + _OUTER_SLACK,
                 )
                 if status_code and 200 <= status_code < 300 and page_text:
                     mutation_result = await _extract_in_thread(page_text)
@@ -310,7 +322,7 @@ class EnrichService:
                 try:
                     page_text, status_code = await asyncio.wait_for(
                         _fetch_with_retry(hop_url, timeout, req_headers, cookies_str),
-                        timeout + _OUTER_SLACK,
+                        2 * timeout + 1 + _OUTER_SLACK,
                     )
                     if status_code and 200 <= status_code < 300 and page_text:
                         hop_result = await _extract_in_thread(page_text)

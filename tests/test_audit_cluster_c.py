@@ -215,18 +215,3 @@ def test_reset_search_clears_result_and_email_fields():
     assert st.email_results_address == ""
     assert st.email_found_count == 0
     assert st.email_unavailable_count == 0
-
-
-def test_cancel_marks_only_a_live_scan():
-    """A cancel landing after completion must not rewrite a finished scan."""
-
-    class _Done:
-        is_running = False
-        is_cancelled = False
-
-    done = _Done()
-    assert getattr(done, "is_running", False) is False
-    # the guard is the condition,mirroring email_service.cancel's was_live
-    if done is not None and getattr(done, "is_running", False):
-        done.is_cancelled = True
-    assert done.is_cancelled is False

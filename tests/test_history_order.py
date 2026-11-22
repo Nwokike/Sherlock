@@ -30,13 +30,17 @@ def test_save_keeps_state_newest_first_and_storage_oldest_first(fake_page):
     try:
         asyncio.run(controller._save_to_history("alice", 3, 10))
         asyncio.run(controller._save_to_history("bob", 5, 10))
+        asyncio.run(controller._save_to_history("carol", 7, 10))
 
         # Observable state: newest first → Home Recent / History top row.
-        assert [e["username"] for e in list(state.history)[:2]] == ["bob", "alice"]
+        assert [e["username"] for e in list(state.history)[:3]] == [
+            "carol", "bob", "alice",
+        ]
 
-        # Stored JSON: append order preserved (oldest first).
+        # Stored JSON: full append order preserved (oldest first). A 2-save
+        # probe cannot detect a writer that reverses; three can.
         stored = json.loads(controller.storage.data[STORAGE_HISTORY])
-        assert [e["username"] for e in stored][-2:] == ["alice", "bob"]
+        assert [e["username"] for e in stored] == ["alice", "bob", "carol"]
     finally:
         state.history.clear()
 
@@ -48,14 +52,13 @@ def test_startup_load_normalizes_to_newest_first():
         {"username": "mid", "found": 2, "total": 9, "timestamp": "t2"},
         {"username": "new", "found": 3, "total": 9, "timestamp": "t3"},
     ]
+    from services.storage_service import load_history_entries
+
     try:
         state.history.clear()
-        state.history.extend(reversed(entries_oldest_first))
-
-        assert [e["username"] for e in state.history[:3]] == [
-            "new",
-            "mid",
-            "old",
-        ]
+        # Exercise the REAL loader, not a local reversed() copy.
+        loaded = load_history_entries(json.dumps(entries_oldest_first))
+        state.history.extend(loaded)
+        assert [e["username"] for e in state.history[:3]] == ["new", "mid", "old"]
     finally:
         state.history.clear()

@@ -113,7 +113,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                         load_history_entries,
                     )
 
-                    storage = StorageService(page)
+                    storage = StorageService.for_page(page)
                     raw = await storage.get(STORAGE_HISTORY)
                     entries = load_history_entries(raw)
                     if entries:
@@ -144,7 +144,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                 try:
                     from services.storage_service import StorageService
 
-                    storage = StorageService(page)
+                    storage = StorageService.for_page(page)
                     await storage.delete(STORAGE_HISTORY)
                     await storage.flush()
                 except Exception:
@@ -397,9 +397,10 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                         try:
                             from services.storage_service import StorageService
 
-                            s = StorageService(page)
+                            s = StorageService.for_page(page)
                             await s.set(
-                                STORAGE_HISTORY, encode_history_entries(state.history)
+                                STORAGE_HISTORY,
+                                encode_history_entries(list(reversed(state.history))),
                             )
                             await s.flush()
                         except Exception:
@@ -418,7 +419,12 @@ def HistoryScreen(banner: Control | None = None) -> Control:
             # the writer's minute precision — two scans of the same handle
             # inside one minute would otherwise reconcile to the same tile.
             tile = ft.Dismissible(
-                key=ft.ValueKey(f"{query}|{entry.get('mode')}|{ts}|{found}/{total}"),
+                # Stable identity: the raw timestamp never changes, unlike the
+                # relative display string ("5m ago" -> "6m ago"), which would
+                # re-key the tile every minute. The display string stays `ts`.
+                key=ft.ValueKey(
+                    f"{query}|{entry.get('mode')}|{entry.get('timestamp', '')}|{found}/{total}"
+                ),
                 content=inner_tile,
                 background=dismiss_bg,
                 dismiss_direction=ft.DismissDirection.END_TO_START,
@@ -452,12 +458,13 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         header_controls.append(banner)
 
     # The ListView is the root, not a Column child. `expand` is honoured only
-    # when the DIRECT parent is a Column/Row/View/Page (.venv flet
-    # controls/control.py:33; only column.py:86, row.py:102 and view.py:163
-    # set host_expanded), so the previous shape — ListView inside a Container
-    # inside a Column — left the list unbounded and un-scrollable, clipping
-    # any history taller than one viewport. Header items ride inside the
-    # The ListView owns the only scroll (a Column root gives it unbounded
+    # when the DIRECT parent sets flet's `host_expanded` — only
+    # Column/Row/View do (column.py:88, row.py:104, view.py:163). The previous
+    # shape — ListView inside a Container inside a plain Column — gave the
+    # list unbounded main-axis height, so it shrink-wrapped and the enclosing
+    # non-scrolling Column clipped everything past one viewport.
+    # Header items ride inside the list. The ListView owns the only scroll
+    # (a Column root gives it unbounded
     # height) and the header rides inside the list. Padding must therefore
     # go on the ROWS, not the list root: a root padding would inset
     # `AppHeader` on top of its own, which is why History's header looked

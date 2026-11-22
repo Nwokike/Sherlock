@@ -40,7 +40,7 @@ def format_count(value: object) -> str:
 
 
 def human_date(value: object) -> str | None:
-    """Humanize a profile date ("2019-04-01T12:00:00Z" -> "Apr 2019").
+    """Humanize a profile date ("2019-04" -> "Apr 2019").
 
     socid-extractor and holehe extras emit join/created dates in whatever
     shape the platform uses — ISO 8601 with offsets, bare dates, "March
@@ -93,10 +93,25 @@ def human_date(value: object) -> str | None:
         month_precision = len(parts) == 2
         year_only = len(parts) == 1
         if year_only:
-            return candidate
+            # "2019" stays "2019"; 8-digit "20190401" parses as a full date
+            # but still only carries year information to our callers.
+            return candidate if len(candidate) == 4 else str(dt.year)
 
     if dt is None:
         return None
     if month_precision:
         return f"{calendar.month_abbr[dt.month]} {dt.year}"
     return f"{calendar.month_abbr[dt.month]} {dt.day}, {dt.year}"
+
+
+def sites_total_label() -> str:
+    """The network count to advertise: the live DB total when loaded.
+
+    maigret's bundled database grows (it is live-updated), so a hardcoded
+    number drifts; prefer the loaded count and fall back only before load.
+    """
+    from core.constants import SITES_TOTAL_FALLBACK
+    from core.state import state
+
+    total = getattr(state, "sites_total", 0) or 0
+    return format_count(total or SITES_TOTAL_FALLBACK)

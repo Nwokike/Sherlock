@@ -31,6 +31,22 @@ from core.theme import AppColors
 logger = logging.getLogger("UpdateDialog")
 
 
+def _safe_link(url: object) -> str | None:
+    """Remote release notes are untrusted: only http(s) links may launch."""
+    if not isinstance(url, str):
+        return None
+    try:
+        from urllib.parse import urlparse
+
+        candidate = url.strip()
+        parsed = urlparse(candidate)
+        if parsed.scheme.lower() in ("http", "https") and parsed.netloc:
+            return candidate
+    except ValueError:
+        pass
+    return None
+
+
 def _launch(page: ft.Page, url: str):
     async def _run():
         try:
@@ -182,9 +198,13 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
                         data.get("release_notes", ""),
                         selectable=True,
                         extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-                        on_tap_link=lambda e: _launch(page, e.data),
+                        on_tap_link=lambda e: (
+                            _launch(page, safe)
+                            if (safe := _safe_link(getattr(e, "data", None)))
+                            else None
+                        ),
                     ),
-                    width=360,
+                    width=None,  # fill the derived dialog width; a fixed 360 overflowed narrow phones
                 ),
             ],
             spacing=8,
@@ -206,9 +226,13 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
                         notes_for(APP_VERSION),
                         selectable=True,
                         extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-                        on_tap_link=lambda e: _launch(page, e.data),
+                        on_tap_link=lambda e: (
+                            _launch(page, safe)
+                            if (safe := _safe_link(getattr(e, "data", None)))
+                            else None
+                        ),
                     ),
-                    width=360,
+                    width=None,  # fill the derived dialog width; a fixed 360 overflowed narrow phones
                 ),
             ],
             spacing=8,

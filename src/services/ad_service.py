@@ -373,7 +373,9 @@ class AdService:
         Owner rule: no consent gate. A rejection never stops an ad.
         """
         if not _HAS_ADS or not self._is_mobile():
-            logger.info("AdService: interstitial skipped — ads unavailable on this build")
+            logger.info(
+                "AdService: interstitial skipped — ads unavailable on this build"
+            )
             return False
         if self._is_shutting_down:
             return False

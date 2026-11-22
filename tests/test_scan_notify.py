@@ -237,7 +237,9 @@ def test_cancel_action_routes_to_controller(fake):
     _run(notifier.mount())
     cancelled = []
     viewed = []
-    notifier.set_handlers(on_cancel=lambda: cancelled.append(1), on_view=lambda: viewed.append(1))
+    notifier.set_handlers(
+        on_cancel=lambda: cancelled.append(1), on_view=lambda: viewed.append(1)
+    )
 
     async def run():
         await notifier._handle_action(_Event(action_id=sn._ACTION_CANCEL))

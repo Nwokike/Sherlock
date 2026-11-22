@@ -111,7 +111,11 @@ async def close_client() -> None:
     """Close the pooled client (wired into page on_close)."""
     global _client, _client_proxy, _client_retries, _client_loop
     old, _client, _client_proxy, _client_retries, _client_loop = (
-        _client, None, None, None, None,
+        _client,
+        None,
+        None,
+        None,
+        None,
     )
     if old is not None:
         await _aclose(old)

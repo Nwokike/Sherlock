@@ -123,10 +123,10 @@ def sites_total_label() -> str:
 
         import maigret
 
-        meta = (
-            pathlib.Path(maigret.__file__).parent / "resources" / "db_meta.json"
+        meta = pathlib.Path(maigret.__file__).parent / "resources" / "db_meta.json"
+        total = int(
+            json.loads(meta.read_text(encoding="utf-8")).get("sites_count") or 0
         )
-        total = int(json.loads(meta.read_text(encoding="utf-8")).get("sites_count") or 0)
     except Exception:
         total = 0
     return format_count(total or SITES_TOTAL_FALLBACK)

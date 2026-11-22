@@ -37,14 +37,6 @@ name = "flet"
 [tool.flet.boot_screen.flet]
 startup_message = "Initializing Sherlock..."
 
-# Merged into the generated Flutter pubspec by flet build (upstream drift
-# guard): jni_flutter 1.0.3+ asserts package:jni ^1.1.0 at compile time, but
-# an older transitive pin keeps 1.0.0 on the resolve path — which broke every
-# platform build with "Constant evaluation error" (jni_flutter-1.0.4+1
-# vs jni-1.0.0). Pin jni here; nothing in the app depends on the old ABI.
-[tool.flet.flutter.pubspec.dependency_overrides]
-jni = "1.1.0"
-
 [tool.flet.android]
 # Compress native libs in the APK (pre-0.86 behaviour): since 0.86 flet stores
 # them uncompressed by default, which doubled APK download size.

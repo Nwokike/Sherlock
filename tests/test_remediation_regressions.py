@@ -7,7 +7,9 @@ import asyncio
 import curl_cffi.requests
 
 
-def test_one_storage_service_per_page_prevents_lost_updates(tmp_path, fake_page, monkeypatch):
+def test_one_storage_service_per_page_prevents_lost_updates(
+    tmp_path, fake_page, monkeypatch
+):
     """13 independent instances rewrote the whole file and erased each other."""
     import services.storage_service as mod
     from services.storage_service import StorageService
@@ -90,7 +92,6 @@ def test_markdown_report_escapes_html_payloads():
     assert "&lt;img" in text
 
 
-
 def test_results_screen_banners_are_pooled_across_renders(monkeypatch):
     """Reverting any screen banner to build_banner_ad() must fail this."""
     from flet.components.component import Renderer
@@ -112,8 +113,13 @@ def test_results_screen_banners_are_pooled_across_renders(monkeypatch):
 
     monkeypatch.setattr(banner_mod, "build_banner_ad", counting_build)
     banner_mod.clear_banner_pool()
-    saved = (state.search_mode, state.is_searching, state.search_progress,
-             state.last_results, state.last_results_username)
+    saved = (
+        state.search_mode,
+        state.is_searching,
+        state.search_progress,
+        state.last_results,
+        state.last_results_username,
+    )
     try:
         state.search_mode = MODE_USERNAME
         state.is_searching = False
@@ -121,8 +127,11 @@ def test_results_screen_banners_are_pooled_across_renders(monkeypatch):
         state.last_results_username = "alice"
         state.last_results = {
             "GitHub": SiteResult(
-                site_name="GitHub", url_main="", url_user="https://github.com/alice",
-                status="Claimed", http_status="200",
+                site_name="GitHub",
+                url_main="",
+                url_user="https://github.com/alice",
+                status="Claimed",
+                http_status="200",
             )
         }
 
@@ -139,8 +148,13 @@ def test_results_screen_banners_are_pooled_across_renders(monkeypatch):
         render()
         assert len(builds) == first, "a re-render constructed new banner ads"
     finally:
-        (state.search_mode, state.is_searching, state.search_progress,
-         state.last_results, state.last_results_username) = saved
+        (
+            state.search_mode,
+            state.is_searching,
+            state.search_progress,
+            state.last_results,
+            state.last_results_username,
+        ) = saved
         banner_mod.clear_banner_pool()
 
 
@@ -184,6 +198,7 @@ def test_email_search_passes_run_generation(monkeypatch):
     async def fake_to_thread(fn, *args, **kwargs):
         captured["args"] = args
         from services.email_service import EmailSearchProgress
+
         return EmailSearchProgress(email="a@b.com")
 
     monkeypatch.setattr(mod.asyncio, "to_thread", fake_to_thread)
@@ -211,11 +226,17 @@ def test_xmind_enriched_row_does_not_crash_on_missing_marker(tmp_path):
     from services.sherlock_service import SiteResult
 
     row = SiteResult(
-        site_name="GitHub", url_main="", url_user="https://github.com/alice",
-        status="Claimed", http_status="200", tags=["social"],
+        site_name="GitHub",
+        url_main="",
+        url_user="https://github.com/alice",
+        status="Claimed",
+        http_status="200",
+        tags=["social"],
     )
     out = generate_xmind_case(
-        "alice", [row], output_path=tmp_path / "case.xmind",
+        "alice",
+        [row],
+        output_path=tmp_path / "case.xmind",
         enrichments={"https://github.com/alice": {"bio": "hi"}},
     )
     assert out is not None and out.exists()

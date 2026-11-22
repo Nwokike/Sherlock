@@ -226,9 +226,9 @@ def test_results_leaves_initializing_once_a_tick_lands():
         state.search_progress = SearchProgress(
             username="primaryuser", total_sites=0, is_running=True
         )
-        assert any(
-            "Initializing" in t for t in _texts_of(_render_results())
-        ), "Results should start at the initializing state"
+        assert any("Initializing" in t for t in _texts_of(_render_results())), (
+            "Results should start at the initializing state"
+        )
 
         # The engine's first tick, arriving the way a worker sends it:
         # `_progress_from_thread` coalesces on a 500ms window and the flush
@@ -303,7 +303,8 @@ def test_tiny_scanning_pill_is_the_only_in_app_indicator():
 
         # The pill must navigate to Results when tapped.
         pill = next(
-            n for n in _nodes_of(root)
+            n
+            for n in _nodes_of(root)
             if "scan is running" in (getattr(n, "tooltip", "") or "")
         )
         assert pill.on_click is not None, "the pill is not tappable"

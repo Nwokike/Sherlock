@@ -116,9 +116,7 @@ if _HOLEHE_AVAILABLE:
             ):
                 from curl_cffi.requests import AsyncSession
 
-                fingerprint = (
-                    impersonate or _SCAN_FINGERPRINT.get() or "chrome150"
-                )
+                fingerprint = impersonate or _SCAN_FINGERPRINT.get() or "chrome150"
                 async with AsyncSession(impersonate=fingerprint) as session:
                     return await session.request(
                         method,

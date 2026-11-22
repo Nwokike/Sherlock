@@ -84,11 +84,6 @@ class AppState:
     cookies_path: str = ""
     i2p_proxy: str = ""
     check_domains: bool = False
-    # Cloudflare webgate bypass via a self-hosted FlareSolverr instance.
-    # Opt-in: the solver must be reachable, otherwise maigret logs the
-    # failure and continues without it (never fatal to the scan).
-    cloudflare_bypass: bool = False
-    flaresolverr_url: str = ""
     # P3-6 sites flagged by the sampled DB-health panel (excluded on load)
     unhealthy_sites: list[str] | None = None
     selected_sites: list[str] | None = None

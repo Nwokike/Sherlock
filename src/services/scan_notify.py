@@ -118,7 +118,9 @@ class ScanNotifier:
     def available(self) -> bool:
         return _HAS_NOTIFICATIONS
 
-    def set_handlers(self, *, on_cancel=None, on_view=None, on_permission_denied=None) -> None:
+    def set_handlers(
+        self, *, on_cancel=None, on_view=None, on_permission_denied=None
+    ) -> None:
         self._on_cancel = on_cancel
         self._on_view = on_view
         self._on_permission_denied = on_permission_denied
@@ -205,7 +207,9 @@ class ScanNotifier:
                 start_type=AndroidServiceStartType.STICKY,
                 service_types=[AndroidForegroundServiceType.SPECIAL_USE],
                 actions=[
-                    NotificationAction(id=_ACTION_CANCEL, title="Cancel", foreground=True)
+                    NotificationAction(
+                        id=_ACTION_CANCEL, title="Cancel", foreground=True
+                    )
                 ],
                 options=NotificationOptions(
                     android=AndroidOptions(
@@ -252,7 +256,9 @@ class ScanNotifier:
                 body=f"{checked}/{total} checked" if total else "Preparing…",
                 payload=PAYLOAD_ROUTE,
                 actions=[
-                    NotificationAction(id=_ACTION_CANCEL, title="Cancel", foreground=True)
+                    NotificationAction(
+                        id=_ACTION_CANCEL, title="Cancel", foreground=True
+                    )
                 ],
                 options=NotificationOptions(
                     android=AndroidOptions(

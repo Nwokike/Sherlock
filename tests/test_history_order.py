@@ -34,7 +34,9 @@ def test_save_keeps_state_newest_first_and_storage_oldest_first(fake_page):
 
         # Observable state: newest first → Home Recent / History top row.
         assert [e["username"] for e in list(state.history)[:3]] == [
-            "carol", "bob", "alice",
+            "carol",
+            "bob",
+            "alice",
         ]
 
         # Stored JSON: full append order preserved (oldest first). A 2-save

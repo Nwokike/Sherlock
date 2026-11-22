@@ -82,19 +82,25 @@ def test_wakelock_follows_scan_liveness_across_lifecycle():
         state.current_username = "alice"
         state.search_mode = MODE_USERNAME
 
-        asyncio.run(controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME)))
+        asyncio.run(
+            controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME))
+        )
         assert wl.enabled, "a live scan must hold the screen awake"
 
         asyncio.run(controller._on_lifecycle_change(_Event(ft.AppLifecycleState.HIDE)))
         assert not wl.enabled, "backgrounding must drop the wake lock"
 
-        asyncio.run(controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME)))
+        asyncio.run(
+            controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME))
+        )
         assert wl.enabled, "a still-live scan re-arms on resume"
 
         # The scan ended: resume must not keep the screen on.
         state.is_searching = False
         state.search_progress = None
-        asyncio.run(controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME)))
+        asyncio.run(
+            controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME))
+        )
         assert not wl.enabled
         assert wl.calls[-1] == "off"
     finally:
@@ -122,7 +128,9 @@ def test_resume_does_not_hold_the_lock_for_a_stale_progress():
         state.search_progress = SearchProgress(
             username="alice", total_sites=100, is_running=False
         )
-        asyncio.run(controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME)))
+        asyncio.run(
+            controller._on_lifecycle_change(_Event(ft.AppLifecycleState.RESUME))
+        )
         assert not wl.enabled, "a stale progress held the wake lock"
     finally:
         _restore(snap)

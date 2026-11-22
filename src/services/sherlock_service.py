@@ -199,7 +199,9 @@ def _resolve_local_db(check_synced: bool = True) -> str:
             # Fixed name: a fresh NamedTemporaryFile(delete=False) per call
             # leaked an orphan each time and made the cache key a new path.
             try:
-                fallback = _Path(_tf.gettempdir()) / "sherlock_bundled_maigret_data.json"
+                fallback = (
+                    _Path(_tf.gettempdir()) / "sherlock_bundled_maigret_data.json"
+                )
                 fallback.write_bytes(raw)
                 return str(fallback)
             except OSError as exc2:
@@ -390,9 +392,7 @@ class _MaigretQueryNotify:
             # maigret reports site.pretty_name ("Picuki [TikTok]") while the
             # lookup is keyed by site.name — without this fallback those sites
             # lose url_main and their protection tags (badges).
-            site_obj = self._lookup_normalized.get(
-                site_name.split(" [", 1)[0].lower()
-            )
+            site_obj = self._lookup_normalized.get(site_name.split(" [", 1)[0].lower())
         url_main = getattr(site_obj, "url_main", "") or ""
         protection = list(getattr(site_obj, "protection", []) or []) if site_obj else []
         kw_status = getattr(result, "keyword_match_status", None)
@@ -717,7 +717,6 @@ def _run_maigret_worker_thread(
     check_domains: bool = False,
     after_primary: Callable[[str, Any], None] | None = None,
     on_secondary_target: Callable[[str], None] | None = None,
-    cloudflare_bypass: dict[str, Any] | None = None,
 ) -> SearchProgress | None:
     """Run Maigret scan inside an isolated background OS thread with its own event loop.
 
@@ -817,7 +816,6 @@ def _run_maigret_worker_thread(
                             keywords=keywords,
                             cookies=cookies_path,
                             i2p_proxy=i2p_proxy,
-                            cloudflare_bypass=cloudflare_bypass,
                             check_domains=check_domains,
                         ),
                     ),
@@ -964,7 +962,6 @@ def _run_maigret_worker_thread(
                                 keywords=keywords,
                                 cookies=cookies_path,
                                 i2p_proxy=i2p_proxy,
-                                cloudflare_bypass=cloudflare_bypass,
                                 check_domains=check_domains,
                             ),
                         ),
@@ -1263,33 +1260,6 @@ class SherlockService:
         # Domain checks use aiodns — dead on Android (/etc/resolv.conf).
         check_domains = bool(getattr(state, "check_domains", False)) and not is_mobile
 
-        # Cloudflare webgate bypass via a self-hosted FlareSolverr. Only
-        # built when the user opts in AND configured a solver URL; maigret
-        # logs an unreachable solver and carries on, so this is never fatal.
-        # The config is built by MAIGRET'S OWN builder (checking.py
-        # build_cloudflare_bypass_config) so the trigger_protection defaults
-        # and module validation come from the engine, not from us.
-        cloudflare_bypass = None
-        if bool(getattr(state, "cloudflare_bypass", False)):
-            _solver = (getattr(state, "flaresolverr_url", "") or "").strip()
-            if _solver:
-                from types import SimpleNamespace
-
-                from maigret.checking import build_cloudflare_bypass_config
-
-                _settings = SimpleNamespace(
-                    cloudflare_bypass={
-                        "enabled": True,
-                        "modules": [{"method": "json_api", "url": _solver}],
-                    }
-                )
-                cloudflare_bypass = build_cloudflare_bypass_config(_settings)
-                if cloudflare_bypass is None:
-                    logger.warning(
-                        "Cloudflare bypass enabled but the solver config was "
-                        "rejected by maigret — continuing without it"
-                    )
-
         # Bridge the worker-thread primary-completion hook to the caller's
         # (target, found, total) signature — main saves history through it.
         # First arg is the per-target id, NOT the raw multi-target query.
@@ -1344,7 +1314,6 @@ class SherlockService:
             keywords=keywords,
             cookies_path=cookies_path,
             i2p_proxy=i2p_proxy,
-            cloudflare_bypass=cloudflare_bypass,
             check_domains=check_domains,
             after_primary=_after_primary if after_primary else None,
             on_secondary_target=on_secondary_target,

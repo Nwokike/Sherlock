@@ -85,8 +85,12 @@ def test_start_to_finish_arms_and_disarms():
     c = _controller()
     c.sherlock_service.search = _engine()
     snap = (
-        state.is_searching, state.search_progress, state.current_username,
-        state.search_targets, state.target_results, state.is_online,
+        state.is_searching,
+        state.search_progress,
+        state.current_username,
+        state.search_targets,
+        state.target_results,
+        state.is_online,
         state.search_mode,
     )
     try:
@@ -108,16 +112,28 @@ def test_start_to_finish_arms_and_disarms():
         )
         assert c.wakelock.state is False
     finally:
-        (state.is_searching, state.search_progress, state.current_username,
-         state.search_targets, state.target_results, state.is_online,
-         state.search_mode) = snap
+        (
+            state.is_searching,
+            state.search_progress,
+            state.current_username,
+            state.search_targets,
+            state.target_results,
+            state.is_online,
+            state.search_mode,
+        ) = snap
 
 
 def test_cancel_stops_the_shade_notification():
     c = _controller()
     c.sherlock_service.search = _engine()
-    snap = (state.is_searching, state.search_progress, state.current_username,
-            state.search_targets, state.target_results, state.is_online)
+    snap = (
+        state.is_searching,
+        state.search_progress,
+        state.current_username,
+        state.search_targets,
+        state.target_results,
+        state.is_online,
+    )
     try:
         state.is_searching = False
         state.search_progress = None
@@ -135,8 +151,14 @@ def test_cancel_stops_the_shade_notification():
         assert "stop" in kinds, "cancel did not stop the foreground service"
         assert c.wakelock.state is False
     finally:
-        (state.is_searching, state.search_progress, state.current_username,
-         state.search_targets, state.target_results, state.is_online) = snap
+        (
+            state.is_searching,
+            state.search_progress,
+            state.current_username,
+            state.search_targets,
+            state.target_results,
+            state.is_online,
+        ) = snap
 
 
 def test_progress_is_throttled_to_two_hz():
@@ -144,8 +166,12 @@ def test_progress_is_throttled_to_two_hz():
     c.scan_notify = MagicMock()
     c.scan_notify.progress = MagicMock()
     c._last_notify_progress = 0.0
-    c._notify_scan_progress(SearchProgress(username="alice", total_sites=100, checked_sites=1))
-    c._notify_scan_progress(SearchProgress(username="alice", total_sites=100, checked_sites=2))
+    c._notify_scan_progress(
+        SearchProgress(username="alice", total_sites=100, checked_sites=1)
+    )
+    c._notify_scan_progress(
+        SearchProgress(username="alice", total_sites=100, checked_sites=2)
+    )
     assert c.scan_notify.progress.call_count == 1, (
         "shade progress is not throttled — it would spam native calls"
     )

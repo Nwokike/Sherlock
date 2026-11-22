@@ -29,7 +29,6 @@ from core.constants import (
     PLAY_STORE_URL,
     REPO_URL,
     STORAGE_CHECK_DOMAINS,
-    STORAGE_CLOUDFLARE_BYPASS,
     STORAGE_COOKIES_PATH,
     STORAGE_DEEP_ENRICH,
     STORAGE_DNS_RESOLVER,
@@ -39,7 +38,6 @@ from core.constants import (
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_EXTRACT_INFO,
-    STORAGE_FLARESOLVERR_URL,
     STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
     STORAGE_LOG_ENGINE_LOGS,
@@ -505,23 +503,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         state.i2p_proxy = cleaned
         spawn(_persist(STORAGE_I2P_PROXY, cleaned))
         return True
-
-    def _on_flaresolverr_change(val: str) -> bool:
-        raw = (val or "").strip()
-        if raw and not raw.lower().startswith(("http://", "https://")):
-            show_snack(
-                page,
-                "FlareSolverr URL must start with http:// or https://",
-                bgcolor=AppColors.WARNING,
-            )
-            return False
-        state.flaresolverr_url = raw
-        spawn(_persist(STORAGE_FLARESOLVERR_URL, raw))
-        return True
-
-    def _on_cloudflare_change(val: bool):
-        state.cloudflare_bypass = bool(val)
-        spawn(_persist(STORAGE_CLOUDFLARE_BYPASS, "true" if val else "false"))
 
     def _on_check_domains_change(val: bool):
         state.check_domains = bool(val)
@@ -1253,28 +1234,40 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 CONTACT_EMAIL,
                 f"mailto:{CONTACT_EMAIL}",
             ),
-            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
             _link_row(
                 ft.Icons.STAR_ROUNDED,
                 "Rate 5 stars",
                 "Open the Play Store listing",
                 PLAY_STORE_URL,
             ),
-            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
             _link_row(
                 ft.Icons.APPS_ROUNDED,
                 "More apps from Kiri",
                 "Sherlock, CollabShell, DDGS and more",
                 MORE_APPS_URL,
             ),
-            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
             _link_row(
                 ft.Icons.CODE_ROUNDED,
                 "Source code",
                 "README, issues and releases",
                 REPO_URL,
             ),
-            ft.Divider(height=1, color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE)),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
             _link_row(
                 ft.Icons.NEW_RELEASES_ROUNDED,
                 "Releases",
@@ -1305,27 +1298,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ),
                 padding=ft.Padding(
                     tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_XS
-                ),
-            ),
-            _setting_row(
-                ft.Icons.SHIELD_ROUNDED,
-                "Cloudflare Bypass",
-                "Send WAF-blocked checks through your own FlareSolverr solver",
-                ft.Switch(
-                    value=getattr(state, "cloudflare_bypass", False),
-                    on_change=lambda e: _on_cloudflare_change(e.control.value),
-                    active_color=ft.Colors.PRIMARY,
-                ),
-                stacked=narrow,
-            ),
-            ft.Container(
-                content=SettingsTextField(
-                    value=state.flaresolverr_url or "",
-                    on_commit=_on_flaresolverr_change,
-                    hint_text="http://127.0.0.1:8191 (empty = unused)",
-                ),
-                padding=ft.Padding(
-                    tokens.SPACE_LG, tokens.SPACE_XS, tokens.SPACE_LG, tokens.SPACE_MD
                 ),
             ),
             ft.Container(

@@ -430,9 +430,7 @@ def SitesScreen() -> Control:
         if selected_tag != "all" and bucket is None:
             # Tag not in the live index: fall back to the per-site tag map.
             needle = selected_tag.lower()
-            bucket = frozenset(
-                n for n, ts in _tags_map().items() if needle in ts
-            )
+            bucket = frozenset(n for n, ts in _tags_map().items() if needle in ts)
         out = []
         for name in canonical_names:
             if bucket is not None and name not in bucket:

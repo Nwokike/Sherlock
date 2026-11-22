@@ -64,5 +64,3 @@ def test_slider_range_constants():
     assert "max(5, min(30" in src
     assert "max(10, min(100" in src
     assert re.search(r"min=4,\n.*max=30", src) is None
-
-

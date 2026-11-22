@@ -70,7 +70,6 @@ def _scan_pill(on_tap: Callable) -> ft.Control:
     )
 
 
-
 def _theme_icon(page: ft.Page | None) -> str:
     if page is None or page.theme_mode == ft.ThemeMode.DARK:
         return ft.Icons.DARK_MODE_ROUNDED

@@ -32,13 +32,13 @@ def test_res_dir_points_at_our_android_resources():
 
 def test_foreground_service_declared_as_special_use():
     android = _pyproject()["tool"]["flet"]["android"]
-    service = android["service"]["com.dexterous.flutterlocalnotifications.ForegroundService"]
+    service = android["service"][
+        "com.dexterous.flutterlocalnotifications.ForegroundService"
+    ]
     assert service["foregroundServiceType"] == "specialUse"
     assert service["exported"] is False
     # The subtype is a <property> INSIDE the service (not application meta-data).
-    assert (
-        service["property"]["android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"]
-    )
+    assert service["property"]["android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"]
     assert "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" not in android["meta_data"]
 
 

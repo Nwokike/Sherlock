@@ -15,9 +15,7 @@ def test_site_count_reads_installed_database_not_a_literal():
 
     import maigret
 
-    meta = (
-        pathlib.Path(maigret.__file__).parent / "resources" / "db_meta.json"
-    )
+    meta = pathlib.Path(maigret.__file__).parent / "resources" / "db_meta.json"
     assert meta.is_file(), "installed maigret should ship db_meta.json"
     expected = json.loads(meta.read_text(encoding="utf-8"))["sites_count"]
     # Force the pre-load path: a loaded count (set by other tests) wins by design.
@@ -32,8 +30,9 @@ def test_site_count_is_not_taken_from_a_stale_cache():
     import maigret
 
     expected = json.loads(
-        (pathlib.Path(maigret.__file__).parent / "resources" / "db_meta.json")
-        .read_text(encoding="utf-8")
+        (
+            pathlib.Path(maigret.__file__).parent / "resources" / "db_meta.json"
+        ).read_text(encoding="utf-8")
     )["sites_count"]
     state.sites_total = 0
     try:
@@ -68,7 +67,10 @@ def test_scanning_pill_renders_below_the_header():
         )
         # The header Container's content is a Column: header row first, pill second.
         container = next(
-            n for n in _walk(root) if type(n).__name__ == "Container" and getattr(n, "content", None) is not None
+            n
+            for n in _walk(root)
+            if type(n).__name__ == "Container"
+            and getattr(n, "content", None) is not None
         )
         col = container.content
         assert type(col).__name__ == "Column"

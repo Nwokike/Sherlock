@@ -45,6 +45,7 @@ def _parse_limiter() -> anyio.CapacityLimiter:
         _PARSE_LIMITERS[loop] = limiter
     return limiter
 
+
 _TIMEOUT_MIN, _TIMEOUT_MAX = 1, 30
 _OUTER_SLACK = 5  # seconds over the clamped timeout for the outer wait_for
 _HOST_LIMIT = 2  # max concurrent fetches per host

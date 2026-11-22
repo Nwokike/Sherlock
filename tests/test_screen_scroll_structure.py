@@ -192,8 +192,11 @@ def test_results_card_fingerprint_sees_late_field_changes():
     from services.sherlock_service import SiteResult
 
     before = SiteResult(
-        site_name="GitHub", url_main="", url_user="https://github.com/alice",
-        status="Claimed", http_status="200"
+        site_name="GitHub",
+        url_main="",
+        url_user="https://github.com/alice",
+        status="Claimed",
+        http_status="200",
     )
     after = SiteResult(
         site_name="GitHub",
@@ -205,6 +208,8 @@ def test_results_card_fingerprint_sees_late_field_changes():
         error_hint="follow-up",
     )
     assert _username_fingerprint([before]) != _username_fingerprint([after])
+
+
 def test_no_screen_puts_a_listview_directly_under_a_plain_column():
     """One structural rule covering every screen: no ListView whose nearest
     Column ancestor is itself scroll-less and un-nested is fine, but a

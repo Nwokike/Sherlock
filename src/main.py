@@ -38,7 +38,6 @@ from core.constants import (
     STORAGE_CACHED_RESULTS,
     STORAGE_CACHED_SITES,
     STORAGE_CHECK_DOMAINS,
-    STORAGE_CLOUDFLARE_BYPASS,
     STORAGE_COOKIES_PATH,
     STORAGE_DB_UNHEALTHY,
     STORAGE_DEEP_ENRICH,
@@ -49,7 +48,6 @@ from core.constants import (
     STORAGE_ENRICHMENT_MODE,
     STORAGE_EXCLUSIONS,
     STORAGE_EXTRACT_INFO,
-    STORAGE_FLARESOLVERR_URL,
     STORAGE_HISTORY,
     STORAGE_I2P_PROXY,
     STORAGE_LOCAL_DB,
@@ -92,9 +90,6 @@ from state.controller_ctx import (
 )
 
 logger = logging.getLogger("sherlock")
-
-
-
 
 
 class AppController:
@@ -702,12 +697,6 @@ class AppController:
             i2p_raw = await self.storage.get(STORAGE_I2P_PROXY)
             if i2p_raw:
                 state.i2p_proxy = i2p_raw
-            cf_raw = await self.storage.get(STORAGE_CLOUDFLARE_BYPASS)
-            if cf_raw is not None:
-                state.cloudflare_bypass = cf_raw == "true"
-            solver_raw = await self.storage.get(STORAGE_FLARESOLVERR_URL)
-            if solver_raw is not None:
-                state.flaresolverr_url = solver_raw
             cd_raw = await self.storage.get(STORAGE_CHECK_DOMAINS)
             if cd_raw is not None:
                 state.check_domains = cd_raw == "true"
@@ -1959,9 +1948,7 @@ class AppController:
                 # Work in the STORED order (oldest-first). load_history_entries
                 # reverses for DISPLAY and must never be used in a writer —
                 # that asymmetry is how swipe-delete flipped the order.
-                entries = decode_stored_history(
-                    await self.storage.get(STORAGE_HISTORY)
-                )
+                entries = decode_stored_history(await self.storage.get(STORAGE_HISTORY))
                 # Upsert across ALL entries: a stale primary-done save from a
                 # killed scan can land after a newer save of the same handle,
                 # so checking only entries[-1] allowed duplicates.
@@ -1978,9 +1965,7 @@ class AppController:
                     entries.append(entry)
                 else:
                     entries[match] = entry
-                await self.storage.set(
-                    STORAGE_HISTORY, encode_history_entries(entries)
-                )
+                await self.storage.set(STORAGE_HISTORY, encode_history_entries(entries))
             # Observable mirror is newest-first (display order); the
             # stored list stays oldest-first. Loaders must reverse.
             if (

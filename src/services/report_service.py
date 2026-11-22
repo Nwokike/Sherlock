@@ -1107,8 +1107,7 @@ def generate_xmind_case(
                         pass
                 sub.addMarker(
                     MarkerId.starGold
-                    if hasattr(MarkerId, "starGold")
-                    and enrichments.get(c_url or "")
+                    if hasattr(MarkerId, "starGold") and enrichments.get(c_url or "")
                     else MarkerId.priority3
                 )
             sheet_count += 1

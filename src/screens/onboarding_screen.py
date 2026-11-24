@@ -14,34 +14,40 @@ from flet import Control
 
 from core import tokens
 from core.constants import STORAGE_ONBOARDING_DONE
-from core.format import sites_total_label
+from core.format import email_total_label, sites_total_label
 from core.tasks import spawn
 from core.theme import AppColors, is_dark_mode
 
 logger = logging.getLogger("OnboardingScreen")
 
-_SLIDES = [
-    {
-        "use_app_icon": True,
-        "icon": None,
-        "color": AppColors.PRIMARY,
-        "title": f"Hunt Across\n{sites_total_label()} Networks",
-        "body": (
-            "Scan major social platforms simultaneously — GitHub, X, "
-            "Instagram, TikTok, Reddit, Spotify, and more — to find active "
-            "accounts by username in seconds."
-        ),
-    },
-    {
-        "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
-        "color": AppColors.ACCENT,
-        "title": "Email OSINT\nMade Easy",
-        "body": (
-            "Switch to Email mode to check 120+ platforms at once. "
-            "Uncover masked recovery emails, phone hints, full names, "
-            "account creation dates, and more."
-        ),
-    },
+def _slides() -> list[dict]:
+    """Onboarding copy is built per render so the live engine counts are used
+    (never a stale hardcoded validator/network literal)."""
+    email_scope = (
+        f"{email_total_label()} platforms" if email_total_label() else "every platform"
+    )
+    return [
+        {
+            "use_app_icon": True,
+            "icon": None,
+            "color": AppColors.PRIMARY,
+            "title": f"Hunt Across\n{sites_total_label()} Networks",
+            "body": (
+                "Scan major social platforms simultaneously — GitHub, X, "
+                "Instagram, TikTok, Reddit, Spotify, and more — to find active "
+                "accounts by username in seconds."
+            ),
+        },
+        {
+            "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+            "color": AppColors.ACCENT,
+            "title": "Email OSINT\nMade Easy",
+            "body": (
+                f"Switch to Email mode to check {email_scope} at once. "
+                "Uncover masked recovery emails, phone hints, full names, "
+                "account creation dates, and more."
+            ),
+        },
     {
         "icon": ft.Icons.DOWNLOAD_ROUNDED,
         "color": AppColors.PRIMARY,
@@ -112,8 +118,9 @@ def OnboardingScreen() -> Control:
     state = ft.use_context(AppStateCtx)
     controller = ft.use_context(ControllerMethodsCtx)
     page_idx, set_page_idx = ft.use_state(0)
+    slides = _slides()
 
-    is_last = page_idx == len(_SLIDES) - 1
+    is_last = page_idx == len(slides) - 1
 
     async def _finish():
         from flet import context
@@ -154,7 +161,7 @@ def OnboardingScreen() -> Control:
         if e.primary_velocity is not None:
             if e.primary_velocity < -200 and not is_last:
                 _buzz()
-                set_page_idx(min(page_idx + 1, len(_SLIDES) - 1))
+                set_page_idx(min(page_idx + 1, len(slides) - 1))
             elif e.primary_velocity > 200 and page_idx > 0:
                 _buzz()
                 set_page_idx(page_idx - 1)
@@ -165,7 +172,7 @@ def OnboardingScreen() -> Control:
 
     # Dot indicators (tappable)
     dots = []
-    for i in range(len(_SLIDES)):
+    for i in range(len(slides)):
         is_active = i == page_idx
         dot_container = ft.Container(
             width=24 if is_active else 8,
@@ -226,7 +233,7 @@ def OnboardingScreen() -> Control:
                     alignment=ft.Alignment.CENTER,
                     content=ft.GestureDetector(
                         content=ft.Container(
-                            content=_build_slide(_SLIDES[page_idx]),
+                            content=_build_slide(slides[page_idx]),
                             alignment=ft.Alignment.CENTER,
                             padding=ft.Padding(tokens.SPACE_XL, 0, tokens.SPACE_XL, 0),
                         ),

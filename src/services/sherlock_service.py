@@ -1,4 +1,4 @@
-"""Sherlock OSINT search engine — powered by Maigret across 5,200+ platforms."""
+"""Sherlock OSINT search engine — powered by Maigret across 11,000+ platforms."""
 
 from __future__ import annotations
 
@@ -1029,7 +1029,7 @@ def _run_maigret_worker_thread(
 
 
 class SherlockService:
-    """Runs high-performance username OSINT searches powered by Maigret across 5,200+ sites."""
+    """Runs high-performance username OSINT searches powered by Maigret across 11,000+ sites."""
 
     def __init__(self):
         # Two-layer cancel. `_thread_cancel` is the cooperative flag the

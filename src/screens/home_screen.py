@@ -33,7 +33,7 @@ from core.constants import (
     STORAGE_USE_CURL_CFFI,
     test_id,
 )
-from core.format import sites_total_label
+from core.format import email_total_label, sites_total_label
 from core.notify import show_snack
 from core.tasks import spawn
 from core.theme import (
@@ -72,26 +72,32 @@ _FEATURES_USERNAME = [
     },
 ]
 
-_FEATURES_EMAIL = [
-    {
-        "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
-        "title": "Check 120+ Platforms",
-        "desc": "Discover where an email is registered — social media, shopping, forums, CRM, and more.",
-        "color": AppColors.PRIMARY,
-    },
-    {
-        "icon": ft.Icons.SECURITY_ROUNDED,
-        "title": "Recovery Data & Leaked Hints",
-        "desc": "Uncover masked recovery emails, phone numbers, full names, and account creation dates.",
-        "color": AppColors.PRIMARY_DARK,
-    },
-    {
-        "icon": ft.Icons.CATEGORY_ROUNDED,
-        "title": "23 Categories Covered",
-        "desc": "Social media, mail providers, programming, music, shopping, forums, jobs, and more.",
-        "color": AppColors.PRIMARY_LIGHT,
-    },
-]
+def _features_email() -> list[dict]:
+    """Email feature cards — the count comes from the live engine, never a
+    hardcoded literal (owner rule)."""
+    total = email_total_label()
+    title = f"Check {total} Platforms" if total else "Check Every Platform"
+    return [
+        {
+            "icon": ft.Icons.ALTERNATE_EMAIL_ROUNDED,
+            "title": title,
+            "desc": "Discover where an email is registered — social media, shopping, forums, CRM, and more.",
+            "color": AppColors.PRIMARY,
+        },
+        {
+            "icon": ft.Icons.SECURITY_ROUNDED,
+            "title": "Recovery Data & Leaked Hints",
+            "desc": "Uncover masked recovery emails, phone numbers, full names, and account creation dates.",
+            "color": AppColors.PRIMARY_DARK,
+        },
+        {
+            "icon": ft.Icons.CATEGORY_ROUNDED,
+            "title": "23 Categories Covered",
+            "desc": "Social media, mail providers, programming, music, shopping, forums, jobs, and more.",
+            "color": AppColors.PRIMARY_LIGHT,
+        },
+    ]
+
 
 _STEPS_USERNAME = [
     ("1", "Enter", "Type a username to hunt across social networks"),
@@ -99,11 +105,15 @@ _STEPS_USERNAME = [
     ("3", "Done", "View results, export reports, or open profiles in browser"),
 ]
 
-_STEPS_EMAIL = [
-    ("1", "Enter", "Type an email address to investigate"),
-    ("2", "Scan", "Checks 120+ platforms for registrations"),
-    ("3", "Done", "View where the email is used, recovery hints, and more"),
-]
+
+def _steps_email() -> list[tuple[str, str, str]]:
+    total = email_total_label()
+    scope = f"{total} platforms" if total else "every platform"
+    return [
+        ("1", "Enter", "Type an email address to investigate"),
+        ("2", "Scan", f"Checks {scope} for registrations"),
+        ("3", "Done", "View where the email is used, recovery hints, and more"),
+    ]
 
 
 # ── Compact components ─────────────────────────────────────────────────
@@ -354,6 +364,9 @@ def HomeScreen(banner: Control | None = None) -> Control:
     controller = ft.use_context(ControllerMethodsCtx)
 
     search_query, set_search_query = ft.use_state("")
+
+    # Live email-validator count for the mode's hint text (never a literal).
+    _email_total = email_total_label()
 
     # Mode is driven by observable state so it persists across screens
     is_email_mode = state.search_mode == MODE_EMAIL
@@ -696,7 +709,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
             ),
             _category_chip(
                 icon=ft.Icons.SECURITY_ROUNDED,
-                label="Stealth: Chrome 131"
+                label="Stealth: Chrome 150"
                 if getattr(state, "use_curl_cffi", True)
                 else "Stealth: Standard",
                 color=AppColors.PRIMARY_LIGHT
@@ -778,6 +791,8 @@ def HomeScreen(banner: Control | None = None) -> Control:
         AppHeader(
             _get_page(),
             title=APP_NAME,
+            # Two-line header like History/Settings — consistent across tabs.
+            subtitle="Home",
             on_settings=lambda e: (
                 controller.show_settings() if controller.show_settings else None
             ),
@@ -910,7 +925,11 @@ def HomeScreen(banner: Control | None = None) -> Control:
                 content=ft.SearchBar(
                     value=search_query,
                     bar_hint_text=(
-                        "Enter email to check 120+ platforms..."
+                        (
+                            f"Enter email to check {_email_total} platforms..."
+                            if _email_total
+                            else "Enter an email to investigate..."
+                        )
                         if is_email_mode
                         else "Enter username (tip: user{?}name → 3 variants)..."
                     ),
@@ -1153,7 +1172,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                 margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
                             )
                             for f in (
-                                _FEATURES_EMAIL if is_email_mode else _FEATURES_USERNAME
+                                _features_email() if is_email_mode else _FEATURES_USERNAME
                             )
                         ],
                     ],
@@ -1179,7 +1198,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                         *[
                             _step_row(n, t, d)
                             for n, t, d in (
-                                _STEPS_EMAIL if is_email_mode else _STEPS_USERNAME
+                                _steps_email() if is_email_mode else _STEPS_USERNAME
                             )
                         ],
                     ],

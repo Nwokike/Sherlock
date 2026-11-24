@@ -106,17 +106,34 @@ class ScanNotifier:
         self.page = page
         self._service: Notifications | None = None
         self._channels_made = False
-        self._permission_asked = False
         self._fgs_running = False
+        # One native stop per started service: stop_service() is reached from
+        # completion, cancel, supersede and app-close, sometimes twice.
+        self._stop_done = False
+        # Re-entrancy guard for an in-flight stop.
+        self._stopping = False
         self._target = ""
         self._is_email = False
         self._on_cancel = None
         self._on_view = None
         self._on_permission_denied = None
+        # The denial snackbar is offered once per denial, not on every scan.
+        self._denial_notified = False
 
     @property
     def available(self) -> bool:
-        return _HAS_NOTIFICATIONS
+        return self._service is not None
+
+    def _is_android(self) -> bool:
+        """Foreground services exist only on Android; desktop posts plain
+        notifications instead (both reference apps guard the same way)."""
+        try:
+            return (
+                not getattr(self.page, "web", False)
+                and self.page.platform == ft.PagePlatform.ANDROID
+            )
+        except Exception:
+            return False
 
     def set_handlers(
         self, *, on_cancel=None, on_view=None, on_permission_denied=None
@@ -154,10 +171,16 @@ class ScanNotifier:
             return False
 
     async def ensure_permission(self) -> bool:
-        """Ask POST_NOTIFICATIONS once, bounded; denial is not fatal."""
-        if self._service is None or self._permission_asked:
-            return True
-        self._permission_asked = True
+        """Ask POST_NOTIFICATIONS before each foreground-service start.
+
+        Bounded so a dialog the user ignores can never stall the scan. A
+        denial/timeout is NOT latched forever: the reference apps re-ask on
+        every service start, and Android simply returns False without a dialog
+        once the user has denied. The offer to open OS settings is shown once
+        per denial, not on every scan.
+        """
+        if self._service is None:
+            return False
         try:
             granted = await asyncio.wait_for(
                 self._service.request_permissions(), timeout=_PERMISSION_TIMEOUT_SEC
@@ -173,21 +196,26 @@ class ScanNotifier:
             logger.warning("ScanNotifier: permission request failed: %s", exc)
             return False
         if granted:
+            self._denial_notified = False
             return True
         logger.info("ScanNotifier: notifications denied — scans still run")
-        cb = self._on_permission_denied
-        if cb is not None:
-            try:
-                cb()
-            except Exception as exc:
-                logger.warning("ScanNotifier: denied handler failed: %s", exc)
+        if not self._denial_notified:
+            self._denial_notified = True
+            cb = self._on_permission_denied
+            if cb is not None:
+                try:
+                    cb()
+                except Exception as exc:
+                    logger.warning("ScanNotifier: denied handler failed: %s", exc)
         return False
 
     # ── scan lifecycle ──────────────────────────────────────────────────
 
     async def scan_started(self, target: str, *, is_email: bool = False) -> bool:
         """Open the foreground service; its notification is the progress bar."""
-        if not _HAS_NOTIFICATIONS or self._service is None:
+        if self._service is None or not self._is_android():
+            # Desktop/web have no foreground service; the scan still runs and
+            # progress() below posts plain notifications on every platform.
             return False
         kind = "email" if is_email else "username"
         self._target = target
@@ -213,7 +241,10 @@ class ScanNotifier:
                 ],
                 options=NotificationOptions(
                     android=AndroidOptions(
-                        channel=CHANNEL_SCAN,
+                        # The channel OBJECT, not its bare ID: a missing ID-only
+                        # channel is auto-created loud ("Notifications",
+                        # DEFAULT importance) when mount() hasn't finished.
+                        channel=_SCAN_CHANNEL,
                         silent=True,
                         only_alert_once=True,
                         ongoing=True,
@@ -222,35 +253,29 @@ class ScanNotifier:
                 ),
             )
             self._fgs_running = True
+            self._stop_done = False
             return True
         except Exception as exc:
             logger.warning("ScanNotifier: foreground service failed: %s", exc)
             return False
 
-    def progress(self, checked: int, total: int) -> None:
+    async def progress(self, checked: int, total: int) -> None:
         """Advance the shade progress bar (caller throttles to ~2 Hz).
 
-        Post on every platform. On Android this updates the foreground
-        service's notification in place (same id); where a foreground service
-        is unavailable (desktop `flet run`) it still surfaces the percentage
-        as a normal notification. The Results screen shows the same numbers.
+        Awaited, so a failed post is logged here instead of vanishing inside a
+        fire-and-forget task. On Android this updates the foreground service's
+        notification in place (same id + only_alert_once); where a foreground
+        service is unavailable (desktop `flet run`) it still surfaces the
+        percentage as a normal notification. The Results screen shows the
+        same numbers.
         """
         if self._service is None:
             return
-        pct = int(checked / max(total, 1) * 100) if total else 0
-
-        async def _safe_show(*args, **kwargs):
-            # page.run_task re-raises an unawaited task's exception into the
-            # session logger ("NotificationException: Session closed"), so a
-            # post during teardown must swallow it here.
-            try:
-                await self._service.show(*args, **kwargs)
-            except Exception as exc:
-                logger.debug("ScanNotifier: progress post failed: %s", exc)
-
+        # Clamp: AndroidProgress validates value <= max, so an overshoot tick
+        # would raise and silently freeze the bar.
+        pct = max(0, min(int(checked / max(total, 1) * 100), 100)) if total else 0
         try:
-            self.page.run_task(
-                _safe_show,
+            await self._service.show(
                 NOTIF_ID_SCAN,
                 title="Sherlock",
                 body=f"{checked}/{total} checked" if total else "Preparing…",
@@ -262,7 +287,7 @@ class ScanNotifier:
                 ],
                 options=NotificationOptions(
                     android=AndroidOptions(
-                        channel=CHANNEL_SCAN,
+                        channel=_SCAN_CHANNEL,
                         silent=True,
                         only_alert_once=True,
                         ongoing=True,
@@ -273,7 +298,7 @@ class ScanNotifier:
                 ),
             )
         except Exception as exc:
-            logger.warning("ScanNotifier: progress update failed: %s", exc)
+            logger.debug("ScanNotifier: progress post failed: %s", exc)
 
     async def scan_finished(self, found: int, total: int) -> None:
         """Stop the service, drop the progress row, post the result row."""
@@ -292,7 +317,9 @@ class ScanNotifier:
                     NotificationAction(id=_ACTION_VIEW, title="View", foreground=True)
                 ],
                 options=NotificationOptions(
-                    android=AndroidOptions(channel=CHANNEL_RESULT, auto_cancel=True)
+                    android=AndroidOptions(
+                        channel=_RESULT_CHANNEL, auto_cancel=True, ongoing=False
+                    )
                 ),
             )
         except Exception as exc:
@@ -302,19 +329,30 @@ class ScanNotifier:
         """Stop the FGS and clear the progress row. One call for every exit.
 
         Stop first: the service owns NOTIF_ID_SCAN, so stopping before the
-        cancel prevents Android from re-posting its ongoing entry.
+        cancel prevents Android from re-posting its ongoing entry. Guarded so
+        completion/cancel/supersede/app-close cannot race two stops, and the
+        running flag clears only after the stop attempt.
         """
-        self._fgs_running = False
-        if self._service is None:
+        if self._stopping or self._service is None:
             return
+        self._stopping = True
         try:
-            await self._service.stop_foreground_service()
-        except Exception as exc:
-            logger.warning("ScanNotifier: stop service failed: %s", exc)
-        try:
-            await self._service.cancel(NOTIF_ID_SCAN)
-        except Exception as exc:
-            logger.warning("ScanNotifier: cancel failed: %s", exc)
+            if (self._fgs_running or self._is_android()) and not self._stop_done:
+                try:
+                    await self._service.stop_foreground_service()
+                    logger.info("ScanNotifier: foreground service stopped")
+                except Exception as exc:
+                    # Loud on purpose: this is the "does the service actually
+                    # close at 100%?" signal to check on a device.
+                    logger.warning("ScanNotifier: stop service failed: %s", exc)
+                self._stop_done = True
+            self._fgs_running = False
+            try:
+                await self._service.cancel(NOTIF_ID_SCAN)
+            except Exception as exc:
+                logger.warning("ScanNotifier: cancel failed: %s", exc)
+        finally:
+            self._stopping = False
 
     async def shutdown(self) -> None:
         """Teardown on app close."""
@@ -334,6 +372,20 @@ class ScanNotifier:
         except Exception as exc:
             logger.warning("ScanNotifier: open settings failed: %s", exc)
 
+    async def are_notifications_enabled(self) -> bool:
+        """OS-level notification authorization, for the Settings row.
+
+        True where the platform has no permission gate (desktop); a failure
+        reads as "blocked" so the row still offers the settings route.
+        """
+        if self._service is None:
+            return False
+        try:
+            return bool(await self._service.are_notifications_enabled())
+        except Exception as exc:
+            logger.debug("ScanNotifier: enabled check failed: %s", exc)
+            return False
+
     # ── events ──────────────────────────────────────────────────────────
 
     async def _handle_tap(self, e) -> None:
@@ -345,13 +397,18 @@ class ScanNotifier:
 
     async def _handle_action(self, e) -> None:
         action_id = getattr(e, "action_id", "") or ""
-        if action_id == _ACTION_CANCEL and self._on_cancel is not None:
-            try:
-                self._on_cancel()
-            except Exception as exc:
-                logger.warning("ScanNotifier: cancel handler failed: %s", exc)
-        elif self._on_view is not None:
-            try:
-                self._on_view()
-            except Exception as exc:
-                logger.warning("ScanNotifier: view handler failed: %s", exc)
+        if action_id == _ACTION_CANCEL:
+            if self._on_cancel is not None:
+                try:
+                    self._on_cancel()
+                except Exception as exc:
+                    logger.warning("ScanNotifier: cancel handler failed: %s", exc)
+            return
+        if action_id == _ACTION_VIEW:
+            if self._on_view is not None:
+                try:
+                    self._on_view()
+                except Exception as exc:
+                    logger.warning("ScanNotifier: view handler failed: %s", exc)
+            return
+        logger.debug("ScanNotifier: ignoring unknown action %r", action_id)

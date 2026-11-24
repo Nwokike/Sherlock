@@ -484,6 +484,11 @@ class AppController:
             check_for_updates=self.check_for_updates,
             open_update_dialog=self.open_update_dialog,
             set_onboarding_done=self.set_onboarding_done,
+            replay_onboarding=self.replay_onboarding,
+            exit_app=self.exit_app,
+            notifications_enabled=self.notifications_enabled,
+            open_notification_settings=self.open_notification_settings,
+            show_privacy_options=self.show_privacy_options,
             open_cached_result=self.open_cached_result,
             run_db_health=self.run_db_health,
         )
@@ -1297,7 +1302,7 @@ class AppController:
                     )
                     return
         state.search_progress = progress
-        self._notify_scan_progress(progress)
+        await self._notify_scan_progress(progress)
 
         # Stream newly discovered found URLs into the enrichment queue
         if (
@@ -1312,12 +1317,13 @@ class AppController:
                     self._enriched_seen.add(url)
                     self._enrich_queue.put_nowait(url)
 
-    def _notify_scan_progress(self, progress) -> None:
+    async def _notify_scan_progress(self, progress) -> None:
         """Mirror a tick into the shade, throttled to the ~2 Hz render budget.
 
-        The shade owns progress; the app shows only the tiny pill. The FGS
-        notification is updated in place (reused id + only_alert_once), so
-        advancing progress never re-alerts.
+        Both engines are handled here (networks vs validator platforms) so the
+        shade and the Results bar always agree. The post is awaited and its
+        failure logged inside ScanNotifier; the FGS notification is updated in
+        place (reused id + only_alert_once), so progress never re-alerts.
         """
         now = time.monotonic()
         if now - self._last_notify_progress < 0.5:
@@ -1329,7 +1335,10 @@ class AppController:
         total = getattr(progress, "total_sites", None)
         if not total:
             total = getattr(progress, "total_modules", 0) or 0
-        self.scan_notify.progress(checked, total)
+        try:
+            await self.scan_notify.progress(checked, total)
+        except Exception as exc:  # never let a shade post break a scan tick
+            logger.debug("ScanNotifier: progress bridge failed: %s", exc)
 
     def _cancel_task_threadsafe(self, task: asyncio.Task | None) -> None:
         """Cancel a task from any thread (sync UI callbacks may run off-loop)."""
@@ -1444,7 +1453,7 @@ class AppController:
                 on_progress=self._progress_from_thread,
                 timeout=state.email_timeout,
                 skip_password_recovery=state.no_password_recovery,
-                concurrency=getattr(state, "email_concurrency", 15),
+                concurrency=getattr(state, "email_concurrency", 12),
                 use_curl_cffi=getattr(state, "use_curl_cffi", True),
                 proxy=getattr(state, "proxy_url", "") or "",
             )
@@ -1659,6 +1668,46 @@ class AppController:
                 logger.info("Onboarding state successfully persisted")
             except Exception as e:
                 logger.warning("Failed to persist onboarding state: %s", e)
+
+    async def replay_onboarding(self) -> None:
+        """Show the intro again (Settings → About).
+
+        Clears the stored flag and flips the observable gate so AppShell
+        remounts OnboardingScreen; finishing it writes the flag back.
+        """
+        state.is_first_launch = True
+        state.has_accepted_terms = False
+        if self.storage:
+            try:
+                await self.storage.delete(STORAGE_ONBOARDING_DONE)
+                await self.storage.flush()
+            except Exception as e:
+                logger.warning("Failed to clear onboarding flag: %s", e)
+
+    async def exit_app(self) -> None:
+        """Close the app (Settings → Exit app). The UI confirms first."""
+        try:
+            await self.page.window.close()
+        except Exception as exc:
+            logger.warning("window.close() failed: %s", exc)
+
+    async def notifications_enabled(self) -> bool:
+        """OS notification authorization for the Settings row."""
+        return await self.scan_notify.are_notifications_enabled()
+
+    async def open_notification_settings(self) -> None:
+        """Public route for the Settings → Notifications row."""
+        await self._open_notification_settings()
+
+    async def show_privacy_options(self) -> str:
+        """Open the UMP privacy-options form; returns what happened."""
+        if not self.ad_service:
+            return "no_manager"
+        try:
+            return await self.ad_service.show_privacy_options()
+        except Exception as exc:
+            logger.warning("Privacy options failed: %s", exc)
+            return f"error:{exc}"
 
     def open_cached_result(self, query: str, mode: str) -> bool:
         """Open past results from cache instantly without re-scanning."""

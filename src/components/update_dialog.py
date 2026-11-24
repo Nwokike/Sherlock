@@ -272,11 +272,11 @@ def show_update_dialog(page: ft.Page, update_data: dict | None = None):
     # the action buttons on short viewports — the Actions sit outside the
     # scroll area, so they get cut off with no way to reach them. The width
     # is derived from the page so it also fits a narrow phone.
-    try:
-        page_width = int(getattr(page, "width", 0) or 0)
-    except TypeError, ValueError:
-        page_width = 0
-    content_width = min(380, max(300, page_width - 48)) if page_width else 380
+    from core.layout import dialog_width
+
+    # 300/380 are this dialog's own min/max; the page gutter and clamping live
+    # in one helper now (previously inlined here).
+    content_width = dialog_width(page, min_width=300, max_width=380)
 
     dlg = ft.AlertDialog(
         modal=modal,

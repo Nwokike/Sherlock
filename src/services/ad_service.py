@@ -124,6 +124,14 @@ class AdService:
             return self.INTERSTITIAL_ID_ANDROID_TEST
         return self.INTERSTITIAL_ID_ANDROID_PROD
 
+    @property
+    def can_request_ads(self) -> bool:
+        """Personalization verdict for the Settings row.
+
+        Telemetry-only by owner rule: the consent answer NEVER gates serving.
+        """
+        return self._can_request_ads
+
     def _is_mobile(self) -> bool:
         try:
             return self.page.platform.is_mobile()

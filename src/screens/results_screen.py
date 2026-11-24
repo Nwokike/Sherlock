@@ -918,31 +918,38 @@ def ResultsScreen() -> Control:
     )
     # Live progress stays in-app: a scan opens this screen and the owner
     # expects the bar to climb from 1% to 100% here. The shade notification
-    # mirrors the same numbers for when the user is elsewhere — both show it.
+    # mirrors the SAME numbers for when the user is elsewhere — both show it.
+    #
+    # Username and email are different engines with different denominators
+    # (networks vs validator platforms). Never read one mode's total for the
+    # other: the shared block used to feed `username_view` (which falls back to
+    # the ~10k site count for email scans) into BOTH bars.
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
-        engine_known_total = username_view.engine_total or (
-            getattr(active_progress, "total_modules", 0) or 0
-        )
-        if username_view.checked == 0 and engine_known_total == 0:
-            progress_val = None
-        elif username_view.total > 0:
-            progress_val = username_view.checked / username_view.total
-        else:
-            progress_val = None
         is_email_progress = hasattr(active_progress, "checked_modules")
         noun = "platforms" if is_email_progress else "sites"
-        if getattr(active_progress, "is_cancelled", False):
-            progress_label = (
-                f"Cancelled — {username_view.checked}/{username_view.total} checked"
-            )
-        elif progress_val is None:
-            progress_label = "Initializing..."
+        if is_email_progress:
+            checked = getattr(active_progress, "checked_modules", 0) or 0
+            engine_total = getattr(active_progress, "total_modules", 0) or 0
+            total = engine_total or state.email_total_modules or 0
+            cancelled = bool(getattr(active_progress, "is_cancelled", False))
         else:
-            progress_label = (
-                f"Checking {username_view.checked}/{username_view.total} {noun} "
-                f"({int(progress_val * 100)}%)..."
-            )
+            checked = username_view.checked
+            engine_total = username_view.engine_total
+            total = username_view.total
+            cancelled = username_view.is_cancelled
+        if cancelled:
+            progress_label = f"Cancelled — {checked}/{total} checked"
+            progress_val = None
+        elif checked == 0 and engine_total == 0:
+            # Initializing: the engine has not reported a denominator yet, so a
+            # 0/N bar would be a lie (v2.2.0 behaviour).
+            progress_label = "Initializing..."
+            progress_val = None
+        else:
+            progress_val = checked / max(total, 1)
+            pct = max(0, min(int(progress_val * 100), 100))
+            progress_label = f"Checking {checked}/{total} {noun} ({pct}%)..."
 
         def cancel_callback(e):
             if is_email_progress:

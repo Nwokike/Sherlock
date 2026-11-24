@@ -42,6 +42,16 @@ async def _noop_health() -> dict:
     return {}
 
 
+async def _noop_bool() -> bool:
+    """No-op boolean default (notification status)."""
+    return False
+
+
+async def _noop_str() -> str:
+    """No-op string default (privacy-options result)."""
+    return ""
+
+
 @dataclass
 class ControllerMethods:
     """Subset of AppController methods exposed to the component tree.
@@ -62,6 +72,12 @@ class ControllerMethods:
     open_update_dialog: Callable[[], None] = _noop_sync
     set_onboarding_done: Callable[[], Awaitable[None]] = _noop_async
     open_cached_result: Callable[[str, str], bool] = lambda _q, _m: False
+    # Settings → System / About rows.
+    replay_onboarding: Callable[[], Awaitable[None]] = _noop_async
+    exit_app: Callable[[], Awaitable[None]] = _noop_async
+    notifications_enabled: Callable[[], Awaitable[bool]] = _noop_bool
+    open_notification_settings: Callable[[], Awaitable[None]] = _noop_async
+    show_privacy_options: Callable[[], Awaitable[str]] = _noop_str
 
     # AppShell-populated (view-local, sync closures)
     show_results: Callable[[], None] = _noop_sync

@@ -18,7 +18,7 @@ from flet import Control
 from components.app_header import AppHeader
 from components.banner_ad import pooled_banner_ad
 from components.section_header import SectionHeader
-from core import tokens
+from core import layout, tokens
 from core.constants import (
     APP_BUILD_NUMBER,
     APP_NAME,
@@ -27,6 +27,7 @@ from core.constants import (
     GITHUB_RELEASES_URL,
     MORE_APPS_URL,
     PLAY_STORE_URL,
+    PRIVACY_POLICY_URL,
     REPO_URL,
     STORAGE_CHECK_DOMAINS,
     STORAGE_COOKIES_PATH,
@@ -53,8 +54,9 @@ from core.constants import (
     STORAGE_THEME,
     STORAGE_TIMEOUT,
     STORAGE_USE_CURL_CFFI,
+    TERMS_OF_SERVICE_URL,
 )
-from core.format import sites_total_label
+from core.format import email_total_label, sites_total_label
 from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
 from core.notify import show_snack
 from core.tasks import spawn
@@ -185,14 +187,18 @@ def _setting_row(
     icon: ft.IconData,
     title: str,
     subtitle: str,
-    trailing: Control,
+    trailing: Control | None = None,
+    *,
     stacked: bool = False,
+    value: str | None = None,
+    on_tap=None,
 ) -> ft.Container:
-    """Reusable settings row with icon + text + trailing control.
+    """Reusable settings row: icon + title/subtitle + optional value/control.
 
-    On narrow screens (`stacked=True`) the trailing control moves to its
-    own line below the description instead of competing for horizontal
-    space — SegmentedButtons and Sliders otherwise squeeze the subtitle
+    proot-distro shape: a row can show a live `value`, carry its own trailing
+    control, or be entirely tappable (`on_tap` → ink + chevron). On narrow
+    screens (`stacked=True`) the value/control moves to its own line below the
+    description — SegmentedButtons and Sliders otherwise squeeze the subtitle
     or overflow on phones. Wide layouts are unchanged.
     """
     icon_box = ft.Container(
@@ -224,31 +230,64 @@ def _setting_row(
         expand=True,
     )
 
+    def _value_text() -> ft.Text:
+        return ft.Text(
+            value,
+            size=tokens.FONT_XS,
+            color=ft.Colors.ON_SURFACE,
+            text_align=ft.TextAlign.RIGHT,
+            no_wrap=False,
+        )
+
+    def _chevron() -> ft.Icon:
+        return ft.Icon(
+            ft.Icons.CHEVRON_RIGHT_ROUNDED,
+            size=tokens.ICON_SM,
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+
     if stacked:
-        # Sliders and SegmentedButtons stretch across the second line;
-        # switches/buttons keep their natural size under the text indent.
-        stretches = isinstance(trailing, (ft.Slider, ft.SegmentedButton))
-        trailing_line = ft.Row(
-            controls=[
-                ft.Container(width=tokens.ICON_BACKDROP + tokens.SPACE_MD),
-                (ft.Row(controls=[trailing], expand=True) if stretches else trailing),
-            ],
-            spacing=0,
-        )
-        content = ft.Column(
-            controls=[
+        below: list[Control] = []
+        if value is not None:
+            below.append(_value_text())
+        if trailing is not None:
+            # Sliders and SegmentedButtons stretch across the second line;
+            # switches/buttons keep their natural size under the text indent.
+            if isinstance(trailing, (ft.Slider, ft.SegmentedButton)):
+                below.append(ft.Row(controls=[trailing], expand=True))
+            else:
+                below.append(trailing)
+        if on_tap is not None and trailing is None and value is None:
+            below.append(_chevron())
+        body: list[Control] = [
+            ft.Row(
+                controls=[icon_box, text_col],
+                spacing=tokens.SPACE_MD,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        ]
+        if below:
+            body.append(
                 ft.Row(
-                    controls=[icon_box, text_col],
-                    spacing=tokens.SPACE_MD,
+                    controls=[
+                        ft.Container(width=tokens.ICON_BACKDROP + tokens.SPACE_MD),
+                        *below,
+                    ],
+                    spacing=tokens.SPACE_XS,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                trailing_line,
-            ],
-            spacing=tokens.SPACE_XS,
-        )
+                )
+            )
+        content = ft.Column(controls=body, spacing=tokens.SPACE_XS)
     else:
+        tail: list[Control] = []
+        if value is not None:
+            tail.append(_value_text())
+        if trailing is not None:
+            tail.append(trailing)
+        if on_tap is not None and trailing is None and value is None:
+            tail.append(_chevron())
         content = ft.Row(
-            controls=[icon_box, text_col, trailing],
+            controls=[icon_box, text_col, *tail],
             spacing=tokens.SPACE_MD,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
@@ -261,6 +300,8 @@ def _setting_row(
             top=tokens.SPACE_MD,
             bottom=tokens.SPACE_MD,
         ),
+        on_click=on_tap,
+        ink=on_tap is not None,
     )
 
 
@@ -301,8 +342,25 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             set_narrow_version(_narrow_version + 1)
 
         page.on_resize = _on_resize
-    narrow = bool(page and getattr(page, "width", None) and page.width < 600)
+    narrow = layout.is_narrow(page)
+    # Platform-only (not width): these rows are desktop because their engine
+    # path is unavailable on Android, so a narrow desktop window keeps them.
     is_mobile = bool(page and hasattr(page, "platform") and page.platform.is_mobile())
+
+    # Live OS-notification authorization for the System row (None = unknown
+    # until the async query lands).
+    notif_ok, set_notif_ok = ft.use_state(None)
+    # Privacy verdict override, set after the UMP form is shown so the row
+    # reflects what the user just chose.
+    privacy_value, set_privacy_value = ft.use_state(None)
+
+    async def _refresh_notifications():
+        try:
+            set_notif_ok(await controller.notifications_enabled())
+        except Exception:
+            set_notif_ok(None)
+
+    ft.use_effect(_refresh_notifications, [])
 
     async def _on_theme_change(val: str):
         if page is None:
@@ -841,7 +899,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.SECURITY_ROUNDED,
                 "Stealth TLS (curl-cffi)",
-                "Chrome 131 JA3/H2 fingerprint to bypass WAF 403 blocks",
+                "Chrome 150 JA3/H2 fingerprint to bypass WAF 403 blocks",
                 ft.Switch(
                     value=getattr(state, "use_curl_cffi", True),
                     on_change=lambda e: _toggle_use_curl_cffi(e.control.value),
@@ -1104,17 +1162,27 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         ]
     )
 
-    # NOTE: the UMP consent form is intentionally NOT surfaced as a
-    # settings entry. It appears on its own when the user's region requires
-    # it (gather_consent at startup), and there is no "Manage/withdraw
-    # consent" row: a revocation path mostly serves users who already
-    # consented — revenue-negative by design decision (owner, 2026-09-03).
+    # Privacy note: the consent form still appears on its own only when the
+    # user's region requires it (gather_consent at startup). The Settings
+    # "Privacy & Ads" row added below is INFORMATIONAL — it shows the
+    # personalization verdict and opens the same UMP form — and never gates
+    # ad serving (owner rule). This supersedes the earlier blanket "no privacy
+    # row" decision without reintroducing consent gating.
 
     # About & Updates
     def _open_version_dialog(e=None):
         from components.update_dialog import show_update_dialog
 
         show_update_dialog(page)
+
+    # Live engine summary folded into About (the proot diagnostics pattern).
+    _email_count = email_total_label()
+    _engine_summary = (
+        f"Maigret {sites_total_label()} networks · "
+        f"holehe-v2 {_email_count} validators"
+        if _email_count
+        else f"Maigret {sites_total_label()} networks"
+    )
 
     about_card = _settings_card(
         [
@@ -1160,6 +1228,15 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                                 ),
                                 text_align=ft.TextAlign.CENTER,
                             ),
+                        ),
+                        ft.Container(height=tokens.SPACE_XXS),
+                        ft.Text(
+                            _engine_summary,
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.with_opacity(
+                                tokens.OPACITY_DIM, ft.Colors.ON_SURFACE
+                            ),
+                            text_align=ft.TextAlign.CENTER,
                         ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1226,6 +1303,105 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             on_click=lambda e, u=url: _open_link(u),
         )
 
+    # ── System / About / Help actions ───────────────────────────────────
+
+    def _open_help(_e=None):
+        from components.help_dialog import show_help_dialog
+
+        show_help_dialog(page)
+
+    def _open_licenses(_e=None):
+        from components.licenses_dialog import show_licenses_dialog
+
+        show_licenses_dialog(page)
+
+    def _replay_intro(_e=None):
+        spawn(controller.replay_onboarding())
+
+    def _exit_app(_e=None):
+        if page is None:
+            return
+
+        def _confirm(_e=None):
+            page.pop_dialog()
+            spawn(controller.exit_app())
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Exit Sherlock?"),
+                content=ft.Text("Any running scan stops and the app closes."),
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                    ft.FilledButton("Exit", on_click=_confirm),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
+    def _notifications_value_text() -> str:
+        if notif_ok is None:
+            return "tap to check"
+        return "Allowed" if notif_ok else "Blocked: tap to allow"
+
+    def _open_notification_settings(_e=None):
+        spawn(controller.open_notification_settings())
+
+    def _privacy_value_text() -> str:
+        if privacy_value is not None:
+            return privacy_value
+        try:
+            from services.ad_service import AD_SERVICE_REF
+
+            svc = AD_SERVICE_REF.get("service")
+        except Exception:
+            svc = None
+        verdict = getattr(svc, "can_request_ads", True) if svc else True
+        return "Personalized" if verdict else "Non-personalized"
+
+    def _open_privacy_options(_e=None):
+        async def _go():
+            await controller.show_privacy_options()
+            try:
+                from services.ad_service import AD_SERVICE_REF
+
+                svc = AD_SERVICE_REF.get("service")
+            except Exception:
+                svc = None
+            if svc is None:
+                set_privacy_value(None)
+            else:
+                set_privacy_value(
+                    "Personalized" if svc.can_request_ads else "Non-personalized"
+                )
+
+        spawn(_go())
+
+    system_card = _settings_card(
+        [
+            _setting_row(
+                ft.Icons.NOTIFICATIONS_ROUNDED,
+                "Notifications",
+                "Scan progress and its Cancel action live in the OS shade",
+                value=_notifications_value_text(),
+                on_tap=_open_notification_settings,
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.PRIVACY_TIP_ROUNDED,
+                "Privacy & Ads",
+                "Ads always serve; this is the personalization verdict",
+                value=_privacy_value_text(),
+                on_tap=_open_privacy_options,
+                stacked=narrow,
+            ),
+        ]
+    )
+
     help_card = _settings_card(
         [
             _link_row(
@@ -1273,6 +1449,70 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 "Releases",
                 "Changelogs for every build",
                 GITHUB_RELEASES_URL,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.HELP_OUTLINE_ROUNDED,
+                "Help & shortcuts",
+                "How searches, progress and exports work",
+                on_tap=_open_help,
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.GAVEL_ROUNDED,
+                "Open-source licenses",
+                "Every Python dependency's license",
+                on_tap=_open_licenses,
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _link_row(
+                ft.Icons.SHIELD_ROUNDED,
+                "Privacy policy",
+                "How your data stays on your device",
+                PRIVACY_POLICY_URL,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _link_row(
+                ft.Icons.DESCRIPTION_ROUNDED,
+                "Terms of service",
+                "The rules for using Sherlock",
+                TERMS_OF_SERVICE_URL,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.REPLAY_ROUNDED,
+                "Show the intro again",
+                "Replay the onboarding screens",
+                on_tap=_replay_intro,
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.POWER_SETTINGS_NEW_ROUNDED,
+                "Exit app",
+                "Stop any running scan, then close",
+                on_tap=_exit_app,
+                stacked=narrow,
             ),
         ]
     )
@@ -1542,11 +1782,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ft.Icons.TERMINAL_ROUNDED,
                 "Live Activity Terminal",
                 f"{log_count} entries recorded · Real-time engine diagnostics",
-                ft.FilledButton(
-                    "Open Terminal",
-                    icon=ft.Icons.TERMINAL_ROUNDED,
-                    on_click=lambda e: _open_terminal(),
-                ),
+                on_tap=lambda _e: _open_terminal(),
                 stacked=narrow,
             ),
             ft.Divider(
@@ -1557,11 +1793,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ft.Icons.HEALTH_AND_SAFETY_ROUNDED,
                 "Database Health Check",
                 "Probe 25 random sites · flags broken ones and excludes them from scans",
-                ft.FilledButton(
-                    "Run Check",
-                    icon=ft.Icons.SEARCH_ROUNDED,
-                    on_click=lambda e: spawn(_run_db_health_check(e)),
-                ),
+                on_tap=lambda e: spawn(_run_db_health_check(e)),
                 stacked=narrow,
             ),
             ft.Divider(
@@ -1572,11 +1804,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
                 "Site Database Update",
                 f"Fetch the latest {sites_total_label()} network definitions from upstream",
-                ft.FilledButton(
-                    "Check for Update",
-                    icon=ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
-                    on_click=lambda e: spawn(_run_db_update_check(e)),
-                ),
+                on_tap=lambda e: spawn(_run_db_update_check(e)),
                 stacked=narrow,
             ),
         ]
@@ -1596,6 +1824,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             network_card,
             SectionHeader("ENRICHMENT"),
             enrichment_card,
+            SectionHeader("SYSTEM"),
+            system_card,
             pooled_banner_ad("settings-2"),
             SectionHeader("CONNECTION & SPEED"),
             performance_card,

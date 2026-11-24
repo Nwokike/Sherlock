@@ -265,11 +265,12 @@ def test_results_leaves_initializing_once_a_tick_lands():
         _restore(snap)
 
 
-def test_tiny_scanning_pill_is_the_only_in_app_indicator():
-    """While a scan runs the app shows a tiny tappable pill, nothing else.
+def test_tiny_scanning_pill_is_the_header_indicator():
+    """While a scan runs the header shows only a tiny tappable pill.
 
-    Progress and Cancel live in the OS shade (foreground service); the app
-    must not render an in-app progress bar or Cancel button.
+    The Results screen keeps its own progress bar + Cancel (owner demand,
+    restored after the 2.3.0 removal was reverted); the header itself must
+    stay minimal and the pill navigates to Results.
     """
     from flet.components.component import Renderer
 
@@ -326,3 +327,40 @@ def test_tiny_scanning_pill_is_the_only_in_app_indicator():
     finally:
         _restore(snap)
         set_scan_navigation(None)
+
+
+def test_email_progress_uses_validator_count_not_the_site_total():
+    """Email scans show PLATFORM counts; never the ~10k network total.
+
+    Regression: the shared progress block used `username_view` (which falls
+    back to `state.sites_total`) for both modes, so an email scan rendered
+    "Checking 0/10,310 sites" while the shade correctly showed N/181.
+    """
+    from core.constants import MODE_EMAIL
+    from services.email_service import EmailSearchProgress
+
+    snap = _snapshot()
+    try:
+        state.current_username = "alice@example.com"
+        state.search_mode = MODE_EMAIL
+        state.is_searching = True
+        state.search_targets = []
+        state.last_results = {}
+        state.sites_total = 10310
+        state.email_total_modules = 181
+        state.search_progress = EmailSearchProgress(
+            email="alice@example.com",
+            total_modules=181,
+            checked_modules=90,
+            is_running=True,
+        )
+        labels = _texts_of(_render_results())
+        assert any("Checking 90/181 platforms (49%)" in t for t in labels), labels
+        assert not any(("10,310" in t) or ("10310" in t) for t in labels), (
+            "the username site total leaked into the email progress bar"
+        )
+    finally:
+        _restore(snap)
+        state.last_results = {}
+        state.sites_total = 0
+        state.email_total_modules = 0

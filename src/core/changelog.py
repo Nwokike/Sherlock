@@ -5,11 +5,14 @@ current APP_VERSION in sync when bumping (guarded by tests)."""
 CHANGELOG: dict[str, str] = {
     "2.3.0": (
         "• Scans now live in the notification shade: a foreground-service progress bar with a Cancel action, so you can leave the app and still watch or stop the hunt\n"
-        "• Wake lock keeps the screen on while a scan runs\n"
-        '• A tiny tappable "Scanning…" pill is the only in-app indicator — tap it to open Results\n'
+        "• Wake lock keeps the screen on while a scan runs; the service stops at 100% or when you cancel\n"
+        "• Username and email scans show the SAME live counts in the app and the shade (email counts validator platforms, not networks)\n"
+        '• A tiny tappable "Scanning…" pill sits below the header — tap it to jump back to Results\n'
         "• 11,000+ networks via Maigret 0.6.7, with a live count on every screen\n"
         "• Email checks retry through rate limits and render recovery details; TLS fingerprint bumped to chrome150\n"
+        "• Settings rebuilt in the proot-distro shape: notifications status, privacy & ads verdict, help, licenses, replay intro, exit and policy links — with rows that stack on small screens\n"
         "• Flet, flet-ads and flet-notifications upgraded to 1.1.2\n"
+        "• Every option verified against the engines: no dead settings\n"
         "• Release notes on every build are generated from this changelog"
     ),
     "2.2.0": (

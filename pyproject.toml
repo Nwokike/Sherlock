@@ -1,7 +1,7 @@
 [project]
 name = "sherlock"
 version = "2.3.0"
-description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
+description = "Sherlock: Hunt down social media accounts by username across 11,000+ networks."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -20,7 +20,7 @@ dependencies = [
 [tool.flet]
 org = "ng.kiri"
 product = "Sherlock"
-description = "Sherlock: Hunt down social media accounts by username across 5,200+ networks."
+description = "Sherlock: Hunt down social media accounts by username across 11,000+ networks."
 company = "Kiri"
 build_number = 13
 

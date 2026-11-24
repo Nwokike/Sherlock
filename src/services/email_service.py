@@ -91,6 +91,19 @@ _SCAN_FINGERPRINT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 # Legacy alias (kept for back-compat; the wrapper no longer reads it).
 _FINGERPRINT: str | None = None
 
+# Newest impersonation profiles curl-cffi supports. Referencing the package
+# constants keeps Sherlock from drifting behind the library; the literals are
+# the fallback for an older curl-cffi. Desktop = chrome150, Android =
+# chrome131_android (there is no chrome150_android target).
+try:
+    from curl_cffi.requests import impersonate as _curl_impersonate
+
+    _CURL_DEFAULT_CHROME = _curl_impersonate.DEFAULT_CHROME
+    _CURL_DEFAULT_CHROME_ANDROID = _curl_impersonate.DEFAULT_CHROME_ANDROID
+except Exception:  # pragma: no cover — curl-cffi is a pinned dependency
+    _CURL_DEFAULT_CHROME = "chrome150"
+    _CURL_DEFAULT_CHROME_ANDROID = "chrome131_android"
+
 if _HOLEHE_AVAILABLE:
     try:
         import holehe_v2.core.impersonate as _imp
@@ -116,7 +129,9 @@ if _HOLEHE_AVAILABLE:
             ):
                 from curl_cffi.requests import AsyncSession
 
-                fingerprint = impersonate or _SCAN_FINGERPRINT.get() or "chrome150"
+                fingerprint = (
+                    impersonate or _SCAN_FINGERPRINT.get() or _CURL_DEFAULT_CHROME
+                )
                 async with AsyncSession(impersonate=fingerprint) as session:
                     return await session.request(
                         method,
@@ -422,10 +437,11 @@ class EmailService:
         froze the UI (dead cancel button, dead back button).
 
         `use_stealth_fingerprint` (alias `use_curl_cffi`) selects the TLS
-        fingerprint for v2's impersonate-path modules (modern chrome131 vs
-        upstream chrome120). `proxy` is injected via HTTP(S)_PROXY env vars
-        for the scan only — v2's validators build their own clients, so
-        this is the only hook.
+        fingerprint for v2's impersonate-path modules: the newest curl-cffi
+        desktop profile (chrome150) and, on mobile, its Android profile
+        (chrome131_android), instead of upstream holehe-v2's chrome120.
+        `proxy` is injected via HTTP(S)_PROXY env vars for the scan only —
+        v2's validators build their own clients, so this is the only hook.
         """
         if use_stealth_fingerprint is None:
             use_stealth_fingerprint = use_curl_cffi
@@ -438,9 +454,10 @@ class EmailService:
 
         fingerprint = None
         if use_stealth_fingerprint:
-            # P2-3 rotation: Android devices present as Chrome Android
-            # (chrome131_android); desktops as chrome131.
-            fingerprint = "chrome131"
+            # Mobile presents as Chrome Android; desktop as the newest desktop
+            # profile. Both come from curl-cffi's own constants so a library
+            # bump cannot silently leave us on an old fingerprint.
+            fingerprint = _CURL_DEFAULT_CHROME
             try:
                 from flet import context as _flet_context
 
@@ -449,7 +466,7 @@ class EmailService:
                     and hasattr(_flet_context.page, "platform")
                     and _flet_context.page.platform.is_mobile()
                 ):
-                    fingerprint = "chrome131_android"
+                    fingerprint = _CURL_DEFAULT_CHROME_ANDROID
             except Exception:
                 pass
         # Only gravatar honours this, but it's free; every other timeout

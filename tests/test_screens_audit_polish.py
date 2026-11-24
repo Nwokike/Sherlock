@@ -7,7 +7,7 @@ from core.constants import APP_BUILD_NUMBER, APP_VERSION, MODE_EMAIL, MODE_USERN
 from core.state import state
 from screens.history_screen import HistoryScreen
 from screens.home_screen import HomeScreen
-from screens.onboarding_screen import _SLIDES, OnboardingScreen
+from screens.onboarding_screen import OnboardingScreen, _slides
 from screens.results_screen import ResultsScreen, clamp_tab_index
 from screens.settings_screen import SettingsScreen
 from screens.sites_screen import CATEGORY_TAGS, SitesScreen
@@ -98,7 +98,7 @@ def _extract_texts(nodes) -> list[str]:
 
 
 def test_onboarding_slide_copy_and_disclaimer():
-    slide3 = _SLIDES[2]
+    slide3 = _slides()[2]
     assert "PDF dossiers" in slide3["body"]
     assert "XMind mind maps" in slide3["body"]
     assert "Excel" not in slide3["body"]
@@ -124,6 +124,8 @@ def test_home_screen_features_copy_and_quick_chips():
 
     assert any("PDF dossiers" in t for t in texts)
     assert any("XMind mind maps" in t for t in texts)
+    # Two-line header like History/Settings: title + "Home" subtitle.
+    assert any(t == "Home" for t in texts), "home header lost its subtitle"
     # The depth chip reads the live DB total, not a hardcoded literal.
     assert any("Scope: All" in t for t in texts)
     assert not any("5.2k" in t for t in texts)
@@ -137,8 +139,10 @@ def test_home_screen_features_copy_and_quick_chips():
 
     nodes_email = _mount_screen(lambda: HomeScreen())
     texts_email = _extract_texts(nodes_email)
-    assert any("Stealth: Chrome 131" in t for t in texts_email)
+    assert any("Stealth: Chrome 150" in t for t in texts_email)
     assert any("PW Recovery: ON" in t for t in texts_email)
+    # No hardcoded validator count may surface (owner rule).
+    assert not any("120+" in t for t in texts_email)
 
 
 # ── 3. ResultsScreen Tests ─────────────────────────────────────────────
@@ -231,6 +235,19 @@ def test_settings_screen_all_engine_parameters_and_segmented_enrichment():
     # Check Enrichment SegmentedButton options rendered
     assert any("Basic" in t for t in texts)
     assert any("Full" in t for t in texts)
+
+    # proot-distro parity: system + support/legal rows
+    for row in (
+        "Notifications",
+        "Privacy & Ads",
+        "Help & shortcuts",
+        "Open-source licenses",
+        "Privacy policy",
+        "Terms of service",
+        "Show the intro again",
+        "Exit app",
+    ):
+        assert any(row in t for t in texts), f"missing Settings row: {row}"
 
 
 # ── 5. SitesScreen Tests ───────────────────────────────────────────────

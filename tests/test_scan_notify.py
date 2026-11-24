@@ -9,22 +9,18 @@ from __future__ import annotations
 
 import asyncio
 
+import flet as ft
 import pytest
 
 import services.scan_notify as sn
 
 
-class _Platform:
-    def __init__(self, mobile=True):
-        self._mobile = mobile
-
-    def is_mobile(self):
-        return self._mobile
-
-
 class _FakePage:
-    def __init__(self, mobile=True):
-        self.platform = _Platform(mobile)
+    def __init__(self, *, android=True):
+        self.web = False
+        self.platform = (
+            ft.PagePlatform.ANDROID if android else ft.PagePlatform.LINUX
+        )
         self.services: list = []
         self.tasks: list = []
 
@@ -133,9 +129,25 @@ def test_permission_denial_is_not_fatal_and_offers_settings(fake):
     _FakeNotifications.permission_result = False
     assert _run(notifier.ensure_permission()) is False
     assert denied == [1]
-    # The scan still runs: the foreground service keeps the engine alive even
-    # if the shade row is hidden, and permission is only asked once.
+    # No shade progress while denied — but never blocks the scan itself.
+    assert _run(notifier.scan_started("alice")) is False
+    assert notifier._service.fgs_calls == []
+    # Permission is re-asked on each start (no permanent latch): granting
+    # later re-enables the shade without an app restart.
+    _FakeNotifications.permission_result = True
     assert _run(notifier.scan_started("alice")) is True
+    assert len(notifier._service.fgs_calls) == 1
+
+
+def test_permission_denial_snackbar_is_shown_once(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    denied = []
+    notifier.set_handlers(on_permission_denied=lambda: denied.append(1))
+    _FakeNotifications.permission_result = False
+    _run(notifier.ensure_permission())
+    _run(notifier.ensure_permission())
+    assert denied == [1], "the denial offer must not nag on every scan"
 
 
 def test_permission_timeout_does_not_latch(fake, monkeypatch):
@@ -149,8 +161,13 @@ def test_permission_timeout_does_not_latch(fake, monkeypatch):
 
     notifier._service.request_permissions = _hang
     assert _run(notifier.ensure_permission()) is False
-    # not latched: a later scan still attempts the foreground service
-    assert _run(notifier.scan_started("alice")) is True
+    assert _run(notifier.scan_started("alice")) is False
+    # A later scan asks again rather than inheriting the timeout verdict.
+    async def _grant(**kwargs):
+        return True
+
+    notifier._service.request_permissions = _grant
+    assert _run(notifier.scan_started("bob")) is True
 
 
 def test_scan_started_opens_foreground_service_with_progress_and_cancel(fake):
@@ -166,7 +183,9 @@ def test_scan_started_opens_foreground_service_with_progress_and_cancel(fake):
     actions = kw["actions"]
     assert [a.id for a in actions] == [sn._ACTION_CANCEL]
     android = kw["options"].android
-    assert android.channel == sn.CHANNEL_SCAN
+    # The channel OBJECT is passed, not a bare ID (a missing ID-only channel
+    # would be auto-created loud).
+    assert android.channel.id == sn.CHANNEL_SCAN
     assert android.silent and android.only_alert_once and android.ongoing
     assert android.progress.indeterminate is True
 
@@ -185,8 +204,7 @@ def test_progress_reuses_the_same_id(fake):
     async def run():
         await notifier.mount()
         await notifier.scan_started("alice")
-        notifier.progress(250, 5000)
-        await asyncio.gather(*notifier.page.tasks)
+        await notifier.progress(250, 5000)
 
     _run(run())
     svc = notifier._service
@@ -195,6 +213,20 @@ def test_progress_reuses_the_same_id(fake):
     progress = shown[-1][1]["options"].android.progress
     assert progress.value == 5 and progress.max == 100
     assert progress.indeterminate is False
+
+
+def test_progress_is_clamped_to_100(fake):
+    """An overshoot tick must not raise (AndroidProgress validates <= max)."""
+    notifier, _ = _notifier(fake)
+
+    async def run():
+        await notifier.mount()
+        await notifier.scan_started("alice")
+        await notifier.progress(11000, 10310)
+
+    _run(run())
+    shown = [c for c in notifier._service.shown if c[0] == sn.NOTIF_ID_SCAN]
+    assert shown[-1][1]["options"].android.progress.value == 100
 
 
 def test_finish_stops_service_then_posts_result(fake):
@@ -281,3 +313,42 @@ def test_fresh_denial_does_not_start_the_foreground_service(fake):
     assert _run(notifier.scan_started("alice")) is False
     assert notifier._service.fgs_calls == []
     assert notifier._fgs_running is False
+
+
+def test_desktop_skips_the_foreground_service(fake):
+    """No FGS off-Android: no unsupported-platform call, scan still starts."""
+    page = _FakePage(android=False)
+    notifier = sn.ScanNotifier(page)
+    _run(notifier.mount())
+    assert _run(notifier.scan_started("alice")) is False
+    assert notifier._service.fgs_calls == []
+
+
+def test_unknown_action_is_ignored(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    viewed = []
+    notifier.set_handlers(on_view=lambda: viewed.append(1))
+    _run(notifier._handle_action(_Event(action_id="bogus")))
+    assert viewed == [], "an unknown action id must not open Results"
+
+
+def test_are_notifications_enabled_reads_the_service(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    assert _run(notifier.are_notifications_enabled()) is True
+
+
+def test_stop_service_is_idempotent(fake):
+    notifier, _ = _notifier(fake)
+    _run(notifier.mount())
+    _run(notifier.scan_started("alice"))
+    order: list = []
+    notifier._service.stop_foreground_service = _record(order, "stop")
+
+    async def run():
+        await notifier.stop_service()
+        await notifier.stop_service()
+
+    _run(run())
+    assert order.count("stop") == 1, "a second stop must not re-invoke native"

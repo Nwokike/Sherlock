@@ -130,3 +130,33 @@ def sites_total_label() -> str:
     except Exception:
         total = 0
     return format_count(total or SITES_TOTAL_FALLBACK)
+
+
+_EMAIL_TOTAL_CACHE: list[int] = []
+
+
+def email_total_label() -> str:
+    """The email-validator count to advertise, from the live engine.
+
+    Same rule as `sites_total_label()`: no hardcoded literal. holehe-v2's
+    module set is discovered at runtime (181 today), so prefer the last scan's
+    total, then a cached discovery, and only fall back to a direct discovery.
+    """
+    from core.state import state
+
+    total = getattr(state, "email_total_modules", 0) or 0
+    if total:
+        return format_count(total)
+    if _EMAIL_TOTAL_CACHE:
+        return format_count(_EMAIL_TOTAL_CACHE[0])
+    try:
+        from services.email_service import EmailService
+
+        total = int(EmailService().total_modules or 0)
+    except Exception:
+        total = 0
+    if total:
+        _EMAIL_TOTAL_CACHE[:] = [total]
+    # Empty (not "0") when discovery fails: callers fall back to generic
+    # wording rather than advertising a wrong count.
+    return format_count(total) if total else ""

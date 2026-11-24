@@ -33,9 +33,6 @@ REPO_URL = "https://github.com/Nwokike/Sherlock"
 CONTACT_EMAIL = "onyeka@kiri.ng"
 # The owner's other apps live under this developer account.
 MORE_APPS_URL = "https://github.com/Nwokike?tab=repositories"
-# Same policy documents as the owner's other apps (proot-distro).
-PRIVACY_POLICY_URL = "https://kiri.ng/privacy"
-TERMS_OF_SERVICE_URL = "https://kiri.ng/terms"
 
 # ── Storage keys ──────────────────────────────────────────────────────
 STORAGE_HISTORY = "sherlock_history"

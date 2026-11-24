@@ -484,8 +484,6 @@ class AppController:
             check_for_updates=self.check_for_updates,
             open_update_dialog=self.open_update_dialog,
             set_onboarding_done=self.set_onboarding_done,
-            replay_onboarding=self.replay_onboarding,
-            exit_app=self.exit_app,
             notifications_enabled=self.notifications_enabled,
             open_notification_settings=self.open_notification_settings,
             show_privacy_options=self.show_privacy_options,
@@ -1668,28 +1666,6 @@ class AppController:
                 logger.info("Onboarding state successfully persisted")
             except Exception as e:
                 logger.warning("Failed to persist onboarding state: %s", e)
-
-    async def replay_onboarding(self) -> None:
-        """Show the intro again (Settings → About).
-
-        Clears the stored flag and flips the observable gate so AppShell
-        remounts OnboardingScreen; finishing it writes the flag back.
-        """
-        state.is_first_launch = True
-        state.has_accepted_terms = False
-        if self.storage:
-            try:
-                await self.storage.delete(STORAGE_ONBOARDING_DONE)
-                await self.storage.flush()
-            except Exception as e:
-                logger.warning("Failed to clear onboarding flag: %s", e)
-
-    async def exit_app(self) -> None:
-        """Close the app (Settings → Exit app). The UI confirms first."""
-        try:
-            await self.page.window.close()
-        except Exception as exc:
-            logger.warning("window.close() failed: %s", exc)
 
     async def notifications_enabled(self) -> bool:
         """OS notification authorization for the Settings row."""

@@ -56,11 +56,11 @@ def _icons(nodes) -> list:
     return [n.icon for n in nodes if isinstance(n, ft.Icon)]
 
 
-def test_settings_has_the_proot_parity_rows():
+def test_settings_keeps_only_the_complete_system_rows():
     texts = _texts(_nodes(lambda: SettingsScreen()))
-    for row in (
-        "Notifications",
-        "Privacy & Ads",
+    assert any("Notifications" in t for t in texts)
+    assert any("Privacy & Ads" in t for t in texts)
+    for stripped in (
         "Help & shortcuts",
         "Open-source licenses",
         "Privacy policy",
@@ -68,7 +68,7 @@ def test_settings_has_the_proot_parity_rows():
         "Show the intro again",
         "Exit app",
     ):
-        assert any(row in t for t in texts), f"missing Settings row: {row}"
+        assert not any(stripped in t for t in texts), f"stripped row returned: {stripped}"
 
 
 def test_setting_row_with_on_tap_is_tappable_and_inked():

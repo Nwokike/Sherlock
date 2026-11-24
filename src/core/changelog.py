@@ -10,7 +10,7 @@ CHANGELOG: dict[str, str] = {
         '• A tiny tappable "Scanning…" pill sits below the header — tap it to jump back to Results\n'
         "• 11,000+ networks via Maigret 0.6.7, with a live count on every screen\n"
         "• Email checks retry through rate limits and render recovery details; TLS fingerprint bumped to chrome150\n"
-        "• Settings rebuilt in the proot-distro shape: notifications status, privacy & ads verdict, help, licenses, replay intro, exit and policy links — with rows that stack on small screens\n"
+        "• Settings: live notification status and privacy & ads verdict, with rows that stack under their label on small screens\n"
         "• Flet, flet-ads and flet-notifications upgraded to 1.1.2\n"
         "• Every option verified against the engines: no dead settings\n"
         "• Release notes on every build are generated from this changelog"

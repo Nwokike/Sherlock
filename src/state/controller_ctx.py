@@ -72,9 +72,7 @@ class ControllerMethods:
     open_update_dialog: Callable[[], None] = _noop_sync
     set_onboarding_done: Callable[[], Awaitable[None]] = _noop_async
     open_cached_result: Callable[[str, str], bool] = lambda _q, _m: False
-    # Settings → System / About rows.
-    replay_onboarding: Callable[[], Awaitable[None]] = _noop_async
-    exit_app: Callable[[], Awaitable[None]] = _noop_async
+    # Settings → System rows (notifications status, privacy verdict).
     notifications_enabled: Callable[[], Awaitable[bool]] = _noop_bool
     open_notification_settings: Callable[[], Awaitable[None]] = _noop_async
     show_privacy_options: Callable[[], Awaitable[str]] = _noop_str

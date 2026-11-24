@@ -236,10 +236,11 @@ def test_settings_screen_all_engine_parameters_and_segmented_enrichment():
     assert any("Basic" in t for t in texts)
     assert any("Full" in t for t in texts)
 
-    # proot-distro parity: system + support/legal rows
+    # System rows that are complete: notification status + privacy verdict.
+    for row in ("Notifications", "Privacy & Ads"):
+        assert any(row in t for t in texts), f"missing Settings row: {row}"
+    # Half-features were deliberately stripped rather than shipped incomplete.
     for row in (
-        "Notifications",
-        "Privacy & Ads",
         "Help & shortcuts",
         "Open-source licenses",
         "Privacy policy",
@@ -247,7 +248,7 @@ def test_settings_screen_all_engine_parameters_and_segmented_enrichment():
         "Show the intro again",
         "Exit app",
     ):
-        assert any(row in t for t in texts), f"missing Settings row: {row}"
+        assert not any(row in t for t in texts), f"stripped row came back: {row}"
 
 
 # ── 5. SitesScreen Tests ───────────────────────────────────────────────

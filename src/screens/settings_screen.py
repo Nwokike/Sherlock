@@ -27,7 +27,6 @@ from core.constants import (
     GITHUB_RELEASES_URL,
     MORE_APPS_URL,
     PLAY_STORE_URL,
-    PRIVACY_POLICY_URL,
     REPO_URL,
     STORAGE_CHECK_DOMAINS,
     STORAGE_COOKIES_PATH,
@@ -54,7 +53,6 @@ from core.constants import (
     STORAGE_THEME,
     STORAGE_TIMEOUT,
     STORAGE_USE_CURL_CFFI,
-    TERMS_OF_SERVICE_URL,
 )
 from core.format import email_total_label, sites_total_label
 from core.logger_handler import get_telemetry_snapshot, in_memory_log_handler
@@ -1303,41 +1301,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             on_click=lambda e, u=url: _open_link(u),
         )
 
-    # ── System / About / Help actions ───────────────────────────────────
-
-    def _open_help(_e=None):
-        from components.help_dialog import show_help_dialog
-
-        show_help_dialog(page)
-
-    def _open_licenses(_e=None):
-        from components.licenses_dialog import show_licenses_dialog
-
-        show_licenses_dialog(page)
-
-    def _replay_intro(_e=None):
-        spawn(controller.replay_onboarding())
-
-    def _exit_app(_e=None):
-        if page is None:
-            return
-
-        def _confirm(_e=None):
-            page.pop_dialog()
-            spawn(controller.exit_app())
-
-        page.show_dialog(
-            ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Exit Sherlock?"),
-                content=ft.Text("Any running scan stops and the app closes."),
-                actions=[
-                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                    ft.FilledButton("Exit", on_click=_confirm),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-        )
+    # ── System row actions ───────────────────────────────────────────────
 
     def _notifications_value_text() -> str:
         if notif_ok is None:
@@ -1449,70 +1413,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 "Releases",
                 "Changelogs for every build",
                 GITHUB_RELEASES_URL,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.HELP_OUTLINE_ROUNDED,
-                "Help & shortcuts",
-                "How searches, progress and exports work",
-                on_tap=_open_help,
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.GAVEL_ROUNDED,
-                "Open-source licenses",
-                "Every Python dependency's license",
-                on_tap=_open_licenses,
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _link_row(
-                ft.Icons.SHIELD_ROUNDED,
-                "Privacy policy",
-                "How your data stays on your device",
-                PRIVACY_POLICY_URL,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _link_row(
-                ft.Icons.DESCRIPTION_ROUNDED,
-                "Terms of service",
-                "The rules for using Sherlock",
-                TERMS_OF_SERVICE_URL,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.REPLAY_ROUNDED,
-                "Show the intro again",
-                "Replay the onboarding screens",
-                on_tap=_replay_intro,
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.POWER_SETTINGS_NEW_ROUNDED,
-                "Exit app",
-                "Stop any running scan, then close",
-                on_tap=_exit_app,
-                stacked=narrow,
             ),
         ]
     )

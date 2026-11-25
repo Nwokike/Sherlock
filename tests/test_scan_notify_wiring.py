@@ -7,6 +7,7 @@ start_search/cancel/on_close with recording fakes and asserts the lifecycle.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 from core.state import state
@@ -24,7 +25,7 @@ class _FakeNotifier:
     async def scan_started(self, target, *, is_email=False):
         self.calls.append(("start", target, is_email))
 
-    async def progress(self, checked, total):
+    def progress(self, checked, total):
         self.calls.append(("progress", checked, total))
 
     async def scan_finished(self, found, total):
@@ -164,18 +165,17 @@ def test_cancel_stops_the_shade_notification():
 def test_progress_is_throttled_to_two_hz():
     c = _controller()
     c.scan_notify = MagicMock()
-    c.scan_notify.progress = AsyncMock()
+    c.scan_notify.progress = MagicMock()
     c._last_notify_progress = 0.0
-
-    async def _two_ticks():
-        await c._notify_scan_progress(
-            SearchProgress(username="alice", total_sites=100, checked_sites=1)
-        )
-        await c._notify_scan_progress(
-            SearchProgress(username="alice", total_sites=100, checked_sites=2)
-        )
-
-    asyncio.run(_two_ticks())
+    c._notify_scan_progress(
+        SearchProgress(username="alice", total_sites=100, checked_sites=1)
+    )
+    c._notify_scan_progress(
+        SearchProgress(username="alice", total_sites=100, checked_sites=2)
+    )
     assert c.scan_notify.progress.call_count == 1, (
         "shade progress is not throttled — it would spam native calls"
     )
+    # The bridge must never be awaited from the UI path (freeze risk):
+    # the progress bridge is a plain sync call that only queues work.
+    assert not inspect.iscoroutinefunction(c._notify_scan_progress)

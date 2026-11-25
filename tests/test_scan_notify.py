@@ -21,6 +21,9 @@ class _FakePage:
         self.platform = (
             ft.PagePlatform.ANDROID if android else ft.PagePlatform.LINUX
         )
+        # The real page exposes a session; _ensure_poster touches it before
+        # creating the coroutine (CollabShell's dead-session rule).
+        self.session = object()
         self.services: list = []
         self.tasks: list = []
 
@@ -98,6 +101,15 @@ def _notifier(fake):
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+async def _drain_poster(notifier) -> None:
+    """Wait for the coalescing progress poster to finish its latest value."""
+    while True:
+        task = notifier._poster_task
+        if task is None or task.done():
+            return
+        await task
 
 
 def test_mount_creates_service_and_channels(fake):
@@ -204,7 +216,8 @@ def test_progress_reuses_the_same_id(fake):
     async def run():
         await notifier.mount()
         await notifier.scan_started("alice")
-        await notifier.progress(250, 5000)
+        notifier.progress(250, 5000)
+        await _drain_poster(notifier)
 
     _run(run())
     svc = notifier._service
@@ -222,7 +235,8 @@ def test_progress_is_clamped_to_100(fake):
     async def run():
         await notifier.mount()
         await notifier.scan_started("alice")
-        await notifier.progress(11000, 10310)
+        notifier.progress(11000, 10310)
+        await _drain_poster(notifier)
 
     _run(run())
     shown = [c for c in notifier._service.shown if c[0] == sn.NOTIF_ID_SCAN]

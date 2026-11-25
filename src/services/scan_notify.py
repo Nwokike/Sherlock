@@ -119,6 +119,10 @@ class ScanNotifier:
         self._on_permission_denied = None
         # The denial snackbar is offered once per denial, not on every scan.
         self._denial_notified = False
+        # Coalescing progress poster: the UI never awaits the platform
+        # channel, and at most one bridge call is in flight at a time.
+        self._progress_pending: tuple[int, int] | None = None
+        self._poster_task = None
 
     @property
     def available(self) -> bool:
@@ -259,18 +263,46 @@ class ScanNotifier:
             logger.warning("ScanNotifier: foreground service failed: %s", exc)
             return False
 
-    async def progress(self, checked: int, total: int) -> None:
-        """Advance the shade progress bar (caller throttles to ~2 Hz).
+    def progress(self, checked: int, total: int) -> None:
+        """Queue a shade progress update. NEVER awaited by the UI.
 
-        Awaited, so a failed post is logged here instead of vanishing inside a
-        fire-and-forget task. On Android this updates the foreground service's
-        notification in place (same id + only_alert_once); where a foreground
-        service is unavailable (desktop `flet run`) it still surfaces the
-        percentage as a normal notification. The Results screen shows the
-        same numbers.
+        The render loop must not wait on a platform-channel round-trip: at
+        2 Hz that serialises the UI behind the notification bridge (the
+        reported "notification updates but the Results screen freezes" bug).
+        One coalescing poster task drains the LATEST values, so a slow bridge
+        never backs up and no call is made from a dead Flet session.
         """
         if self._service is None:
             return
+        self._progress_pending = (checked, total)
+        self._ensure_poster()
+
+    def _ensure_poster(self) -> None:
+        if self._poster_task is not None and not self._poster_task.done():
+            return
+        try:
+            # Touch the session BEFORE creating the coroutine: run_task reads
+            # the session after the coroutine exists, so a destroyed session
+            # would leave an unawaited coroutine behind (CollabShell's rule).
+            _ = self.page.session
+            self._poster_task = self.page.run_task(self._poster_loop)
+        except Exception as exc:
+            logger.debug("ScanNotifier: progress poster not scheduled: %s", exc)
+
+    async def _poster_loop(self) -> None:
+        while True:
+            pending = self._progress_pending
+            if pending is None:
+                # Yield once so a value queued by the UI loop at the same
+                # moment lands before we decide the queue is empty.
+                await asyncio.sleep(0)
+                if self._progress_pending is None:
+                    return
+                continue
+            self._progress_pending = None
+            await self._post_once(*pending)
+
+    async def _post_once(self, checked: int, total: int) -> None:
         # Clamp: AndroidProgress validates value <= max, so an overshoot tick
         # would raise and silently freeze the bar.
         pct = max(0, min(int(checked / max(total, 1) * 100), 100)) if total else 0

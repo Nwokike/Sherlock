@@ -432,7 +432,10 @@ class AppController:
         from components.app_header import set_scan_navigation
 
         set_scan_navigation(self._show_results_from_notification)
-        self.page.run_task(self.scan_notify.mount)
+        # Mount first, then clear a stale row: a fresh process has no live
+        # Python scan, so any FGS row left by the PREVIOUS process is stale
+        # (it survived via the sticky service but nothing can advance it).
+        self.page.run_task(self._mount_notifications)
 
         self.page.run_task(self._init_connectivity)
         self.page.on_app_lifecycle_state_change = self._on_lifecycle_change
@@ -1300,7 +1303,7 @@ class AppController:
                     )
                     return
         state.search_progress = progress
-        await self._notify_scan_progress(progress)
+        self._notify_scan_progress(progress)
 
         # Stream newly discovered found URLs into the enrichment queue
         if (
@@ -1315,13 +1318,13 @@ class AppController:
                     self._enriched_seen.add(url)
                     self._enrich_queue.put_nowait(url)
 
-    async def _notify_scan_progress(self, progress) -> None:
+    def _notify_scan_progress(self, progress) -> None:
         """Mirror a tick into the shade, throttled to the ~2 Hz render budget.
 
         Both engines are handled here (networks vs validator platforms) so the
-        shade and the Results bar always agree. The post is awaited and its
-        failure logged inside ScanNotifier; the FGS notification is updated in
-        place (reused id + only_alert_once), so progress never re-alerts.
+        shade and the Results bar always agree. This NEVER awaits the
+        notification bridge — ScanNotifier coalesces the latest values onto
+        its own task, so a slow platform channel cannot stall the UI loop.
         """
         now = time.monotonic()
         if now - self._last_notify_progress < 0.5:
@@ -1334,7 +1337,7 @@ class AppController:
         if not total:
             total = getattr(progress, "total_modules", 0) or 0
         try:
-            await self.scan_notify.progress(checked, total)
+            self.scan_notify.progress(checked, total)
         except Exception as exc:  # never let a shade post break a scan tick
             logger.debug("ScanNotifier: progress bridge failed: %s", exc)
 
@@ -2118,6 +2121,24 @@ class AppController:
             and (self._live_username_progress() or self._live_email_progress())
         )
 
+    async def _mount_notifications(self) -> None:
+        """Mount the service, then clear any row left by a previous process."""
+        await self.scan_notify.mount()
+        await self._clear_stale_notification()
+
+    async def _clear_stale_notification(self) -> None:
+        """Clear a foreground-service row left by a previous process.
+
+        The sticky FGS can outlive a killed Python process; with no live scan
+        behind it, that row would sit in the shade claiming progress forever.
+        """
+        if state.is_searching:
+            return
+        try:
+            await self.scan_notify.stop_service()
+        except Exception as exc:
+            logger.debug("Stale notification cleanup failed: %s", exc)
+
     async def _set_wakelock(self, on: bool) -> None:
         """Keep the screen awake while a scan runs (ft.Wakelock)."""
         wl = self.wakelock
@@ -2132,12 +2153,57 @@ class AppController:
             logger.debug("Wakelock set(%s) failed: %s", on, exc)
 
     def _show_results_from_notification(self) -> None:
-        methods = self._controller_methods
-        if methods is not None and methods.show_results:
+        """Notification tap / View action: open Results, restoring the scan.
+
+        Works in three states:
+        - a scan is live: just navigate (the live progress is already there);
+        - the app was backgrounded: navigate immediately;
+        - the process was restarted (cold tap): hydrate the newest cached
+          snapshot first, then navigate once AppShell has wired its nav.
+        Never mutates widgets directly — AppShell owns the view switch.
+        """
+        if not state.is_searching:
+            self._spawn_bg(self._hydrate_last_results(), "notify-hydrate-last")
+        self._spawn_bg(self._retry_show_results(), "notify-show-results")
+
+    async def _hydrate_last_results(self) -> None:
+        """Cold start only: load the newest cached snapshot into Results."""
+        if state.is_searching or state.last_results or self.storage is None:
+            return
+        try:
+            entries = decode_stored_history(await self.storage.get(STORAGE_HISTORY))
+        except Exception as exc:
+            logger.debug("History read for notification restore failed: %s", exc)
+            return
+        if not entries:
+            return
+        last = entries[-1]
+        query = str(last.get("query") or "")
+        mode = str(last.get("mode") or MODE_USERNAME)
+        if query:
             try:
-                methods.show_results()
+                self.open_cached_result(query, mode)
             except Exception as exc:
-                logger.warning("show_results failed: %s", exc)
+                logger.debug("Cached-result restore failed: %s", exc)
+
+    async def _retry_show_results(self) -> None:
+        """Navigate once AppShell has injected its real `show_results`.
+
+        A notification tap that launches the app can be replayed before the
+        component tree mounts; the ControllerMethods default is a no-op.
+        """
+        from state.controller_ctx import _noop_sync
+
+        for _ in range(20):
+            methods = self._controller_methods
+            if methods is not None and methods.show_results is not _noop_sync:
+                try:
+                    methods.show_results()
+                except Exception as exc:
+                    logger.warning("show_results failed: %s", exc)
+                return
+            await asyncio.sleep(0.25)
+        logger.info("Notification: Results navigation skipped (no shell)")
 
     def _notify_permission_denied(self) -> None:
         """A denial must not look like a crash; offer the OS settings route."""
@@ -2188,12 +2254,11 @@ class AppController:
                     f"Scan finished — {found} {noun} for {target}",
                     duration=8000,
                     action_label="View",
-                    on_action=lambda: (
-                        self._controller_methods.show_results()
-                        if self._controller_methods
-                        and self._controller_methods.show_results
-                        else None
-                    ),
+                    # Same safe restore path as a notification tap: hydrate
+                    # after a cold start, navigate once the shell is wired.
+                    # (The old freeze was the UI loop awaiting the notification
+                    # bridge, not this handler — flet dispatches arity-aware.)
+                    on_action=lambda _e: self._show_results_from_notification(),
                 )
             except Exception as exc:
                 logger.warning("Resume snack failed: %s", exc)
@@ -2239,8 +2304,12 @@ async def main(page: ft.Page) -> None:
                 # trailing 1s write window is never lost on exit.
                 await controller.storage.close()
         with contextlib.suppress(Exception):
-            if controller.scan_notify:
-                await controller.scan_notify.shutdown()
+            # Do NOT cancel the scan notification on close. The sticky FGS
+            # keeps the native service (and its notification) alive so a tap
+            # reopens the app on Results — CollabShell/proot behaviour. Only a
+            # finished/idle app tears the row down.
+            if controller.scan_notify and not controller._scan_in_progress():
+                await controller.scan_notify.stop_service()
         with contextlib.suppress(Exception):
             await controller._set_wakelock(False)
         with contextlib.suppress(Exception):

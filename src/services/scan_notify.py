@@ -113,7 +113,7 @@ class ScanNotifier:
         # Re-entrancy guard for an in-flight stop.
         self._stopping = False
         self._target = ""
-        self._is_email = False
+        self._kind = "username"
         self._on_cancel = None
         self._on_view = None
         self._on_permission_denied = None
@@ -215,15 +215,17 @@ class ScanNotifier:
 
     # ── scan lifecycle ──────────────────────────────────────────────────
 
-    async def scan_started(self, target: str, *, is_email: bool = False) -> bool:
+    async def scan_started(self, target: str, *, kind: str = "username") -> bool:
         """Open the foreground service; its notification is the progress bar."""
+        # Record the kind BEFORE any early return: scan_finished picks its noun
+        # from it, and on desktop the FGS is skipped but the finished row still
+        # posts (it must say "matches"/"results", not "accounts").
+        self._target = target
+        self._kind = kind
         if self._service is None or not self._is_android():
             # Desktop/web have no foreground service; the scan still runs and
             # progress() below posts plain notifications on every platform.
             return False
-        kind = "email" if is_email else "username"
-        self._target = target
-        self._is_email = is_email
         if self._fgs_running:
             return True  # one scan notification per app
         if not await self.ensure_permission():
@@ -336,7 +338,11 @@ class ScanNotifier:
         """Stop the service, drop the progress row, post the result row."""
         if self._service is None:
             return
-        noun = "results" if self._is_email else "accounts"
+        noun = {
+            "username": "accounts",
+            "email": "results",
+            "phone": "matches",
+        }.get(self._kind, "results")
         suffix = f" · {total} checked" if total else ""
         await self.stop_service()
         try:

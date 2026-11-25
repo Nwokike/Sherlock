@@ -1,6 +1,6 @@
 [project]
 name = "sherlock"
-version = "2.3.0"
+version = "2.4.0"
 description = "Sherlock: Hunt down social media accounts by username across 11,000+ networks."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -14,6 +14,7 @@ dependencies = [
     # maigret 0.6.7 pins networkx <3.0.0, so 2.8.8 is the latest compatible.
     # (networkx 3.x would also give a scipy-free pagerank, but it conflicts.)
     "networkx>=2.8.8,<3.0.0",
+    "phonsint>=0.1.0",
     "socid-extractor>=0.1.2",
 ]
 
@@ -22,7 +23,7 @@ org = "ng.kiri"
 product = "Sherlock"
 description = "Sherlock: Hunt down social media accounts by username across 11,000+ networks."
 company = "Kiri"
-build_number = 13
+build_number = 14
 
 [tool.flet.app]
 path = "src"
@@ -144,4 +145,11 @@ package_files = [
     "blinker/**",
     "itsdangerous/**",
     "asgiref/**",
+    # phonenumbers ships ~19 MB of geocoder/carrier/timezone metadata that
+    # phonsint never touches (it only parses/formats/validates and reads the
+    # region code). shortdata is required by phonenumbers' own __init__, so
+    # it stays.
+    "phonenumbers/geodata/**",
+    "phonenumbers/carrierdata/**",
+    "phonenumbers/tzdata/**",
 ]

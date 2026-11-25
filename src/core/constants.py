@@ -14,8 +14,8 @@ def test_id(name: str) -> str | None:
 
 
 APP_NAME = "Sherlock"
-APP_VERSION = "2.3.0"
-APP_BUILD_NUMBER = 13
+APP_VERSION = "2.4.0"
+APP_BUILD_NUMBER = 14
 
 # Fallback site count shown before the database load lands.
 # Pre-load placeholder; the live DB count (state.sites_total) replaces it.
@@ -47,6 +47,11 @@ STORAGE_MANIFEST = "sherlock_manifest"
 STORAGE_SEARCH_MODE = "sherlock_search_mode"
 STORAGE_EMAIL_TIMEOUT = "sherlock_email_timeout"
 STORAGE_EMAIL_CONCURRENCY = "sherlock_email_concurrency"
+STORAGE_PHONE_CONCURRENCY = "sherlock_phone_concurrency"
+STORAGE_PHONE_REGION = "sherlock_phone_region"
+STORAGE_PHONE_CATEGORIES = "sherlock_phone_categories"
+STORAGE_PHONE_MODULES = "sherlock_phone_modules"
+STORAGE_PHONE_NOTICE = "sherlock_phone_notice"
 STORAGE_EMAIL_ONLY_FOUND = "sherlock_email_only_found"
 STORAGE_PROXY_URL = "sherlock_proxy_url"
 STORAGE_ENRICHMENT_MODE = "sherlock_enrichment_mode"
@@ -71,6 +76,7 @@ STORAGE_USE_CURL_CFFI = "sherlock_use_curl_cffi"
 # ── Search modes ──────────────────────────────────────────────────────
 MODE_USERNAME = "username"
 MODE_EMAIL = "email"
+MODE_PHONE = "phone"
 
 # ── AdMob unit IDs ─────────────────────────────────────────────────────
 AD_BANNER_UNIT_ID = "ca-app-pub-5679949845754640/5131365762"

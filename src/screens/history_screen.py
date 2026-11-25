@@ -14,7 +14,7 @@ from components.app_header import AppHeader
 from components.banner_ad import pooled_banner_ad
 from components.empty_state import EmptyState
 from core import tokens
-from core.constants import MODE_EMAIL, MODE_USERNAME, STORAGE_HISTORY
+from core.constants import MODE_EMAIL, MODE_PHONE, MODE_USERNAME, STORAGE_HISTORY
 from core.notify import show_snack
 from core.tasks import spawn
 from core.theme import AppColors
@@ -84,7 +84,7 @@ def _infer_mode(entry, query: str) -> str:
     it classifies `a@b` and `foo@bar` as email when they are not.
     """
     mode = entry.get("mode") if isinstance(entry, dict) else None
-    if mode in (MODE_EMAIL, MODE_USERNAME):
+    if mode in (MODE_EMAIL, MODE_USERNAME, MODE_PHONE):
         return mode
     from services.email_service import validate_email
 
@@ -211,7 +211,9 @@ def HistoryScreen(banner: Control | None = None) -> Control:
         controller.show_results()
 
         async def _search():
-            if mode == MODE_EMAIL:
+            if mode == MODE_PHONE:
+                await controller.start_phone_search(query)
+            elif mode == MODE_EMAIL:
                 await controller.start_email_search(query)
             else:
                 await controller.start_search(query)
@@ -261,6 +263,7 @@ def HistoryScreen(banner: Control | None = None) -> Control:
             found = entry.get("found", 0)
             total = entry.get("total", 0)
             ts = _relative_time(entry.get("timestamp", ""))
+            is_phone = mode == MODE_PHONE
             is_email = mode == MODE_EMAIL
 
             dismiss_bg = ft.Container(
@@ -280,9 +283,13 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                     controls=[
                         ft.Container(
                             content=ft.Icon(
-                                ft.Icons.ALTERNATE_EMAIL_ROUNDED
-                                if is_email
-                                else ft.Icons.PERSON_SEARCH_ROUNDED,
+                                ft.Icons.PHONE_IPHONE_ROUNDED
+                                if is_phone
+                                else (
+                                    ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                    if is_email
+                                    else ft.Icons.PERSON_SEARCH_ROUNDED
+                                ),
                                 size=tokens.ICON_MD,
                                 color=ft.Colors.PRIMARY,
                             ),
@@ -319,7 +326,9 @@ def HistoryScreen(banner: Control | None = None) -> Control:
                                             ),
                                         ),
                                         ft.Text(
-                                            "Email" if is_email else "Username",
+                                            "Phone"
+                                            if is_phone
+                                            else ("Email" if is_email else "Username"),
                                             size=tokens.FONT_XS,
                                             color=ft.Colors.PRIMARY,
                                             weight=ft.FontWeight.W_500,

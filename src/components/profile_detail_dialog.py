@@ -200,6 +200,7 @@ def _email_dossier(
     method: str | None,
     rate_limit: bool,
     frequent_rate_limit: bool,
+    mode: str = "email",
 ):
     platform_url = url_main or (
         f"https://{site_name.lower()}.com"
@@ -249,13 +250,24 @@ def _email_dossier(
         else ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.ON_SURFACE)
     )
 
+    is_phone = mode == "phone"
+    extra = others.get("extra") if isinstance(others.get("extra"), dict) else {}
+
     header_row = ft.Row(
         controls=[
             ft.Container(
                 content=ft.Icon(
-                    ft.Icons.ALTERNATE_EMAIL_ROUNDED
-                    if status == "Claimed"
-                    else ft.Icons.LANGUAGE_ROUNDED,
+                    (
+                        ft.Icons.PHONE_IPHONE_ROUNDED
+                        if status == "Claimed"
+                        else ft.Icons.PHONE_DISABLED_ROUNDED
+                    )
+                    if is_phone
+                    else (
+                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                        if status == "Claimed"
+                        else ft.Icons.LANGUAGE_ROUNDED
+                    ),
                     size=28,
                     color=status_color,
                 ),
@@ -316,8 +328,10 @@ def _email_dossier(
         items.append(
             _dossier_row(
                 page,
-                ft.Icons.MARK_EMAIL_READ_ROUNDED,
-                "Investigated Email",
+                ft.Icons.PHONE_IPHONE_ROUNDED
+                if is_phone
+                else ft.Icons.MARK_EMAIL_READ_ROUNDED,
+                "Investigated Number" if is_phone else "Investigated Email",
                 target_query,
                 can_copy=True,
             )
@@ -336,12 +350,12 @@ def _email_dossier(
             _dossier_row(
                 page,
                 ft.Icons.MAIL_LOCK_OUTLINED,
-                "Masked Recovery Email",
+                "Masked Recovery Email" if not is_phone else "Linked Masked Email",
                 email_recovery,
                 can_copy=True,
             )
         )
-    if phone_number:
+    if phone_number and not is_phone:
         items.append(
             _dossier_row(
                 page,
@@ -349,6 +363,41 @@ def _email_dossier(
                 "Recovery Phone Hint",
                 phone_number,
                 can_copy=True,
+            )
+        )
+    # Phone metadata arrives in `extra` (display name, recovery method,
+    # datacenter routing, linked emails); render what the platform disclosed.
+    if is_phone and extra:
+        for label, key, icon in (
+            ("Disclosed Name", "name", ft.Icons.PERSON_OUTLINE_ROUNDED),
+            ("Disclosed Name", "display_name", ft.Icons.PERSON_OUTLINE_ROUNDED),
+            ("Recovery Method", "recovery_method", ft.Icons.LOCK_RESET_ROUNDED),
+            ("Linked Email", "email", ft.Icons.MAIL_OUTLINE_ROUNDED),
+            ("Account Status", "status", ft.Icons.INFO_OUTLINE_ROUNDED),
+            ("Datacenter", "datacenter", ft.Icons.DNS_OUTLINED),
+            ("Region", "region", ft.Icons.PUBLIC_ROUNDED),
+        ):
+            value = extra.get(key)
+            if value:
+                items.append(_dossier_row(page, icon, label, str(value), can_copy=True))
+    media = others.get("media") if isinstance(others.get("media"), dict) else {}
+    if is_phone and media.get("avatar"):
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.IMAGE_ROUNDED,
+                "Profile Photo",
+                str(media["avatar"]),
+                can_copy=True,
+            )
+        )
+    if others.get("category") and is_phone:
+        items.append(
+            _dossier_row(
+                page,
+                ft.Icons.CATEGORY_ROUNDED,
+                "Platform Category",
+                str(others["category"]),
             )
         )
     if others.get("FullName"):
@@ -411,7 +460,7 @@ def _email_dossier(
     dlg = ft.AlertDialog(
         modal=False,
         title=ft.Text(
-            "Email Intelligence Dossier",
+            "Phone Intelligence Dossier" if is_phone else "Email Intelligence Dossier",
             size=tokens.FONT_MD,
             weight=ft.FontWeight.BOLD,
             font_family="Outfit",
@@ -1121,7 +1170,7 @@ def show_profile_detail_dialog(
     others = others or {}
     enrichment = enrichment or {}
     try:
-        if mode == "email":
+        if mode in ("email", "phone"):
             _email_dossier(
                 page,
                 site_name,
@@ -1135,6 +1184,7 @@ def show_profile_detail_dialog(
                 method,
                 rate_limit,
                 frequent_rate_limit,
+                mode=mode,
             )
         else:
             _username_dossier(

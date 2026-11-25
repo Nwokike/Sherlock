@@ -55,6 +55,17 @@ class AppState:
     email_unavailable_count: int = 0
     email_total_modules: int = 0
 
+    # --- Phone OSINT results ---
+    # phonsint result dicts for the last phone search (same row shape as
+    # email rows so the results screen and exporters share one contract).
+    phone_results: list | None = None
+    phone_results_number: str = ""
+    phone_found_count: int = 0
+    phone_not_found_count: int = 0
+    phone_rate_limited_count: int = 0
+    phone_unavailable_count: int = 0
+    phone_total_modules: int = 0
+
     # --- Profile enrichment ---
     # {url_or_site_name: {field: value, ...}} from socid-extractor
     # Capped at _ENRICHMENT_CAP via set_enrichment() to avoid long-session growth.
@@ -74,6 +85,12 @@ class AppState:
     email_timeout: int = 10
     email_concurrency: int = 12
     email_only_found: bool = False
+    # Phone mode: concurrency, default region ("" = auto), and the live
+    # catalog filters (empty list = every category/module).
+    phone_concurrency: int = 15
+    phone_region: str = ""
+    phone_categories: list[str] | None = None
+    phone_modules: list[str] | None = None
     proxy_url: str = ""
     enrichment_mode: str = "full"
     no_password_recovery: bool = False
@@ -139,6 +156,9 @@ class AppState:
         self.sites_cache = []
         self.sites_tags_map = {}
         self.email_results = []
+        self.phone_results = []
+        self.phone_categories = []
+        self.phone_modules = []
         self.enrichments = {}
         self.update_data = None
         self.search_error = None
@@ -190,6 +210,12 @@ class AppState:
         self.email_rate_limited_count = 0
         self.email_unavailable_count = 0
         self.email_total_modules = 0
+        self.phone_results_number = ""
+        self.phone_found_count = 0
+        self.phone_not_found_count = 0
+        self.phone_rate_limited_count = 0
+        self.phone_unavailable_count = 0
+        self.phone_total_modules = 0
         # NOTE: is_online is owned solely by the connectivity handlers in
         # main.py — resetting a search (e.g. cancel while offline) must not
         # flip the device online and hide the offline banner. search_mode is
@@ -197,6 +223,7 @@ class AppState:
         self.search_targets.clear()
         self.target_results.clear()
         self.email_results.clear()
+        self.phone_results.clear()
         self.enrichments.clear()
 
 

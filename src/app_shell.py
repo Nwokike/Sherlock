@@ -56,15 +56,34 @@ def _safe_filename(raw: object, max_len: int = 64) -> str:
 
 
 def _email_export_bytes(format_type: str, app_state) -> bytes | None:
-    """CSV/JSON/TXT export for email-mode results (holehe-v2 dict rows).
+    """CSV/JSON/TXT/MD/HTML export for module-mode results.
 
-    PDF/XMind dossiers are username-mode (SiteResult-shaped) — returns
-    None for them so the caller shows visible guidance instead of failing.
+    Email and Phone share the same dict-row contract; the mode decides the
+    data source, the target label and the header wording. PDF/XMind dossiers
+    are username-mode (SiteResult-shaped) — returns None for them so the
+    caller shows visible guidance instead of failing.
     """
     if format_type not in ("csv", "json", "txt", "md", "html"):
         return None
-    rows = list(app_state.email_results or [])
-    addr = app_state.email_results_address or "unknown"
+    from core.constants import MODE_PHONE
+
+    # Progress object first, mode second: the export sheet derives its scope
+    # from the live progress, so the bytes must use the same source even if
+    # the idle mode chip has been flipped since the scan.
+    prog = getattr(app_state, "search_progress", None)
+    if getattr(prog, "phone", None) is not None:
+        is_phone = True
+    elif getattr(prog, "email", None) is not None:
+        is_phone = False
+    else:
+        is_phone = getattr(app_state, "search_mode", "") == MODE_PHONE
+    if is_phone:
+        rows = list(app_state.phone_results or [])
+        addr = app_state.phone_results_number or "unknown"
+    else:
+        rows = list(app_state.email_results or [])
+        addr = app_state.email_results_address or "unknown"
+    label = "phone" if is_phone else "email"
     if format_type in ("md", "html"):
         from services.report_service import (
             generate_email_html_report,
@@ -76,7 +95,7 @@ def _email_export_bytes(format_type: str, app_state) -> bytes | None:
             if format_type == "html"
             else generate_email_markdown_report
         )
-        return fn(addr, rows)
+        return fn(addr, rows, label=label)
 
     def _status_of(r) -> str:
         if r.get("exists"):
@@ -95,7 +114,7 @@ def _email_export_bytes(format_type: str, app_state) -> bytes | None:
         out = io.StringIO()
         writer = csv.writer(out)
         writer.writerow(
-            ["email", "platform", "domain", "status", "message", "extra_json"]
+            [label, "platform", "domain", "status", "message", "extra_json"]
         )
         for r in rows:
             others = r.get("others") or {}
@@ -116,7 +135,7 @@ def _email_export_bytes(format_type: str, app_state) -> bytes | None:
         import json
 
         payload = {
-            "email": addr,
+            label: addr,
             "found": sum(1 for r in rows if r.get("exists")),
             "results": rows,
         }
@@ -124,7 +143,7 @@ def _email_export_bytes(format_type: str, app_state) -> bytes | None:
             "utf-8"
         )
 
-    lines = [f"Sherlock email OSINT — {addr}", ""] + [
+    lines = [f"Sherlock {label} OSINT — {addr}", ""] + [
         f"{r.get('name', '?')} ({r.get('domain', '')}): {_status_of(r)}" for r in rows
     ]
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -234,10 +253,18 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 progress = app_state.search_progress
                 if not progress:
                     return
-                is_email = getattr(progress, "email", None) is not None
+                is_phone = getattr(progress, "phone", None) is not None
+                is_email = (
+                    not is_phone and getattr(progress, "email", None) is not None
+                )
                 username = (
-                    app_state.email_results_address or "unknown"
-                    if is_email
+                    (
+                        app_state.phone_results_number
+                        if is_phone
+                        else app_state.email_results_address
+                    )
+                    or "unknown"
+                    if (is_phone or is_email)
                     else (app_state.last_results_username or "unknown")
                 )
 
@@ -247,11 +274,11 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                         save_cached_report,
                     )
 
-                    if is_email:
+                    if is_phone or is_email:
                         report_bytes = _email_export_bytes(format_type, app_state)
                         if report_bytes is None:
                             raise ValueError(
-                                "PDF/XMind dossiers are username-mode — email "
+                                "PDF/XMind dossiers are username-mode — email/phone "
                                 "results export as CSV, JSON, TXT, Markdown, or HTML"
                             )
                     elif format_type == "pdf":
@@ -782,7 +809,10 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
             if not app_state.search_progress:
                 return
-            dialog_is_email = (
+            dialog_is_phone = (
+                getattr(app_state.search_progress, "phone", None) is not None
+            )
+            dialog_is_email = not dialog_is_phone and (
                 getattr(app_state.search_progress, "email", None) is not None
             )
 
@@ -827,11 +857,12 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                     ),
                 ),
             ]
-            if dialog_is_email:
+            if dialog_is_email or dialog_is_phone:
+                scope = "Phone" if dialog_is_phone else "Email"
                 tiles.append(
                     ft.ListTile(
                         title=ft.Text(
-                            "Email formats: CSV, JSON, Markdown, HTML, TXT",
+                            f"{scope} formats: CSV, JSON, Markdown, HTML, TXT",
                             weight=ft.FontWeight.W_600,
                         ),
                         subtitle=ft.Text("PDF/XMind dossiers are username-mode only"),
@@ -889,7 +920,9 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
             tiles.append(
                 _export_tile(
                     "Plain Text List (.txt)",
-                    "Discovered URLs only",
+                    "Platform, domain and status per row"
+                    if dialog_is_email or dialog_is_phone
+                    else "Discovered URLs only",
                     ft.Icons.ARTICLE_ROUNDED,
                     "txt",
                 )
@@ -911,18 +944,27 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
 
         def _restart(e):
             from core.constants import MODE_EMAIL as _MODE_EMAIL
+            from core.constants import MODE_PHONE as _MODE_PHONE
             from core.state import state as app_state
 
             # Owner fix: the retry button must respect the MODE of the
-            # results being viewed — email results re-run the email engine
-            # (previously it only ever started a username scan, so the
-            # email retry silently did nothing or restarted an old query).
+            # results being viewed — email/phone results re-run their own
+            # engine (previously it only ever started a username scan).
             prog = app_state.search_progress
-            is_email = (
+            is_phone = (
+                app_state.search_mode == _MODE_PHONE
+                or getattr(prog, "phone", None) is not None
+            )
+            is_email = not is_phone and (
                 app_state.search_mode == _MODE_EMAIL
                 or getattr(prog, "email", None) is not None
             )
-            if is_email:
+            if is_phone:
+                target = app_state.phone_results_number or getattr(prog, "phone", None)
+                if target:
+                    spawn(controller.start_phone_search(target))
+                    controller.show_results()
+            elif is_email:
                 target = app_state.email_results_address or getattr(prog, "email", None)
                 if target:
                     # NOTE: is_searching is deliberately NOT set here. Setting
@@ -943,12 +985,13 @@ def _build_appbar(active_view: str, active_tab: int, controller) -> ft.AppBar:
                 spawn(controller.start_search(app_state.last_results_username))
                 controller.show_results()
 
-        from core.constants import MODE_EMAIL
+        from core.constants import MODE_EMAIL, MODE_PHONE
         from core.state import state as app_state
 
         is_email_results = (
-            app_state.search_mode == MODE_EMAIL
+            app_state.search_mode in (MODE_EMAIL, MODE_PHONE)
             or getattr(app_state.search_progress, "email", None) is not None
+            or getattr(app_state.search_progress, "phone", None) is not None
         )
         _actions: list[ft.Control] = []
         if not is_email_results:

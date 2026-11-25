@@ -19,6 +19,7 @@ from core.constants import (
     APP_NAME,
     ERR_INVALID_EMAIL,
     MODE_EMAIL,
+    MODE_PHONE,
     MODE_USERNAME,
     MSG_OFFLINE,
     MSG_SEARCH_OFFLINE,
@@ -26,6 +27,8 @@ from core.constants import (
     STORAGE_EXCLUSIONS,
     STORAGE_HISTORY,
     STORAGE_NO_PASSWORD_RECOVERY,
+    STORAGE_PHONE_CONCURRENCY,
+    STORAGE_PHONE_REGION,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_SCAN_DEPTH,
     STORAGE_SEARCH_MODE,
@@ -116,6 +119,34 @@ def _steps_email() -> list[tuple[str, str, str]]:
     ]
 
 
+_FEATURES_PHONE = [
+    {
+        "icon": ft.Icons.PHONE_IPHONE_ROUNDED,
+        "title": "Phone OSINT (beta)",
+        "desc": "See which major platforms a number is registered on, with the identity hints they expose.",
+        "color": AppColors.PRIMARY,
+    },
+    {
+        "icon": ft.Icons.SHIELD_ROUNDED,
+        "title": "Silent by design",
+        "desc": "Pre-authentication endpoints only — no SMS or push notification is ever sent to the target.",
+        "color": AppColors.PRIMARY_DARK,
+    },
+    {
+        "icon": ft.Icons.BADGE_ROUNDED,
+        "title": "Linked identity hints",
+        "desc": "Recover masked emails, account names, profile photos and regional routing where disclosed.",
+        "color": AppColors.PRIMARY_LIGHT,
+    },
+]
+
+_STEPS_PHONE = [
+    ("1", "Enter", "Type a number with its country code"),
+    ("2", "Scan", "Checks each platform without alerting the target"),
+    ("3", "Done", "Review registrations and the identity hints found"),
+]
+
+
 # ── Compact components ─────────────────────────────────────────────────
 
 
@@ -189,9 +220,14 @@ def _history_row(
     lambda per row, so memoization could never hit.
     """
     is_email = _is_email_like(query, mode)
-    icon = (
-        ft.Icons.ALTERNATE_EMAIL_ROUNDED if is_email else ft.Icons.PERSON_SEARCH_ROUNDED
-    )
+    if mode == MODE_PHONE:
+        icon = ft.Icons.PHONE_IPHONE_ROUNDED
+    else:
+        icon = (
+            ft.Icons.ALTERNATE_EMAIL_ROUNDED
+            if is_email
+            else ft.Icons.PERSON_SEARCH_ROUNDED
+        )
     return ft.Container(
         content=ft.Row(
             [
@@ -369,7 +405,9 @@ def HomeScreen(banner: Control | None = None) -> Control:
     _email_total = email_total_label()
 
     # Mode is driven by observable state so it persists across screens
+    is_username_mode = state.search_mode == MODE_USERNAME
     is_email_mode = state.search_mode == MODE_EMAIL
+    is_phone_mode = state.search_mode == MODE_PHONE
 
     # While a scan is genuinely ticking, `search_mode` is that scan's
     # IDENTITY (see `_switch_mode`): flipping it would freeze the live
@@ -499,6 +537,55 @@ def HomeScreen(banner: Control | None = None) -> Control:
         state.progress_version += 1
         _persist(STORAGE_EMAIL_TIMEOUT, str(next_val))
 
+    def _cycle_phone_concurrency(e=None):
+        values = [5, 10, 15, 20, 30]
+        curr = getattr(state, "phone_concurrency", 15)
+        next_val = (
+            values[(values.index(curr) + 1) % len(values)] if curr in values else 15
+        )
+        state.phone_concurrency = next_val
+        state.progress_version += 1
+        _persist(STORAGE_PHONE_CONCURRENCY, str(next_val))
+
+    def _open_phone_region_picker(e=None):
+        page = _get_page()
+        if page is None:
+            return
+        from services.phone_service import supported_regions
+
+        regions = supported_regions()
+        dropdown = ft.Dropdown(
+            value=state.phone_region or "",
+            enable_filter=True,
+            enable_search=True,
+            menu_height=320,
+            options=[ft.dropdown.Option("", "Auto (detect from +code)")]
+            + [ft.dropdown.Option(code, code) for code in regions],
+            width=260,
+        )
+
+        def _save(_e=None):
+            state.phone_region = (dropdown.value or "").strip().upper()
+            state.progress_version += 1
+            _persist(STORAGE_PHONE_REGION, state.phone_region)
+            try:
+                page.pop_dialog()
+            except Exception:
+                pass
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=False,
+                title=ft.Text("Default region"),
+                content=dropdown,
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                    ft.FilledButton("Save", on_click=_save),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
     def _toggle_password_recovery(e):
         new_val = not state.no_password_recovery
         state.no_password_recovery = new_val
@@ -538,7 +625,12 @@ def HomeScreen(banner: Control | None = None) -> Control:
         page = _get_page()
         if not query:
             if page:
-                show_snack(page, "Enter a username or email", bgcolor=AppColors.ERROR)
+                label = (
+                    "phone number"
+                    if mode == MODE_PHONE
+                    else ("email address" if mode == MODE_EMAIL else "username")
+                )
+                show_snack(page, f"Enter a {label}", bgcolor=AppColors.ERROR)
             return False
         # Offline gate on client submit
         if not state.is_online:
@@ -555,6 +647,17 @@ def HomeScreen(banner: Control | None = None) -> Control:
             if not _is_email_query(query):
                 if page:
                     show_snack(page, ERR_INVALID_EMAIL, bgcolor=AppColors.ERROR)
+                return False
+        elif mode == MODE_PHONE:
+            # The controller validates with phonenumbers (region-aware) and
+            # shows the specific message; only require some input here.
+            if not any(ch.isdigit() for ch in query):
+                if page:
+                    show_snack(
+                        page,
+                        "Enter a phone number (include the country code).",
+                        bgcolor=AppColors.ERROR,
+                    )
                 return False
         else:
             shape_err = _check_username_shape(query)
@@ -582,7 +685,9 @@ def HomeScreen(banner: Control | None = None) -> Control:
 
         async def _run():
             controller.show_results()
-            if target_mode == MODE_EMAIL:
+            if target_mode == MODE_PHONE:
+                await controller.start_phone_search(query)
+            elif target_mode == MODE_EMAIL:
                 await controller.start_email_search(query)
             else:
                 await controller.start_search(query)
@@ -651,7 +756,9 @@ def HomeScreen(banner: Control | None = None) -> Control:
         controller.show_results()
 
         async def _run_hist():
-            if mode == MODE_EMAIL:
+            if mode == MODE_PHONE:
+                await controller.start_phone_search(query)
+            elif mode == MODE_EMAIL:
                 await controller.start_email_search(query)
             else:
                 await controller.start_search(query)
@@ -717,6 +824,36 @@ def HomeScreen(banner: Control | None = None) -> Control:
                 else AppColors.GREY,
                 is_active=getattr(state, "use_curl_cffi", True),
                 on_click=_toggle_use_curl_cffi,
+            ),
+        ]
+    elif is_phone_mode:
+        chips = [
+            _category_chip(
+                icon=ft.Icons.PUBLIC_ROUNDED,
+                label=f"Region: {state.phone_region or 'Auto'}",
+                color=AppColors.PRIMARY,
+                is_active=bool(state.phone_region),
+                on_click=_open_phone_region_picker,
+            ),
+            _category_chip(
+                icon=ft.Icons.SPEED_ROUNDED,
+                label=f"Concurrency: {getattr(state, 'phone_concurrency', 15)}",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_phone_concurrency,
+            ),
+            _category_chip(
+                icon=ft.Icons.TIMER_OUTLINED,
+                label=f"{state.timeout}s Timeout",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_timeout,
+            ),
+            _category_chip(
+                icon=ft.Icons.VERIFIED_ROUNDED,
+                label="No SMS sent",
+                color=AppColors.SUCCESS,
+                is_active=True,
             ),
         ]
     else:
@@ -847,7 +984,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                             ft.Icons.PERSON_SEARCH_ROUNDED,
                                             size=16,
                                             color=ft.Colors.WHITE
-                                            if not is_email_mode
+                                            if is_username_mode
                                             else ft.Colors.ON_SURFACE_VARIANT,
                                         ),
                                         ft.Text(
@@ -855,7 +992,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                             size=12,
                                             weight=ft.FontWeight.BOLD,
                                             color=ft.Colors.WHITE
-                                            if not is_email_mode
+                                            if is_username_mode
                                             else ft.Colors.ON_SURFACE_VARIANT,
                                         ),
                                     ],
@@ -863,7 +1000,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                     alignment=ft.MainAxisAlignment.CENTER,
                                 ),
                                 bgcolor=AppColors.PRIMARY
-                                if not is_email_mode
+                                if is_username_mode
                                 else ft.Colors.TRANSPARENT,
                                 border_radius=8,
                                 padding=ft.Padding(12, 6, 12, 6),
@@ -914,6 +1051,54 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                     else lambda e: _switch_mode(MODE_EMAIL)
                                 ),
                             ),
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Icon(
+                                            ft.Icons.PHONE_IPHONE_ROUNDED,
+                                            size=16,
+                                            color=ft.Colors.WHITE
+                                            if is_phone_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Text(
+                                            "Phone",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.WHITE
+                                            if is_phone_mode
+                                            else ft.Colors.ON_SURFACE_VARIANT,
+                                        ),
+                                        ft.Container(
+                                            content=ft.Text(
+                                                "BETA",
+                                                size=7,
+                                                weight=ft.FontWeight.BOLD,
+                                                color=ft.Colors.WHITE,
+                                            ),
+                                            bgcolor=AppColors.PRIMARY_LIGHT,
+                                            border_radius=4,
+                                            padding=ft.Padding(4, 1, 4, 1),
+                                        ),
+                                    ],
+                                    spacing=4,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                ),
+                                bgcolor=AppColors.PRIMARY
+                                if is_phone_mode
+                                else ft.Colors.TRANSPARENT,
+                                border_radius=8,
+                                padding=ft.Padding(8, 6, 8, 6),
+                                ink=not _mode_locked,
+                                expand=True,
+                                alignment=ft.Alignment.CENTER,
+                                opacity=0.45 if _mode_locked else 1.0,
+                                on_click=(
+                                    None
+                                    if _mode_locked
+                                    else lambda e: _switch_mode(MODE_PHONE)
+                                ),
+                            ),
                         ],
                         spacing=4,
                     ),
@@ -925,18 +1110,26 @@ def HomeScreen(banner: Control | None = None) -> Control:
                 content=ft.SearchBar(
                     value=search_query,
                     bar_hint_text=(
-                        (
-                            f"Enter email to check {_email_total} platforms..."
-                            if _email_total
-                            else "Enter an email to investigate..."
+                        "Enter phone number (include country code)..."
+                        if is_phone_mode
+                        else (
+                            (
+                                f"Enter email to check {_email_total} platforms..."
+                                if _email_total
+                                else "Enter an email to investigate..."
+                            )
+                            if is_email_mode
+                            else "Enter username (tip: user{?}name → 3 variants)..."
                         )
-                        if is_email_mode
-                        else "Enter username (tip: user{?}name → 3 variants)..."
                     ),
                     bar_leading=ft.Icon(
-                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
-                        if is_email_mode
-                        else ft.Icons.SEARCH_ROUNDED,
+                        ft.Icons.PHONE_IPHONE_ROUNDED
+                        if is_phone_mode
+                        else (
+                            ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                            if is_email_mode
+                            else ft.Icons.SEARCH_ROUNDED
+                        ),
                         color=AppColors.PRIMARY,
                     ),
                     bar_trailing=[
@@ -1041,7 +1234,7 @@ def HomeScreen(banner: Control | None = None) -> Control:
                     on_open=lambda e: controller.show_sites(),
                     page=_get_page(),
                 ),
-                visible=not is_email_mode,
+                visible=is_username_mode,
             ),
             # Category / Quick Setting Chips — single horizontal track that
             # scrolls on narrow screens (never wraps to a second line).
@@ -1067,16 +1260,24 @@ def HomeScreen(banner: Control | None = None) -> Control:
                             content=ft.Row(
                                 [
                                     ft.Icon(
-                                        ft.Icons.ALTERNATE_EMAIL_ROUNDED
-                                        if is_email_mode
-                                        else ft.Icons.SEARCH_ROUNDED,
+                                        ft.Icons.PHONE_IPHONE_ROUNDED
+                                        if is_phone_mode
+                                        else (
+                                            ft.Icons.ALTERNATE_EMAIL_ROUNDED
+                                            if is_email_mode
+                                            else ft.Icons.SEARCH_ROUNDED
+                                        ),
                                         size=tokens.ICON_MD,
                                         color=ft.Colors.WHITE,
                                     ),
                                     ft.Text(
-                                        "Search Emails"
-                                        if is_email_mode
-                                        else "Search Networks",
+                                        "Search Number"
+                                        if is_phone_mode
+                                        else (
+                                            "Search Emails"
+                                            if is_email_mode
+                                            else "Search Networks"
+                                        ),
                                         size=tokens.FONT_MD,
                                         weight=ft.FontWeight.W_600,
                                         color=ft.Colors.WHITE,
@@ -1172,7 +1373,13 @@ def HomeScreen(banner: Control | None = None) -> Control:
                                 margin=ft.Margin(0, 0, 0, tokens.SPACE_SM),
                             )
                             for f in (
-                                _features_email() if is_email_mode else _FEATURES_USERNAME
+                                _features_email()
+                                if is_email_mode
+                                else (
+                                    _FEATURES_PHONE
+                                    if is_phone_mode
+                                    else _FEATURES_USERNAME
+                                )
                             )
                         ],
                     ],
@@ -1198,7 +1405,13 @@ def HomeScreen(banner: Control | None = None) -> Control:
                         *[
                             _step_row(n, t, d)
                             for n, t, d in (
-                                _steps_email() if is_email_mode else _STEPS_USERNAME
+                                _steps_email()
+                                if is_email_mode
+                                else (
+                                    _STEPS_PHONE
+                                    if is_phone_mode
+                                    else _STEPS_USERNAME
+                                )
                             )
                         ],
                     ],

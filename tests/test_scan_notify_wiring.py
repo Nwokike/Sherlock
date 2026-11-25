@@ -22,8 +22,8 @@ class _FakeNotifier:
     async def mount(self):
         self.calls.append(("mount",))
 
-    async def scan_started(self, target, *, is_email=False):
-        self.calls.append(("start", target, is_email))
+    async def scan_started(self, target, *, kind="username"):
+        self.calls.append(("start", target, kind))
 
     def progress(self, checked, total):
         self.calls.append(("progress", checked, total))

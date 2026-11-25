@@ -477,8 +477,10 @@ def generate_html_report(
     return payload
 
 
-def generate_email_markdown_report(addr: str, rows: list) -> bytes | None:
-    """Markdown export for holehe-v2 email results (dict rows).
+def generate_email_markdown_report(
+    addr: str, rows: list, *, label: str = "email"
+) -> bytes | None:
+    """Markdown export for module-mode results (email or phone dict rows).
 
     Returns None when `rows` is empty (aligned with the other dossier
     generators) — callers must skip save/share on None.
@@ -501,7 +503,18 @@ def generate_email_markdown_report(addr: str, rows: list) -> bytes | None:
         """Rich detail: identity facts first, raw message as fallback."""
         others = r.get("others") or {}
         extra = others.get("extra") if isinstance(others.get("extra"), dict) else {}
-        for key in ("bio", "username", "login", "full_name", "display_name"):
+        for key in (
+            "bio",
+            "username",
+            "login",
+            "full_name",
+            "display_name",
+            "name",
+            "email",
+            "recovery_method",
+            "datacenter",
+            "status",
+        ):
             val = extra.get(key)
             if isinstance(val, str) and val.strip():
                 return f"{key.replace('_', ' ').title()}: {val.strip()}"
@@ -509,7 +522,7 @@ def generate_email_markdown_report(addr: str, rows: list) -> bytes | None:
 
     found_n = sum(1 for r in rows if r.get("exists"))
     lines = [
-        f"# Sherlock Email OSINT — {addr}",
+        f"# Sherlock {label.capitalize()} OSINT — {addr}",
         "",
         f"- **Generated:** {now}",
         f"- **Registered on:** {found_n} / {len(rows)} platforms",
@@ -533,7 +546,7 @@ _EMAIL_HTML_TEMPLATE = (
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sherlock Email OSINT — {{ addr }}</title>
+<title>Sherlock {{ label|capitalize }} OSINT — {{ addr }}</title>
 <style>
 """
     + _DOSSIER_CSS_CORE
@@ -547,7 +560,7 @@ _EMAIL_HTML_TEMPLATE = (
 </style>
 </head>
 <body><div class="wrap">
-<h1>Sherlock Email OSINT</h1>
+<h1>Sherlock {{ label|capitalize }} OSINT</h1>
 <div class="meta"><b>Target:</b> {{ addr }}<br><b>Generated:</b> {{ generated }}
 <br><b>Registered on:</b> {{ found_n }} / {{ total_n }} platforms</div>
 <table>
@@ -563,9 +576,12 @@ _EMAIL_HTML_TEMPLATE = (
 )
 
 
-def generate_email_html_report(addr: str, rows: list) -> bytes | None:
-    """Self-contained offline HTML export for email results (P4-8).
+def generate_email_html_report(
+    addr: str, rows: list, *, label: str = "email"
+) -> bytes | None:
+    """Self-contained offline HTML export for module-mode results (P4-8).
 
+    `label` is "email" or "phone"; it only changes wording (title/header).
     Returns None when jinja2 is missing — callers must skip save/share
     on None. (Empty rows still render a header table, unlike the None-on-
     empty dossier generators.)
@@ -586,7 +602,18 @@ def generate_email_html_report(addr: str, rows: list) -> bytes | None:
     def _email_detail_dict(r) -> str:
         others = r.get("others") or {}
         extra = others.get("extra") if isinstance(others.get("extra"), dict) else {}
-        for key in ("bio", "username", "login", "full_name", "display_name"):
+        for key in (
+            "bio",
+            "username",
+            "login",
+            "full_name",
+            "display_name",
+            "name",
+            "email",
+            "recovery_method",
+            "datacenter",
+            "status",
+        ):
             val = extra.get(key)
             if isinstance(val, str) and val.strip():
                 return f"{key.replace('_', ' ').title()}: {val.strip()}"
@@ -595,12 +622,17 @@ def generate_email_html_report(addr: str, rows: list) -> bytes | None:
     def _email_avatar(r) -> str:
         """Per-row avatar: platform media first, then the address's own
         Gravatar (md5 of the lowercased address — Gravatar's contract, not
-        a security use). d=mp renders a placeholder when none exists."""
+        a security use). d=mp renders a placeholder when none exists.
+
+        Phone rows have no Gravatar: only a platform-provided photo is real.
+        """
         others = r.get("others") or {}
         media = others.get("media") if isinstance(others.get("media"), dict) else {}
         avatar = _https_url(media.get("avatar") or media.get("thumbnail_url"))
         if avatar:
             return avatar
+        if label == "phone":
+            return ""
         import hashlib
 
         digest = hashlib.md5(  # noqa: S324 — Gravatar requires md5
@@ -627,6 +659,7 @@ def generate_email_html_report(addr: str, rows: list) -> bytes | None:
         .render(
             app_version=APP_VERSION,
             addr=addr,
+            label=label,
             generated=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             found_n=sum(1 for r in rows if r.get("exists")),
             total_n=len(rows),

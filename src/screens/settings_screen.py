@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 from urllib.parse import urlparse
@@ -45,6 +46,10 @@ from core.constants import (
     STORAGE_MAX_CONNECTIONS,
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_PERMUTE,
+    STORAGE_PHONE_CATEGORIES,
+    STORAGE_PHONE_CONCURRENCY,
+    STORAGE_PHONE_MODULES,
+    STORAGE_PHONE_REGION,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_RETRIES,
@@ -507,6 +512,24 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     def _apply_email_concurrency(v: int):
         state.email_concurrency = max(5, min(30, v))
 
+    def _apply_phone_concurrency(v: int):
+        state.phone_concurrency = max(5, min(30, v))
+        state.progress_version += 1
+
+    def _apply_phone_region(code: str):
+        state.phone_region = (code or "").strip().upper()
+        state.progress_version += 1
+        spawn(_persist(STORAGE_PHONE_REGION, state.phone_region))
+
+    def _apply_phone_categories(values: list[str]):
+        state.phone_categories[:] = list(values)
+        state.progress_version += 1
+        spawn(_persist(STORAGE_PHONE_CATEGORIES, json.dumps(list(values))))
+
+    def _apply_phone_modules(values: list[str]):
+        state.phone_modules[:] = list(values)
+        state.progress_version += 1
+        spawn(_persist(STORAGE_PHONE_MODULES, json.dumps(list(values))))
     def _apply_max_connections(v: int):
         state.max_connections = max(10, min(100, v))
 
@@ -1007,6 +1030,194 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                     value=state.deep_enrich,
                     on_change=lambda e: _on_deep_enrich_change(e.control.value),
                     active_color=ft.Colors.PRIMARY,
+                ),
+                stacked=narrow,
+            ),
+        ]
+    )
+
+    # Phone Intelligence (phonsint, beta)
+    def _phone_modules_label() -> str:
+        try:
+            from services.phone_service import catalog_names
+
+            total = len(catalog_names())
+        except Exception:
+            total = 0
+        selected = len(state.phone_modules or [])
+        if not selected:
+            return f"All {total}" if total else "All"
+        return f"{selected} of {total}" if total else f"{selected} selected"
+
+    def _open_phone_region_picker(_e=None):
+        if page is None:
+            return
+        from services.phone_service import supported_regions
+
+        dropdown = ft.Dropdown(
+            value=state.phone_region or "",
+            enable_filter=True,
+            enable_search=True,
+            menu_height=320,
+            options=[ft.dropdown.Option("", "Auto (detect from +code)")]
+            + [ft.dropdown.Option(code, code) for code in supported_regions()],
+            width=260,
+        )
+
+        def _save(_ev=None):
+            _apply_phone_region(dropdown.value or "")
+            try:
+                page.pop_dialog()
+            except Exception:
+                pass
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=False,
+                title=ft.Text("Default region"),
+                content=dropdown,
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                    ft.FilledButton("Save", on_click=_save),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
+    def _open_phone_modules_picker(_e=None):
+        if page is None:
+            return
+        from services.phone_service import catalog_categories, catalog_names
+
+        categories = catalog_categories()
+        names = catalog_names()
+        sel_cats = set(state.phone_categories or [])
+        sel_mods = set(state.phone_modules or [])
+        cat_boxes = [
+            ft.Checkbox(label=c, value=(not sel_cats or c in sel_cats))
+            for c in categories
+        ]
+        mod_boxes = [
+            ft.Checkbox(label=n, value=(not sel_mods or n in sel_mods)) for n in names
+        ]
+
+        def _save(_ev=None):
+            chosen_cats = [b.label for b in cat_boxes if b.value]
+            chosen_mods = [b.label for b in mod_boxes if b.value]
+            if not chosen_cats or not chosen_mods:
+                # An empty list means "all", so an empty selection is not a
+                # valid state — never let the user scan nothing by accident.
+                show_snack(
+                    page,
+                    "Select at least one category and one platform.",
+                    bgcolor=AppColors.WARNING,
+                )
+                return
+            # All selected == the empty list, so future modules join too.
+            _apply_phone_categories(
+                chosen_cats if len(chosen_cats) < len(cat_boxes) else []
+            )
+            _apply_phone_modules(
+                chosen_mods if len(chosen_mods) < len(mod_boxes) else []
+            )
+            try:
+                page.pop_dialog()
+            except Exception:
+                pass
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=False,
+                title=ft.Text("Checked platforms"),
+                content=ft.Column(
+                    controls=[
+                        ft.Text("Categories", size=tokens.FONT_SM, weight=ft.FontWeight.W_600),
+                        *cat_boxes,
+                        ft.Divider(height=1),
+                        ft.Text("Platforms", size=tokens.FONT_SM, weight=ft.FontWeight.W_600),
+                        *mod_boxes,
+                    ],
+                    spacing=tokens.SPACE_XS,
+                    scroll=ft.ScrollMode.AUTO,
+                    height=380,
+                    width=300,
+                ),
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                    ft.FilledButton("Save", on_click=_save),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
+    phone_card = _settings_card(
+        [
+            _setting_row(
+                ft.Icons.SPEED_ROUNDED,
+                "Phone Concurrency",
+                "Parallel platform checks — lower is stealthier, higher is faster",
+                ft.Slider(
+                    value=float(getattr(state, "phone_concurrency", 15) or 15),
+                    min=5,
+                    max=30,
+                    divisions=25,
+                    label=f"{getattr(state, 'phone_concurrency', 15)}",
+                    active_color=AppColors.PRIMARY,
+                    on_change=_slider_live("{}"),
+                    on_change_end=_slider_commit(
+                        STORAGE_PHONE_CONCURRENCY, _apply_phone_concurrency
+                    ),
+                ),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.PUBLIC_ROUNDED,
+                "Default Region",
+                "For numbers typed without a country code (auto = detect from +code)",
+                value=state.phone_region or "Auto",
+                on_tap=_open_phone_region_picker,
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.CHECKLIST_ROUNDED,
+                "Checked Platforms",
+                "Limit the catalog by category or platform",
+                value=_phone_modules_label(),
+                on_tap=_open_phone_modules_picker,
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.VERIFIED_ROUNDED,
+                "Silent Operation",
+                "Pre-authentication endpoints only — no SMS or push is sent",
+                ft.Icon(ft.Icons.VERIFIED_ROUNDED, color=AppColors.SUCCESS),
+                stacked=narrow,
+            ),
+            ft.Divider(
+                height=1,
+                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
+            ),
+            _setting_row(
+                ft.Icons.SCIENCE_ROUNDED,
+                "Phone Mode (beta)",
+                "The number is sent to the platforms checked — authorised use only",
+                ft.Text(
+                    "BETA",
+                    size=9,
+                    weight=ft.FontWeight.BOLD,
+                    color=AppColors.PRIMARY,
                 ),
                 stacked=narrow,
             ),
@@ -1720,6 +1931,8 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             pooled_banner_ad("settings-1"),
             SectionHeader("EMAIL INTELLIGENCE"),
             email_card,
+            SectionHeader("PHONE INTELLIGENCE"),
+            phone_card,
             SectionHeader("NETWORK & PROXY"),
             network_card,
             SectionHeader("ENRICHMENT"),

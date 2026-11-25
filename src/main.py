@@ -31,6 +31,7 @@ from core.constants import (
     ERR_INVALID_EMAIL,
     ERR_NETWORK,
     MODE_EMAIL,
+    MODE_PHONE,
     MODE_USERNAME,
     MSG_OFFLINE,
     MSG_ONLINE,
@@ -57,6 +58,11 @@ from core.constants import (
     STORAGE_NO_PASSWORD_RECOVERY,
     STORAGE_ONBOARDING_DONE,
     STORAGE_PERMUTE,
+    STORAGE_PHONE_CATEGORIES,
+    STORAGE_PHONE_CONCURRENCY,
+    STORAGE_PHONE_MODULES,
+    STORAGE_PHONE_NOTICE,
+    STORAGE_PHONE_REGION,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
     STORAGE_RETRIES,
@@ -76,6 +82,7 @@ from core.theme import AppTheme
 from services.ad_service import AdService
 from services.email_service import EmailResult, EmailSearchProgress, EmailService
 from services.enrich_service import EnrichService
+from services.phone_service import PhoneResult, PhoneSearchProgress, PhoneService
 from services.scan_notify import ScanNotifier
 from services.sherlock_service import SearchProgress, SherlockService, SiteResult
 from services.storage_service import (
@@ -106,6 +113,9 @@ class AppController:
         self._last_notify_progress: float = 0.0
         self.sherlock_service: SherlockService | None = None
         self.email_service: EmailService | None = None
+        self.phone_service: PhoneService | None = None
+        # One-time authorized-use / data-sharing notice for Phone (beta).
+        self._phone_notice_accepted = False
         self.enrich_service: EnrichService | None = None
         self.update_service: UpdateService | None = None
         self.connectivity: ft.Connectivity | None = None
@@ -194,6 +204,9 @@ class AppController:
         if hasattr(self.email_service, "cancel"):
             self.email_service.cancel()
             killed.append("email-engine")
+        if hasattr(self.phone_service, "cancel"):
+            self.phone_service.cancel()
+            killed.append("phone-engine")
         if (
             self._search_task
             and self._search_task is not current
@@ -293,8 +306,19 @@ class AppController:
     def _live_email_progress(self) -> bool:
         """Email counterpart of :meth:`_live_username_progress`."""
         prog = state.search_progress
-        if prog is None or not hasattr(prog, "checked_modules"):
-            return False  # username progress or nothing at all
+        if (
+            prog is None
+            or not hasattr(prog, "checked_modules")
+            or hasattr(prog, "phone")
+        ):
+            return False  # username/phone progress or nothing at all
+        return bool(getattr(prog, "is_running", False))
+
+    def _live_phone_progress(self) -> bool:
+        """Phone counterpart of :meth:`_live_username_progress`."""
+        prog = state.search_progress
+        if prog is None or not hasattr(prog, "phone"):
+            return False
         return bool(getattr(prog, "is_running", False))
 
     def _register_search_task(self) -> None:
@@ -424,7 +448,7 @@ class AppController:
         # Scan progress in the shade: mount the notification service and
         # channels up front so the first scan does not pay for it.
         self.scan_notify.set_handlers(
-            on_cancel=self.cancel_search,
+            on_cancel=self._cancel_active_scan,
             on_view=self._show_results_from_notification,
             on_permission_denied=self._notify_permission_denied,
         )
@@ -448,6 +472,7 @@ class AppController:
         AD_SERVICE_REF["service"] = self.ad_service
         self.sherlock_service = SherlockService()
         self.email_service = EmailService()
+        self.phone_service = PhoneService()
         self.enrich_service = EnrichService()
         self.update_service = UpdateService()
 
@@ -483,6 +508,8 @@ class AppController:
             cancel_search=self.cancel_search,
             start_email_search=self.start_email_search,
             cancel_email_search=self.cancel_email_search,
+            start_phone_search=self.start_phone_search,
+            cancel_phone_search=self.cancel_phone_search,
             save_selected_sites=self.save_selected_sites,
             check_for_updates=self.check_for_updates,
             open_update_dialog=self.open_update_dialog,
@@ -626,7 +653,7 @@ class AppController:
 
             # Email mode settings
             search_mode_raw = await self.storage.get(STORAGE_SEARCH_MODE)
-            if search_mode_raw in (MODE_USERNAME, MODE_EMAIL):
+            if search_mode_raw in (MODE_USERNAME, MODE_EMAIL, MODE_PHONE):
                 state.search_mode = search_mode_raw
 
             email_timeout_raw = await self.storage.get(STORAGE_EMAIL_TIMEOUT)
@@ -663,6 +690,48 @@ class AppController:
             only_found_raw = await self.storage.get(STORAGE_EMAIL_ONLY_FOUND)
             if only_found_raw is not None:
                 state.email_only_found = only_found_raw == "true"
+
+            phone_conc_raw = await self.storage.get(STORAGE_PHONE_CONCURRENCY)
+            if phone_conc_raw:
+                try:
+                    state.phone_concurrency = max(5, min(30, int(phone_conc_raw)))
+                except TypeError, ValueError:
+                    logger.warning(
+                        "Ignoring corrupt stored phone concurrency: %r",
+                        phone_conc_raw,
+                    )
+            region_raw = await self.storage.get(STORAGE_PHONE_REGION)
+            if region_raw:
+                state.phone_region = str(region_raw).strip().upper()
+            if state.phone_region:
+                try:
+                    import phonenumbers
+
+                    # No hardcoded region list: validate against the library.
+                    if state.phone_region not in phonenumbers.SUPPORTED_REGIONS:
+                        state.phone_region = ""
+                except Exception:
+                    state.phone_region = ""
+            phone_cats_raw = await self.storage.get(STORAGE_PHONE_CATEGORIES)
+            if phone_cats_raw:
+                try:
+                    loaded = json.loads(phone_cats_raw)
+                    if isinstance(loaded, list):
+                        state.phone_categories[:] = [
+                            str(c) for c in loaded if c
+                        ]
+                except Exception:
+                    logger.warning("Phone categories unreadable; using all")
+            phone_mods_raw = await self.storage.get(STORAGE_PHONE_MODULES)
+            if phone_mods_raw:
+                try:
+                    loaded = json.loads(phone_mods_raw)
+                    if isinstance(loaded, list):
+                        state.phone_modules[:] = [str(m) for m in loaded if m]
+                except Exception:
+                    logger.warning("Phone modules unreadable; using all")
+            notice_raw = await self.storage.get(STORAGE_PHONE_NOTICE)
+            self._phone_notice_accepted = notice_raw == "true"
             proxy_raw = await self.storage.get(STORAGE_PROXY_URL)
             if proxy_raw:
                 state.proxy_url = proxy_raw
@@ -843,7 +912,7 @@ class AppController:
         )
         # Shade progress (foreground service) + keep the screen awake: the
         # scan must survive the user leaving the app.
-        await self.scan_notify.scan_started(target_clean, is_email=False)
+        await self.scan_notify.scan_started(target_clean, kind="username")
         await self._set_wakelock(True)
         # Interstitial on every search — original v1.4.0 behavior
         if self.ad_service:
@@ -1259,18 +1328,28 @@ class AppController:
             # reported as stopped.
             logger.debug("Dropping tick from a cancelled scan")
             return
-        is_email_progress = hasattr(progress, "checked_modules")
+        is_phone_progress = hasattr(progress, "phone") and not hasattr(progress, "email")
+        is_email_progress = hasattr(progress, "checked_modules") and not is_phone_progress
+        if is_phone_progress and state.search_mode != MODE_PHONE:
+            logger.debug(
+                "Dropping phone progress tick while in %s mode", state.search_mode
+            )
+            return
         if is_email_progress and state.search_mode != MODE_EMAIL:
             logger.debug(
                 "Dropping email progress tick while in %s mode", state.search_mode
             )
             return
-        if not is_email_progress and state.search_mode != MODE_USERNAME:
+        if not is_email_progress and not is_phone_progress and state.search_mode != MODE_USERNAME:
             logger.debug(
                 "Dropping username progress tick while in %s mode", state.search_mode
             )
             return
-        if is_email_progress:
+        if is_phone_progress:
+            if getattr(progress, "phone", None) != state.current_username:
+                logger.debug("Dropping stale phone progress tick — superseded scan")
+                return
+        elif is_email_progress:
             if getattr(progress, "email", None) != state.current_username:
                 logger.debug("Dropping stale email progress tick — superseded scan")
                 return
@@ -1357,6 +1436,26 @@ class AppController:
         except Exception:
             pass
 
+    def _cancel_active_scan(self) -> None:
+        """Cancel whichever engine is running (shade Cancel action).
+
+        The notification carries no mode of its own; derive it from the live
+        progress object, falling back to the selected mode. This is what makes
+        Cancel in the shade stop an email or phone scan too (it used to always
+        cancel the username engine).
+        """
+        prog = state.search_progress
+        if hasattr(prog, "phone"):
+            self.cancel_phone_search()
+        elif hasattr(prog, "checked_modules"):
+            self.cancel_email_search()
+        elif state.search_mode == MODE_PHONE:
+            self.cancel_phone_search()
+        elif state.search_mode == MODE_EMAIL:
+            self.cancel_email_search()
+        else:
+            self.cancel_search()
+
     def cancel_search(self) -> None:
         """Cancel a running search (sync — called from UI)."""
         logger.info("CANCEL requested by user (username mode)")
@@ -1430,7 +1529,7 @@ class AppController:
         state.search_progress = email_progress
         state.progress_version += 1
         logger.info("WATCHDOG: email search START %r", email_clean)
-        await self.scan_notify.scan_started(email_clean, is_email=True)
+        await self.scan_notify.scan_started(email_clean, kind="email")
         await self._set_wakelock(True)
 
         # Interstitial on every email search too — same v1.4.0 behavior
@@ -1641,6 +1740,267 @@ class AppController:
         except Exception:
             pass
 
+    async def _persist_phone_notice(self) -> None:
+        if not self.storage:
+            return
+        try:
+            await self.storage.set(STORAGE_PHONE_NOTICE, "true")
+            await self.storage.flush()
+        except Exception as exc:
+            logger.warning("Failed to persist phone notice: %s", exc)
+
+    def _ensure_phone_notice(self, phone: str) -> bool:
+        """One-time authorized-use / data-sharing notice for Phone (beta).
+
+        Returns True when the scan may start. On first use it shows a modal
+        and re-enters start_phone_search after acceptance.
+        """
+        if self._phone_notice_accepted:
+            return True
+        if self.page is None:
+            return False
+
+        def _accept(_e=None):
+            self._phone_notice_accepted = True
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+            self._spawn_bg(self._persist_phone_notice(), "phone-notice")
+            self._spawn_bg(self.start_phone_search(phone), "phone-search")
+
+        def _cancel(_e=None):
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+
+        try:
+            from services.phone_service import catalog_names
+
+            platforms = catalog_names()
+        except Exception:
+            platforms = []
+
+        self.page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Phone lookup (beta)"),
+                content=ft.Text(
+                    "The number you enter is sent to the platforms being "
+                    "checked"
+                    + (
+                        f" ({', '.join(platforms)})"
+                        if platforms
+                        else ""
+                    )
+                    + ". Use this only on numbers you are authorised to "
+                    "investigate."
+                ),
+                actions=[
+                    ft.TextButton("Cancel", on_click=_cancel),
+                    ft.FilledButton("Continue", on_click=_accept),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+        return False
+
+    async def start_phone_search(self, phone: str) -> None:
+        """Run a phonsint phone OSINT search (beta)."""
+        from services.phone_service import normalize_phone, validate_phone
+
+        if not self.phone_service or not self.phone_service.is_available:
+            self._show_snack("Phone search is not available.")
+            return
+
+        phone_clean = phone.strip()
+        if not phone_clean:
+            return
+
+        region = (state.phone_region or "").strip().upper() or None
+        identity = normalize_phone(phone_clean, region)
+
+        # The engine validates; do it here too so a typo never launches a
+        # pointless scan or flips the app into a dead progress state.
+        if not validate_phone(phone_clean, region):
+            self._show_snack(
+                "Enter a valid phone number (include the country code).",
+                duration=8000,
+            )
+            return
+
+        if not state.is_online:
+            logger.info("Phone search blocked: device offline")
+            self._show_snack(MSG_SEARCH_OFFLINE, duration=10000)
+            return
+
+        # SMART RE-ATTACH: only to a genuinely live phone scan.
+        if (
+            state.is_searching
+            and self._live_phone_progress()
+            and state.current_username.strip().lower() == identity.lower()
+            and state.search_mode == MODE_PHONE
+        ):
+            logger.info("Re-attaching to ongoing phone search for %r", identity)
+            if self._controller_methods and self._controller_methods.show_results:
+                self._controller_methods.show_results()
+            return
+
+        if not self._ensure_phone_notice(phone_clean):
+            return
+
+        self._kill_all_activity(f"phone-search[{phone_clean}]")
+        self._register_search_task()
+
+        state.current_username = identity
+        state.search_mode = MODE_PHONE
+        state.is_searching = True
+        state.search_error = None
+        state.phone_results.clear()
+        state.phone_results_number = phone_clean
+        phone_progress = PhoneSearchProgress(phone=identity, is_running=True)
+        state.search_progress = phone_progress
+        state.progress_version += 1
+        logger.info("WATCHDOG: phone search START %r", identity)
+
+        await self.scan_notify.scan_started(identity, kind="phone")
+        await self._set_wakelock(True)
+
+        if self.ad_service:
+            try:
+                await self.ad_service.show_interstitial()
+            except asyncio.CancelledError:
+                self._abandon_search(identity, phone_progress)
+                raise
+            except Exception as exc:
+                logger.warning("Interstitial show failed: %s", exc)
+
+        try:
+            result = await self.phone_service.search(
+                phone=phone_clean,
+                region=region,
+                on_progress=self._progress_from_thread,
+                timeout=state.timeout,
+                concurrency=getattr(state, "phone_concurrency", 15) or 15,
+                proxy=state.proxy_url or "",
+                categories=list(state.phone_categories or []),
+                modules=list(state.phone_modules or []),
+            )
+
+            if (
+                getattr(result, "is_cancelled", False)
+                or state.current_username != identity
+                or state.search_mode != MODE_PHONE
+            ):
+                logger.info(
+                    "WATCHDOG: phone search %r cancelled/superseded — ignoring results",
+                    identity,
+                )
+                if self._owns_scan():
+                    state.is_searching = False
+                    phone_progress.is_running = False
+                    state.progress_version += 1
+                    self._stop_render_flusher()
+                return
+
+            state.is_searching = False
+            logger.info(
+                "WATCHDOG: phone search COMPLETE %r — %d/%d checked, %d found",
+                identity,
+                result.checked_modules,
+                result.total_modules,
+                len(result.found),
+            )
+            self._last_scan_summary = ("phone", phone_clean, len(result.found))
+            await self.scan_notify.scan_finished(
+                len(result.found), result.total_modules or result.checked_modules
+            )
+            await self._set_wakelock(False)
+
+            rows = [
+                {
+                    "name": r.name,
+                    "domain": getattr(r, "domain", "") or r.name.lower(),
+                    "method": "",
+                    "exists": r.exists,
+                    "rateLimit": r.rate_limit,
+                    "unavailable": r.unavailable,
+                    "frequent_rate_limit": False,
+                    "emailrecovery": (r.extra or {}).get("email") if r.extra else None,
+                    "phoneNumber": getattr(r, "phone", None) or phone_clean,
+                    "others": {
+                        "extra": r.extra,
+                        "media": r.media,
+                        "url": getattr(r, "url_user", None)
+                        or getattr(r, "url_main", None)
+                        or r.url,
+                        "message": r.reason,
+                        "category": r.category,
+                    },
+                }
+                for r in (result.found + result.not_found + result.errors)
+            ]
+            state.phone_results[:] = rows
+            state.phone_results_number = phone_clean
+            state.phone_found_count = len(result.found)
+            state.phone_not_found_count = len(result.not_found)
+            state.phone_rate_limited_count = len(result.rate_limited)
+            state.phone_unavailable_count = len(result.unavailable)
+            state.phone_total_modules = result.total_modules
+
+            await self._save_to_history(
+                phone_clean, len(result.found), result.total_modules, mode=MODE_PHONE
+            )
+
+            await self._apply_progress(result)
+            state.progress_version += 1
+            self._stop_render_flusher()
+        except asyncio.CancelledError:
+            logger.info("WATCHDOG: phone search %r killed mid-flight", identity)
+            if (
+                self._owns_scan()
+                and state.current_username == identity
+                and state.search_mode == MODE_PHONE
+            ):
+                state.is_searching = False
+                phone_progress.is_running = False
+                state.search_error = None
+                state.progress_version += 1
+                self._stop_render_flusher()
+                await self.scan_notify.stop_service()
+                await self._set_wakelock(False)
+            raise
+        except Exception as exc:
+            if (
+                self._owns_scan()
+                and state.current_username == identity
+                and state.search_mode == MODE_PHONE
+            ):
+                logger.exception("Phone search failed")
+                state.is_searching = False
+                phone_progress.is_running = False
+                state.progress_version += 1
+                state.search_error = str(exc)
+                self._show_snack(ERR_NETWORK, duration=10000)
+                self._stop_render_flusher()
+                await self.scan_notify.stop_service()
+                await self._set_wakelock(False)
+
+    def cancel_phone_search(self) -> None:
+        """Cancel a running phone search (sync — called from UI)."""
+        logger.info("CANCEL requested by user (phone mode)")
+        self._kill_all_activity("user-cancel[phone]")
+        prog = state.search_progress
+        if prog is not None and getattr(prog, "is_running", False):
+            prog.is_running = False
+            prog.is_cancelled = True
+        state.progress_version += 1
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
     async def save_selected_sites(self, sites: list[str]) -> None:
         """Persist the network-selection scope and update observable state.
 
@@ -1704,7 +2064,11 @@ class AppController:
         live = (
             self._live_username_progress()
             if mode == MODE_USERNAME
-            else self._live_email_progress()
+            else (
+                self._live_phone_progress()
+                if mode == MODE_PHONE
+                else self._live_email_progress()
+            )
         ) and state.search_mode == mode
         if state.is_searching and live and current_norm == query_norm:
             if self._controller_methods and self._controller_methods.show_results:
@@ -1794,6 +2158,68 @@ class AppController:
             state.enrichments.clear()
             if snapshot.get("enrichments"):
                 state.enrichments.update(snapshot["enrichments"])
+        elif mode == MODE_PHONE:
+            all_phone = snapshot.get("phone_results", []) or []
+            found_dicts = [
+                r for r in all_phone if r.get("exists") and not r.get("rateLimit")
+            ]
+            not_found_dicts = [
+                r
+                for r in all_phone
+                if not r.get("exists")
+                and not r.get("rateLimit")
+                and not r.get("unavailable")
+            ]
+            rate_limited_dicts = [
+                r for r in all_phone if r.get("rateLimit") and not r.get("unavailable")
+            ]
+            unavailable_dicts = [r for r in all_phone if r.get("unavailable")]
+            state.phone_results[:] = all_phone
+            state.phone_results_number = query.strip()
+            state.current_username = query.strip()
+            state.search_mode = MODE_PHONE
+            state.phone_found_count = len(found_dicts)
+            state.phone_not_found_count = len(not_found_dicts)
+            state.phone_rate_limited_count = len(rate_limited_dicts)
+            state.phone_unavailable_count = len(unavailable_dicts)
+            state.phone_total_modules = snapshot.get("total") or len(all_phone)
+            state.enrichments.clear()
+            self._enrich_gen += 1
+            self._enriched_seen.clear()
+
+            def _to_phone_result(r):
+                others = r.get("others")
+                others = others if isinstance(others, dict) else {}
+                return PhoneResult(
+                    name=r.get("name", ""),
+                    category=others.get("category", ""),
+                    exists=r.get("exists"),
+                    rate_limit=r.get("rateLimit", False),
+                    unavailable=r.get("unavailable", False),
+                    url=others.get("url", "") or "",
+                    url_main=others.get("url", "") or "",
+                    url_user=others.get("url", "") or "",
+                    domain=r.get("domain", ""),
+                    phone=r.get("phoneNumber", "") or "",
+                    extra=others.get("extra"),
+                    media=others.get("media"),
+                    reason=others.get("message", ""),
+                )
+
+            state.search_progress = PhoneSearchProgress(
+                phone=query.strip(),
+                total_modules=state.phone_total_modules,
+                checked_modules=state.phone_total_modules,
+                found=[_to_phone_result(r) for r in found_dicts],
+                not_found=[_to_phone_result(r) for r in not_found_dicts],
+                rate_limited=[_to_phone_result(r) for r in rate_limited_dicts],
+                unavailable=[_to_phone_result(r) for r in unavailable_dicts],
+                errors=[
+                    _to_phone_result(r)
+                    for r in rate_limited_dicts + unavailable_dicts
+                ],
+                is_running=False,
+            )
         else:
             all_email = snapshot.get("email_results", []) or []
             found_dicts = [
@@ -1939,6 +2365,15 @@ class AppController:
                         for r in getattr(prog, "errors", [])
                     ],
                     "enrichments": dict(state.enrichments or {}),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                }
+            elif mode == MODE_PHONE:
+                snapshot = {
+                    "query": query,
+                    "mode": mode,
+                    "total": total,
+                    "checked": total,
+                    "phone_results": list(state.phone_results or []),
                     "timestamp": time.strftime("%Y-%m-%d %H:%M"),
                 }
             else:
@@ -2115,10 +2550,14 @@ class AppController:
             self._show_snack(MSG_ONLINE)
 
     def _scan_in_progress(self) -> bool:
-        """True while either engine is genuinely mid-flight."""
+        """True while any engine is genuinely mid-flight."""
         return bool(
             state.is_searching
-            and (self._live_username_progress() or self._live_email_progress())
+            and (
+                self._live_username_progress()
+                or self._live_email_progress()
+                or self._live_phone_progress()
+            )
         )
 
     async def _mount_notifications(self) -> None:
@@ -2245,7 +2684,11 @@ class AppController:
         if summary:
             self._last_scan_summary = None
             mode, target, found = summary
-            noun = "accounts" if mode == "username" else "results"
+            noun = {
+                "username": "accounts",
+                "email": "results",
+                "phone": "matches",
+            }.get(mode, "results")
             try:
                 from core.notify import show_snack
 

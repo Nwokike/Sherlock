@@ -45,7 +45,8 @@ def _slides() -> list[dict]:
             "body": (
                 f"Switch to Email mode to check {email_scope} at once. "
                 "Uncover masked recovery emails, phone hints, full names, "
-                "account creation dates, and more."
+                "account creation dates, and more. The new Phone mode (beta) "
+                "runs the same silent identity checks on a phone number."
             ),
         },
     {

@@ -22,7 +22,7 @@ from components.profile_detail_dialog import show_profile_detail_dialog
 from components.result_card import ResultCard
 from components.stat_card import StatCard
 from core import tokens
-from core.constants import ERR_OPEN_URL, MODE_EMAIL
+from core.constants import ERR_OPEN_URL, MODE_EMAIL, MODE_PHONE
 from core.tasks import spawn
 from core.theme import AppColors
 from hooks.use_debounce import use_debounce
@@ -326,10 +326,20 @@ def ResultsScreen() -> Control:
     # When a scan is actively running, derive the display mode from the
     # progress object itself — not from state.search_mode, which the user
     # can flip via the Home screen chips without affecting the running scan.
+    # Phone progress also carries checked_modules, so it must be detected FIRST.
     if is_running and active_progress is not None:
-        is_email_mode = hasattr(active_progress, "checked_modules")
+        is_phone_mode = hasattr(active_progress, "phone") and not hasattr(
+            active_progress, "email"
+        )
+        is_email_mode = (
+            hasattr(active_progress, "checked_modules") and not is_phone_mode
+        )
     else:
-        is_email_mode = state.search_mode == MODE_EMAIL
+        is_phone_mode = state.search_mode == MODE_PHONE
+        is_email_mode = (state.search_mode == MODE_EMAIL) or is_phone_mode
+    # Email and phone share one module-mode render branch (4 tabs, same row
+    # shape); only the data source and a few labels differ.
+    is_module_mode = is_email_mode or is_phone_mode
 
     filter_query, set_filter_query = ft.use_state("")
     debounced_filter = use_debounce(filter_query, 250)
@@ -419,15 +429,24 @@ def ResultsScreen() -> Control:
         with contextlib.suppress(Exception):
             page.pop_dialog()
         domain_url = f"https://{r.get('domain', '')}" if r.get("domain") else None
+        if is_phone_mode:
+            target = (
+                state.phone_results_number
+                or getattr(active_progress, "phone", None)
+                or None
+            )
+        else:
+            target = state.email_results_address or (
+                active_progress.email if hasattr(active_progress, "email") else None
+            )
         show_profile_detail_dialog(
             page=page,
             site_name=r.get("name", "unknown"),
             status="Claimed"
             if r.get("exists")
             else ("Error" if r.get("rateLimit") else "Available"),
-            mode="email",
-            target_query=state.email_results_address
-            or (active_progress.email if hasattr(active_progress, "email") else None),
+            mode="phone" if is_phone_mode else "email",
+            target_query=target,
             url_user=None,
             url_main=domain_url,
             email_recovery=r.get("emailrecovery"),
@@ -445,21 +464,43 @@ def ResultsScreen() -> Control:
         return [r for r in items if q in key_fn(r).lower()]
 
     # ── Build content based on mode ───────────────────────────────────
-    if is_email_mode:
+    if is_module_mode:
+        module_total = (
+            state.phone_total_modules if is_phone_mode else state.email_total_modules
+        )
+        # Phone terms: a number is "registered" on a platform, not "found".
+        not_label = "Not Registered" if is_phone_mode else "Not Found"
         if active_progress and hasattr(active_progress, "checked_modules"):
 
             def _to_dict(r):
+                # EmailResult and PhoneResult share the card contract but not
+                # the attribute names; phone keeps its metadata in extra/media.
+                extra = getattr(r, "extra", None)
+                media = getattr(r, "media", None)
+                others = getattr(r, "others", None)
+                if others is None and (extra or media):
+                    others = {
+                        "extra": extra,
+                        "media": media,
+                        "url": getattr(r, "url_user", None)
+                        or getattr(r, "url_main", None)
+                        or getattr(r, "url", ""),
+                        "message": getattr(r, "reason", ""),
+                        "category": getattr(r, "category", ""),
+                    }
                 return {
                     "name": r.name,
                     "domain": r.domain,
-                    "method": r.method,
+                    "method": getattr(r, "method", ""),
                     "exists": r.exists,
                     "rateLimit": r.rate_limit,
                     "unavailable": r.unavailable,
-                    "frequent_rate_limit": r.frequent_rate_limit,
-                    "emailrecovery": r.email_recovery,
-                    "phoneNumber": r.phone_number,
-                    "others": r.others,
+                    "frequent_rate_limit": getattr(r, "frequent_rate_limit", False),
+                    "emailrecovery": getattr(r, "email_recovery", None)
+                    or (extra or {}).get("email"),
+                    "phoneNumber": getattr(r, "phone_number", None)
+                    or getattr(r, "phone", None),
+                    "others": others,
                 }
 
             raw_found = [_to_dict(r) for r in active_progress.found]
@@ -467,25 +508,28 @@ def ResultsScreen() -> Control:
             raw_rate_limited = [_to_dict(r) for r in active_progress.rate_limited]
             raw_unavailable = [_to_dict(r) for r in active_progress.unavailable]
             engine_total = active_progress.total_modules or 0
-            total = engine_total or state.email_total_modules
+            total = engine_total or module_total
         else:
-            all_email = list(state.email_results) if state.email_results else []
+            source = state.phone_results if is_phone_mode else state.email_results
+            all_module = list(source) if source else []
             raw_found = [
-                r for r in all_email if r.get("exists") and not r.get("rateLimit")
+                r for r in all_module if r.get("exists") and not r.get("rateLimit")
             ]
             raw_not_found = [
                 r
-                for r in all_email
+                for r in all_module
                 if not r.get("exists")
                 and not r.get("rateLimit")
                 and not r.get("unavailable")
             ]
             raw_rate_limited = [
-                r for r in all_email if r.get("rateLimit") and not r.get("unavailable")
+                r
+                for r in all_module
+                if r.get("rateLimit") and not r.get("unavailable")
             ]
-            raw_unavailable = [r for r in all_email if r.get("unavailable")]
+            raw_unavailable = [r for r in all_module if r.get("unavailable")]
             engine_total = 0
-            total = state.email_total_modules or len(all_email)
+            total = module_total or len(all_module)
 
         def _make_email_card(r):
             if r.get("exists"):
@@ -555,16 +599,18 @@ def ResultsScreen() -> Control:
         # ticks between membership changes skip the O(N) card-tree rebuild.
         # Exactly one use_memo per branch keeps the hook slot stable across
         # email↔username mode switches (identical prefix, same hook type).
+        # Copy follows the engine: a phone target is a number, not an address.
+        target_word = "phone number" if is_phone_mode else "email address"
         email_specs = [
             (
                 email_found_filtered,
                 "No registrations found",
-                "No platforms matched this email address.",
+                f"No platforms matched this {target_word}.",
             ),
             (
                 email_not_found_filtered,
                 "All found",
-                "Every platform confirmed this email is registered.",
+                f"Every platform confirmed this {target_word} is registered.",
             ),
             (
                 email_rate_limited_filtered,
@@ -605,7 +651,7 @@ def ResultsScreen() -> Control:
                         tabs=[
                             ft.Tab(label=f"Found ({len(email_found_filtered)})"),
                             ft.Tab(
-                                label=f"Not Found ({len(email_not_found_filtered)})"
+                                label=f"{not_label} ({len(email_not_found_filtered)})"
                             ),
                             ft.Tab(
                                 label=f"Rate Limited ({len(email_rate_limited_filtered)})"
@@ -659,7 +705,7 @@ def ResultsScreen() -> Control:
                     on_click=lambda e: _goto_tab(0),
                 ),
                 StatCard(
-                    "Not Found",
+                    not_label,
                     str(len(raw_not_found)),
                     _neutral,
                     on_click=lambda e: _goto_tab(1),
@@ -878,8 +924,8 @@ def ResultsScreen() -> Control:
         ),
     )
     filter_hint = (
-        "Filter by platform, domain, or recovery hint..."
-        if is_email_mode
+        "Filter by platform, domain, or recovered hint..."
+        if is_module_mode
         else "Filter by network, domain, tag, or name..."
     )
     filter_box = ft.Container(
@@ -926,9 +972,19 @@ def ResultsScreen() -> Control:
     # the ~10k site count for email scans) into BOTH bars.
     progress_section = ft.Container(width=0, height=0)
     if is_running and active_progress:
-        is_email_progress = hasattr(active_progress, "checked_modules")
-        noun = "platforms" if is_email_progress else "sites"
-        if is_email_progress:
+        is_phone_progress = hasattr(active_progress, "phone") and not hasattr(
+            active_progress, "email"
+        )
+        is_email_progress = (
+            hasattr(active_progress, "checked_modules") and not is_phone_progress
+        )
+        noun = "platforms" if (is_email_progress or is_phone_progress) else "sites"
+        if is_phone_progress:
+            checked = getattr(active_progress, "checked_modules", 0) or 0
+            engine_total = getattr(active_progress, "total_modules", 0) or 0
+            total = engine_total or state.phone_total_modules or 0
+            cancelled = bool(getattr(active_progress, "is_cancelled", False))
+        elif is_email_progress:
             checked = getattr(active_progress, "checked_modules", 0) or 0
             engine_total = getattr(active_progress, "total_modules", 0) or 0
             total = engine_total or state.email_total_modules or 0
@@ -952,7 +1008,9 @@ def ResultsScreen() -> Control:
             progress_label = f"Checking {checked}/{total} {noun} ({pct}%)..."
 
         def cancel_callback(e):
-            if is_email_progress:
+            if is_phone_progress:
+                controller.cancel_phone_search()
+            elif is_email_progress:
                 controller.cancel_email_search()
             else:
                 controller.cancel_search()

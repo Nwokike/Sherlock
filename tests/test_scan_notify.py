@@ -185,7 +185,7 @@ def test_permission_timeout_does_not_latch(fake, monkeypatch):
 def test_scan_started_opens_foreground_service_with_progress_and_cancel(fake):
     notifier, _ = _notifier(fake)
     _run(notifier.mount())
-    assert _run(notifier.scan_started("alice", is_email=False)) is True
+    assert _run(notifier.scan_started("alice", kind="username")) is True
     svc = notifier._service
     assert len(svc.fgs_calls) == 1
     call_id, kw = svc.fgs_calls[0]
@@ -336,6 +336,18 @@ def test_desktop_skips_the_foreground_service(fake):
     _run(notifier.mount())
     assert _run(notifier.scan_started("alice")) is False
     assert notifier._service.fgs_calls == []
+
+
+def test_desktop_finish_keeps_the_scan_kind_noun(fake):
+    """The FGS is skipped on desktop, but the finish row must still say
+    'matches' for a phone scan (kind is recorded before the platform gate)."""
+    page = _FakePage(android=False)
+    notifier = sn.ScanNotifier(page)
+    _run(notifier.mount())
+    assert _run(notifier.scan_started("+14155552671", kind="phone")) is False
+    _run(notifier.scan_finished(2, 5))
+    done = [c for c in notifier._service.shown if c[0] == sn.NOTIF_ID_DONE]
+    assert done and "2 matches" in done[-1][1]["title"]
 
 
 def test_unknown_action_is_ignored(fake):

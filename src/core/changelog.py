@@ -3,6 +3,14 @@ date — works fully offline. One line per release; keep the entry for the
 current APP_VERSION in sync when bumping (guarded by tests)."""
 
 CHANGELOG: dict[str, str] = {
+    "2.4.0": (
+        "• New Phone mode (beta): check which major platforms a phone number is registered on\n"
+        "• Silent by design — pre-authentication endpoints only, no SMS or push is sent to the target\n"
+        "• Surfaces disclosed identity hints: masked email, display name, profile photo, regional datacenter\n"
+        "• Phone settings expose the real engine options: concurrency, any region, and platform/category filters\n"
+        "• One-time notice before the first phone lookup, since the number is sent to the checked platforms\n"
+        "• Results, history, cached reopen, exports and the shade notification all support phone scans"
+    ),
     "2.3.0": (
         "• Scans now live in the notification shade: a foreground-service progress bar with a Cancel action, so you can leave the app and still watch or stop the hunt\n"
         "• Wake lock keeps the screen on while a scan runs; the service stops at 100% or when you cancel\n"

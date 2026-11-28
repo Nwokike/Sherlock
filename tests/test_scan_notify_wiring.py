@@ -10,6 +10,7 @@ import asyncio
 import inspect
 from unittest.mock import AsyncMock, MagicMock
 
+from core.constants import MODE_USERNAME
 from core.state import state
 from main import AppController
 from services.sherlock_service import SearchProgress
@@ -162,20 +163,151 @@ def test_cancel_stops_the_shade_notification():
         ) = snap
 
 
-def test_progress_is_throttled_to_two_hz():
+def test_progress_flusher_publishes_one_latest_snapshot():
+    """One 0.5 s flush feeds BOTH surfaces from the same latest snapshot.
+
+    This is the animepahe pattern: cache many worker ticks, publish once.
+    """
     c = _controller()
     c.scan_notify = MagicMock()
     c.scan_notify.progress = MagicMock()
-    c._last_notify_progress = 0.0
-    c._notify_scan_progress(
-        SearchProgress(username="alice", total_sites=100, checked_sites=1)
-    )
-    c._notify_scan_progress(
-        SearchProgress(username="alice", total_sites=100, checked_sites=2)
-    )
+    first = SearchProgress(username="alice", total_sites=100, checked_sites=1)
+    latest = SearchProgress(username="alice", total_sites=100, checked_sites=2)
+
+    c._pending_progress = first
+    c._pending_progress = latest
+    c._render_dirty = True
+    c._flush_pending_progress()
+
     assert c.scan_notify.progress.call_count == 1, (
-        "shade progress is not throttled — it would spam native calls"
+        "one flush must queue exactly one shade update"
     )
+    c.scan_notify.progress.assert_called_once_with(2, 100)
+    assert state.search_progress is latest
+    assert c._pending_progress is None
     # The bridge must never be awaited from the UI path (freeze risk):
     # the progress bridge is a plain sync call that only queues work.
     assert not inspect.iscoroutinefunction(c._notify_scan_progress)
+
+
+class _RecordingNotifier:
+    def __init__(self):
+        self.calls: list[tuple[int, int]] = []
+
+    def progress(self, checked: int, total: int) -> None:
+        self.calls.append((checked, total))
+
+    async def stop_service(self) -> None:
+        pass
+
+
+def test_live_flusher_publishes_latest_snapshot_to_both_surfaces():
+    """Run the REAL 0.5 s loop, not just the helper.
+
+    Two ticks inside one window must produce one UI publication and one
+    shade update, both from the second tick. Removing the flush call from
+    _render_flusher must fail this test.
+    """
+    c = _controller()
+    notifier = _RecordingNotifier()
+    c.scan_notify = notifier
+    c._enrich_queue = None
+    saved = (
+        state.search_mode,
+        state.current_username,
+        state.search_targets,
+        state.search_progress,
+        state.is_searching,
+    )
+    try:
+        state.search_mode = MODE_USERNAME
+        state.current_username = "alice"
+        state.search_targets = ["alice"]
+        state.search_progress = None
+        state.is_searching = True
+
+        async def scenario():
+            c._start_render_flusher()
+            await c._apply_progress(
+                SearchProgress(username="alice", total_sites=100, checked_sites=1)
+            )
+            await c._apply_progress(
+                SearchProgress(username="alice", total_sites=100, checked_sites=2)
+            )
+            await asyncio.sleep(0.65)
+            # Assert BEFORE stop: _stop_render_flusher also flushes the tail,
+            # so checking only after it would let a broken live loop pass.
+            assert state.search_progress is not None
+            assert state.search_progress.checked_sites == 2
+            assert notifier.calls == [(2, 100)]
+            task = c._render_flush_task
+            c._stop_render_flusher()
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+
+        asyncio.run(scenario())
+        assert state.search_progress is not None
+        assert state.search_progress.checked_sites == 2
+        assert notifier.calls == [(2, 100)]
+    finally:
+        (
+            state.search_mode,
+            state.current_username,
+            state.search_targets,
+            state.search_progress,
+            state.is_searching,
+        ) = saved
+
+
+def test_kill_discards_pending_tick_before_the_next_flusher():
+    """A queued tick from a killed scan must never be published by the next
+    scan's flusher. Removing the _kill_all_activity buffer reset must fail."""
+    c = _controller()
+    notifier = _RecordingNotifier()
+    c.scan_notify = notifier
+    c._enrich_queue = None
+    saved = (
+        state.search_mode,
+        state.current_username,
+        state.search_targets,
+        state.search_progress,
+        state.is_searching,
+    )
+    try:
+        state.search_mode = MODE_USERNAME
+        state.current_username = "alice"
+        state.search_targets = ["alice"]
+        state.search_progress = None
+        state.is_searching = True
+
+        async def scenario():
+            c._start_render_flusher()
+            tick = SearchProgress(
+                username="alice", total_sites=100, checked_sites=1
+            )
+            await c._apply_progress(tick)
+            assert c._pending_progress is tick
+            old_task = c._render_flush_task
+            c._kill_all_activity("test-supersede")
+            if old_task is not None:
+                await asyncio.gather(old_task, return_exceptions=True)
+            assert c._pending_progress is None
+
+            c._start_render_flusher()
+            await asyncio.sleep(0.65)
+            task = c._render_flush_task
+            c._stop_render_flusher()
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+
+        asyncio.run(scenario())
+        assert state.search_progress is None
+        assert notifier.calls == []
+    finally:
+        (
+            state.search_mode,
+            state.current_username,
+            state.search_targets,
+            state.search_progress,
+            state.is_searching,
+        ) = saved

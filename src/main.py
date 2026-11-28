@@ -61,7 +61,6 @@ from core.constants import (
     STORAGE_PHONE_CATEGORIES,
     STORAGE_PHONE_CONCURRENCY,
     STORAGE_PHONE_MODULES,
-    STORAGE_PHONE_NOTICE,
     STORAGE_PHONE_REGION,
     STORAGE_PROXY_URL,
     STORAGE_RECURSIVE_SEARCH,
@@ -110,12 +109,9 @@ class AppController:
         # and the wake lock that keeps the screen on while a scan runs.
         self.scan_notify: ScanNotifier = ScanNotifier(page)
         self.wakelock: ft.Wakelock | None = None
-        self._last_notify_progress: float = 0.0
         self.sherlock_service: SherlockService | None = None
         self.email_service: EmailService | None = None
         self.phone_service: PhoneService | None = None
-        # One-time authorized-use / data-sharing notice for Phone (beta).
-        self._phone_notice_accepted = False
         self.enrich_service: EnrichService | None = None
         self.update_service: UpdateService | None = None
         self.connectivity: ft.Connectivity | None = None
@@ -198,6 +194,11 @@ class AppController:
             self._cancel_task_threadsafe(self._render_flush_task)
             killed.append("render-flusher")
         self._render_flush_task = None
+        # A cancelled scan's queued tick must never be applied by the next
+        # scan's flusher (especially email/phone, whose snapshots are new
+        # objects rather than the same mutable username progress instance).
+        self._pending_progress = None
+        self._render_dirty = False
         if hasattr(self.sherlock_service, "cancel"):
             self.sherlock_service.cancel()
             killed.append("sherlock-engine")
@@ -332,16 +333,31 @@ class AppController:
         if self._render_flush_task and not self._render_flush_task.done():
             return
         self._render_dirty = False
+        self._pending_progress = None
         self._pending_enrichments = {}
         self._render_flush_task = spawn(self._render_flusher())
+
+    def _flush_pending_progress(self) -> None:
+        """Publish ONE latest snapshot to BOTH surfaces (animepahe pattern).
+
+        The UI observable and the shade queue are fed from the same snapshot,
+        in the same 0.5 s window. Email/phone progress objects are fresh
+        snapshots, so assigning them outside this window caused a full
+        observable re-render per tick IN ADDITION TO the flusher's render.
+        """
+        progress, self._pending_progress = self._pending_progress, None
+        if progress is not None:
+            state.search_progress = progress
+            self._notify_scan_progress(progress)
 
     def _stop_render_flusher(self) -> None:
         """Stop the flusher on normal completion (no kill follows).
 
-        Flushes any residual pending enrichments first so the tail batch
-        is never lost, then cancels the idle 0.5s wake loop — otherwise it
-        spins for the app lifetime.
+        Flushes any residual pending progress and enrichments first so the
+        tail batch is never lost, then cancels the idle 0.5s wake loop —
+        otherwise it spins for the app lifetime.
         """
+        self._flush_pending_progress()
         pending, self._pending_enrichments = self._pending_enrichments, {}
         if pending:
             try:
@@ -368,6 +384,7 @@ class AppController:
                 if not self._render_dirty:
                     continue
                 self._render_dirty = False
+                self._flush_pending_progress()
                 if self._pending_enrichments:
                     batch = self._pending_enrichments
                     self._pending_enrichments = {}
@@ -394,6 +411,7 @@ class AppController:
                     await asyncio.sleep(0.5)
                     if self._render_dirty:
                         self._render_dirty = False
+                        self._flush_pending_progress()
                         state.progress_version += 1
             except asyncio.CancelledError:
                 pass
@@ -730,8 +748,6 @@ class AppController:
                         state.phone_modules[:] = [str(m) for m in loaded if m]
                 except Exception:
                     logger.warning("Phone modules unreadable; using all")
-            notice_raw = await self.storage.get(STORAGE_PHONE_NOTICE)
-            self._phone_notice_accepted = notice_raw == "true"
             proxy_raw = await self.storage.get(STORAGE_PROXY_URL)
             if proxy_raw:
                 state.proxy_url = proxy_raw
@@ -1381,8 +1397,11 @@ class AppController:
                         "Dropping stale username progress tick — superseded scan"
                     )
                     return
-        state.search_progress = progress
-        self._notify_scan_progress(progress)
+        # Publish only from the single 0.5 s flusher. Assigning a fresh
+        # email/phone snapshot here would re-render the observable tree once
+        # here and again when the flusher bumps progress_version.
+        self._pending_progress = progress
+        self._render_dirty = True
 
         # Stream newly discovered found URLs into the enrichment queue
         if (
@@ -1398,17 +1417,14 @@ class AppController:
                     self._enrich_queue.put_nowait(url)
 
     def _notify_scan_progress(self, progress) -> None:
-        """Mirror a tick into the shade, throttled to the ~2 Hz render budget.
+        """Queue the same snapshot the UI flusher just published.
 
         Both engines are handled here (networks vs validator platforms) so the
-        shade and the Results bar always agree. This NEVER awaits the
-        notification bridge — ScanNotifier coalesces the latest values onto
-        its own task, so a slow platform channel cannot stall the UI loop.
+        shade and the Results bar always agree. The flusher is the throttle;
+        this NEVER awaits the notification bridge — ScanNotifier coalesces the
+        latest values onto its own task, so a slow platform channel cannot
+        stall the UI loop.
         """
-        now = time.monotonic()
-        if now - self._last_notify_progress < 0.5:
-            return
-        self._last_notify_progress = now
         checked = getattr(progress, "checked_sites", None)
         if checked is None:
             checked = getattr(progress, "checked_modules", 0) or 0
@@ -1740,72 +1756,6 @@ class AppController:
         except Exception:
             pass
 
-    async def _persist_phone_notice(self) -> None:
-        if not self.storage:
-            return
-        try:
-            await self.storage.set(STORAGE_PHONE_NOTICE, "true")
-            await self.storage.flush()
-        except Exception as exc:
-            logger.warning("Failed to persist phone notice: %s", exc)
-
-    def _ensure_phone_notice(self, phone: str) -> bool:
-        """One-time authorized-use / data-sharing notice for Phone (beta).
-
-        Returns True when the scan may start. On first use it shows a modal
-        and re-enters start_phone_search after acceptance.
-        """
-        if self._phone_notice_accepted:
-            return True
-        if self.page is None:
-            return False
-
-        def _accept(_e=None):
-            self._phone_notice_accepted = True
-            try:
-                self.page.pop_dialog()
-            except Exception:
-                pass
-            self._spawn_bg(self._persist_phone_notice(), "phone-notice")
-            self._spawn_bg(self.start_phone_search(phone), "phone-search")
-
-        def _cancel(_e=None):
-            try:
-                self.page.pop_dialog()
-            except Exception:
-                pass
-
-        try:
-            from services.phone_service import catalog_names
-
-            platforms = catalog_names()
-        except Exception:
-            platforms = []
-
-        self.page.show_dialog(
-            ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Phone lookup (beta)"),
-                content=ft.Text(
-                    "The number you enter is sent to the platforms being "
-                    "checked"
-                    + (
-                        f" ({', '.join(platforms)})"
-                        if platforms
-                        else ""
-                    )
-                    + ". Use this only on numbers you are authorised to "
-                    "investigate."
-                ),
-                actions=[
-                    ft.TextButton("Cancel", on_click=_cancel),
-                    ft.FilledButton("Continue", on_click=_accept),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-        )
-        return False
-
     async def start_phone_search(self, phone: str) -> None:
         """Run a phonsint phone OSINT search (beta)."""
         from services.phone_service import normalize_phone, validate_phone
@@ -1847,8 +1797,6 @@ class AppController:
                 self._controller_methods.show_results()
             return
 
-        if not self._ensure_phone_notice(phone_clean):
-            return
 
         self._kill_all_activity(f"phone-search[{phone_clean}]")
         self._register_search_task()

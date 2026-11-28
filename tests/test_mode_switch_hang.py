@@ -290,6 +290,7 @@ def test_apply_progress_drops_superseded_scan_ticks(controller, clean_state):
 
         # Current target tick applies
         await ctl._apply_progress(SearchProgress(username="alice"))
+        ctl._flush_pending_progress()
         assert state.search_progress is not fresh
 
     asyncio.run(scenario())

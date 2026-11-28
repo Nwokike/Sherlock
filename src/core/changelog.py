@@ -8,7 +8,8 @@ CHANGELOG: dict[str, str] = {
         "• Silent by design — pre-authentication endpoints only, no SMS or push is sent to the target\n"
         "• Surfaces disclosed identity hints: masked email, display name, profile photo, regional datacenter\n"
         "• Phone settings expose the real engine options: concurrency, any region, and platform/category filters\n"
-        "• One-time notice before the first phone lookup, since the number is sent to the checked platforms\n"
+        "• Android packaging fix: phone validators are extracted from the Python ZIP so the catalog loads on-device\n"
+        "• Progress: one flusher updates Results and the shade notification from the same live snapshot\n"
         "• Results, history, cached reopen, exports and the shade notification all support phone scans"
     ),
     "2.3.0": (

@@ -13,6 +13,7 @@ from flet import Control
 
 from components.app_header import AppHeader
 from components.banner_ad import pooled_banner_ad
+from components.pill_dropdown import pill_dropdown
 from components.targets_card import TargetsCard
 from core import tokens
 from core.constants import (
@@ -537,54 +538,20 @@ def HomeScreen(banner: Control | None = None) -> Control:
         state.progress_version += 1
         _persist(STORAGE_EMAIL_TIMEOUT, str(next_val))
 
-    def _cycle_phone_concurrency(e=None):
-        values = [5, 10, 15, 20, 30]
-        curr = getattr(state, "phone_concurrency", 15)
-        next_val = (
-            values[(values.index(curr) + 1) % len(values)] if curr in values else 15
-        )
-        state.phone_concurrency = next_val
+    def _set_phone_region(code: str):
+        state.phone_region = (code or "").strip().upper()
         state.progress_version += 1
-        _persist(STORAGE_PHONE_CONCURRENCY, str(next_val))
+        _persist(STORAGE_PHONE_REGION, state.phone_region)
 
-    def _open_phone_region_picker(e=None):
-        page = _get_page()
-        if page is None:
-            return
-        from services.phone_service import supported_regions
+    def _set_phone_concurrency(value: str):
+        state.phone_concurrency = int(value)
+        state.progress_version += 1
+        _persist(STORAGE_PHONE_CONCURRENCY, str(state.phone_concurrency))
 
-        regions = supported_regions()
-        dropdown = ft.Dropdown(
-            value=state.phone_region or "",
-            enable_filter=True,
-            enable_search=True,
-            menu_height=320,
-            options=[ft.dropdown.Option("", "Auto (detect from +code)")]
-            + [ft.dropdown.Option(code, code) for code in regions],
-            width=260,
-        )
-
-        def _save(_e=None):
-            state.phone_region = (dropdown.value or "").strip().upper()
-            state.progress_version += 1
-            _persist(STORAGE_PHONE_REGION, state.phone_region)
-            try:
-                page.pop_dialog()
-            except Exception:
-                pass
-
-        page.show_dialog(
-            ft.AlertDialog(
-                modal=False,
-                title=ft.Text("Default region"),
-                content=dropdown,
-                actions=[
-                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                    ft.FilledButton("Save", on_click=_save),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-        )
+    def _set_timeout(value: str):
+        state.timeout = int(value)
+        state.progress_version += 1
+        _persist(STORAGE_TIMEOUT, str(state.timeout))
 
     def _toggle_password_recovery(e):
         new_val = not state.no_password_recovery
@@ -827,33 +794,30 @@ def HomeScreen(banner: Control | None = None) -> Control:
             ),
         ]
     elif is_phone_mode:
+        from services.phone_service import supported_regions
+
         chips = [
-            _category_chip(
-                icon=ft.Icons.PUBLIC_ROUNDED,
-                label=f"Region: {state.phone_region or 'Auto'}",
-                color=AppColors.PRIMARY,
-                is_active=bool(state.phone_region),
-                on_click=_open_phone_region_picker,
+            pill_dropdown(
+                "Region",
+                ft.Icons.PUBLIC_ROUNDED,
+                ["", *supported_regions()],
+                state.phone_region or "",
+                _set_phone_region,
+                labels={"": "Auto"},
             ),
-            _category_chip(
-                icon=ft.Icons.SPEED_ROUNDED,
-                label=f"Concurrency: {getattr(state, 'phone_concurrency', 15)}",
-                color=AppColors.PRIMARY,
-                is_active=True,
-                on_click=_cycle_phone_concurrency,
+            pill_dropdown(
+                "Concurrency",
+                ft.Icons.SPEED_ROUNDED,
+                [str(value) for value in range(5, 31)],
+                str(getattr(state, "phone_concurrency", 15)),
+                _set_phone_concurrency,
             ),
-            _category_chip(
-                icon=ft.Icons.TIMER_OUTLINED,
-                label=f"{state.timeout}s Timeout",
-                color=AppColors.PRIMARY,
-                is_active=True,
-                on_click=_cycle_timeout,
-            ),
-            _category_chip(
-                icon=ft.Icons.VERIFIED_ROUNDED,
-                label="No SMS sent",
-                color=AppColors.SUCCESS,
-                is_active=True,
+            pill_dropdown(
+                "Timeout",
+                ft.Icons.TIMER_OUTLINED,
+                [str(value) for value in range(5, 61)],
+                str(state.timeout),
+                _set_timeout,
             ),
         ]
     else:

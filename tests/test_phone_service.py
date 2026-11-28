@@ -122,6 +122,17 @@ def test_loud_modules_are_skipped(monkeypatch):
     assert progress.checked_modules == 2
 
 
+def test_stale_filters_never_complete_zero_of_zero(monkeypatch):
+    entries = [("Social", _stub_module("alpha", True))]
+    monkeypatch.setattr(ps, "load_catalog", lambda: list(entries))
+    with pytest.raises(RuntimeError, match="No phone platforms"):
+        asyncio.run(
+            ps.PhoneService().search(
+                "+14155552671", modules=["renamed-away"], timeout=5
+            )
+        )
+
+
 def test_total_modules_property():
     service = ps.PhoneService()
     assert service.total_modules == len(ps.load_catalog())

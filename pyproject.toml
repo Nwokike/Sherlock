@@ -47,6 +47,12 @@ target_arch = ["arm64-v8a", "x86_64"]
 # Our own Android resources (notification small icon drawables), copied into
 # the generated android/app/src/main/res by `flet build`.
 res_dir = "android_res"
+# serious_python stores pure-Python packages in ZIPs on Android (zipimport).
+# phonsint discovers its validators with Path(__file__).parent.parent /
+# "modules", which needs a real directory; without extraction
+# load_categories() returns an empty catalog and a phone scan completes 0/0
+# without touching the network.
+extract_packages = ["phonsint"]
 
 [tool.flet.android.meta_data]
 "com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~1261089274"

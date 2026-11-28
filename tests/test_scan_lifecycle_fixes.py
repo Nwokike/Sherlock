@@ -74,6 +74,7 @@ def test_recursive_secondary_stays_in_tick_scope():
 
         tick = SearchProgress(username="secondary", total_sites=500, is_running=True)
         loop.run_until_complete(c._apply_progress(tick))
+        c._flush_pending_progress()
         assert state.search_progress is tick, "secondary tick was dropped — 99% freeze"
     finally:
         loop.close()

@@ -76,6 +76,7 @@ def test_recursive_tail_tick_is_admitted():
             username="secondaryuser", total_sites=500, is_running=True
         )
         asyncio.run(controller._apply_progress(tail))
+        controller._flush_pending_progress()
 
         assert state.search_progress is tail, (
             "recursive-tail tick was dropped as 'superseded' — the tail "
@@ -99,6 +100,7 @@ def test_permute_variant_tick_is_admitted():
 
         variant = SearchProgress(username="john_doe", total_sites=500, is_running=True)
         asyncio.run(controller._apply_progress(variant))
+        controller._flush_pending_progress()
 
         assert state.search_progress is variant, "permute-variant tick was dropped"
     finally:
@@ -246,13 +248,16 @@ def test_results_leaves_initializing_once_a_tick_lands():
             loop.close()
             controller._main_loop = None
 
-        # Link 1: the tick reached state.
-        assert state.search_progress is first, "tick never reached state"
-        # Link 2: the flush marked the shell dirty (what the flusher reads).
+        # Link 1: the tick reached the pending buffer.
+        assert controller._pending_progress is first, "tick never reached the bridge"
+        # Link 2: the bridge marked the shell dirty (what the flusher reads).
         assert controller._render_dirty, (
             "the worker bridge never marked the render dirty — the engine "
             "would advance while the screen stays frozen"
         )
+        # Link 3: the single flusher publishes the same snapshot to the UI.
+        controller._flush_pending_progress()
+        assert state.search_progress is first
         # Link 4: the screen climbs to the real percentage after a tick.
         labels = _texts_of(_render_results())
         assert not any("Initializing" in t for t in labels), (

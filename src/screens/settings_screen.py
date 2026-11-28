@@ -18,6 +18,7 @@ from flet import Control
 
 from components.app_header import AppHeader
 from components.banner_ad import pooled_banner_ad
+from components.pill_dropdown import pill_dropdown
 from components.section_header import SectionHeader
 from core import layout, tokens
 from core.constants import (
@@ -515,6 +516,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     def _apply_phone_concurrency(v: int):
         state.phone_concurrency = max(5, min(30, v))
         state.progress_version += 1
+        spawn(_persist(STORAGE_PHONE_CONCURRENCY, str(state.phone_concurrency)))
 
     def _apply_phone_region(code: str):
         state.phone_region = (code or "").strip().upper()
@@ -1049,41 +1051,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             return f"All {total}" if total else "All"
         return f"{selected} of {total}" if total else f"{selected} selected"
 
-    def _open_phone_region_picker(_e=None):
-        if page is None:
-            return
-        from services.phone_service import supported_regions
-
-        dropdown = ft.Dropdown(
-            value=state.phone_region or "",
-            enable_filter=True,
-            enable_search=True,
-            menu_height=320,
-            options=[ft.dropdown.Option("", "Auto (detect from +code)")]
-            + [ft.dropdown.Option(code, code) for code in supported_regions()],
-            width=260,
-        )
-
-        def _save(_ev=None):
-            _apply_phone_region(dropdown.value or "")
-            try:
-                page.pop_dialog()
-            except Exception:
-                pass
-
-        page.show_dialog(
-            ft.AlertDialog(
-                modal=False,
-                title=ft.Text("Default region"),
-                content=dropdown,
-                actions=[
-                    ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
-                    ft.FilledButton("Save", on_click=_save),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-        )
-
     def _open_phone_modules_picker(_e=None):
         if page is None:
             return
@@ -1150,23 +1117,20 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             )
         )
 
+    from services.phone_service import supported_regions
+
     phone_card = _settings_card(
         [
             _setting_row(
                 ft.Icons.SPEED_ROUNDED,
                 "Phone Concurrency",
                 "Parallel platform checks — lower is stealthier, higher is faster",
-                ft.Slider(
-                    value=float(getattr(state, "phone_concurrency", 15) or 15),
-                    min=5,
-                    max=30,
-                    divisions=25,
-                    label=f"{getattr(state, 'phone_concurrency', 15)}",
-                    active_color=AppColors.PRIMARY,
-                    on_change=_slider_live("{}"),
-                    on_change_end=_slider_commit(
-                        STORAGE_PHONE_CONCURRENCY, _apply_phone_concurrency
-                    ),
+                pill_dropdown(
+                    "Concurrency",
+                    ft.Icons.SPEED_ROUNDED,
+                    [str(value) for value in range(5, 31)],
+                    str(getattr(state, "phone_concurrency", 15) or 15),
+                    lambda value: _apply_phone_concurrency(int(value)),
                 ),
                 stacked=narrow,
             ),
@@ -1177,9 +1141,15 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             _setting_row(
                 ft.Icons.PUBLIC_ROUNDED,
                 "Default Region",
-                "For numbers typed without a country code (auto = detect from +code)",
-                value=state.phone_region or "Auto",
-                on_tap=_open_phone_region_picker,
+                "For numbers typed without a country code (Auto = detect from +code)",
+                pill_dropdown(
+                    "Region",
+                    ft.Icons.PUBLIC_ROUNDED,
+                    ["", *supported_regions()],
+                    state.phone_region or "",
+                    _apply_phone_region,
+                    labels={"": "Auto"},
+                ),
                 stacked=narrow,
             ),
             ft.Divider(
@@ -1203,22 +1173,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 "Silent Operation",
                 "Pre-authentication endpoints only — no SMS or push is sent",
                 ft.Icon(ft.Icons.VERIFIED_ROUNDED, color=AppColors.SUCCESS),
-                stacked=narrow,
-            ),
-            ft.Divider(
-                height=1,
-                color=ft.Colors.with_opacity(tokens.OPACITY_SUBTLE, ft.Colors.OUTLINE),
-            ),
-            _setting_row(
-                ft.Icons.SCIENCE_ROUNDED,
-                "Phone Mode (beta)",
-                "The number is sent to the platforms checked — authorised use only",
-                ft.Text(
-                    "BETA",
-                    size=9,
-                    weight=ft.FontWeight.BOLD,
-                    color=AppColors.PRIMARY,
-                ),
                 stacked=narrow,
             ),
         ]

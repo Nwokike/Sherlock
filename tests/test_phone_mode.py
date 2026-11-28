@@ -6,6 +6,7 @@ import asyncio
 import json
 from unittest.mock import MagicMock
 
+import flet as ft
 import pytest
 
 from core.constants import MODE_PHONE, MODE_USERNAME
@@ -89,6 +90,7 @@ def test_apply_progress_admits_phone_and_drops_other_modes(fake_page):
         phone=identity, total_modules=5, checked_modules=1, is_running=True
     )
     asyncio.run(controller._apply_progress(tick))
+    controller._flush_pending_progress()
     assert state.search_progress is tick
 
     # An email tick while in phone mode must be dropped, not replace progress.
@@ -112,23 +114,8 @@ def test_apply_progress_admits_phone_and_drops_other_modes(fake_page):
     assert state.search_progress is None
 
 
-def test_notice_gate_blocks_the_first_scan(fake_page):
-    controller = _controller(fake_page)
-    controller.phone_service = MagicMock()
-    controller.phone_service.is_available = True
-    controller.phone_service.search = MagicMock()
-    controller._phone_notice_accepted = False
-    state.is_online = True
-
-    asyncio.run(controller.start_phone_search("+14155552671"))
-    assert fake_page.dialogs, "first phone scan must show the beta notice"
-    controller.phone_service.search.assert_not_called()
-    assert state.search_mode != MODE_PHONE
-
-
 def test_phone_scan_completes_and_fills_state(fake_page):
     controller = _controller(fake_page)
-    controller._phone_notice_accepted = True
     controller.storage = None
     fake_service = MagicMock()
     fake_service.is_available = True
@@ -151,6 +138,7 @@ def test_phone_scan_completes_and_fills_state(fake_page):
 
     asyncio.run(controller.start_phone_search("+14155552671"))
 
+    assert fake_page.dialogs == [], "phone scans must not open a first-use modal"
     assert state.search_mode == MODE_PHONE
     assert state.phone_results_number == "+14155552671"
     assert state.phone_found_count == 1
@@ -283,32 +271,36 @@ def test_phone_results_screen_labels():
     assert any(t == "Found" for t in texts)
 
 
-def test_home_has_phone_pill_and_chips():
+def test_home_has_phone_pill_and_dropdowns():
     from screens.home_screen import HomeScreen
 
     state.search_mode = MODE_PHONE
     state.is_searching = False
-    texts = _texts(_nodes(lambda: HomeScreen()))
+    nodes = _nodes(lambda: HomeScreen())
+    texts = _texts(nodes)
     assert any(t == "Phone" for t in texts)
     assert any("BETA" in t for t in texts)
-    assert any("Region:" in t for t in texts)
-    assert any("No SMS sent" in t for t in texts)
     assert any("Search Number" in t for t in texts)
     assert not any(t == "Search Networks" for t in texts)
+    assert not any("No SMS sent" in t for t in texts)
+    menus = [node for node in nodes if isinstance(node, ft.PopupMenuButton)]
+    assert len(menus) == 3, "Region/Concurrency/Timeout must be real popup menus"
 
 
 def test_settings_has_phone_card():
     from screens.settings_screen import SettingsScreen
 
-    texts = _texts(_nodes(lambda: SettingsScreen()))
+    nodes = _nodes(lambda: SettingsScreen())
+    texts = _texts(nodes)
     for row in (
         "Phone Concurrency",
         "Default Region",
         "Checked Platforms",
         "Silent Operation",
-        "Phone Mode (beta)",
     ):
         assert any(row in t for t in texts), f"missing settings row: {row}"
+    assert not any("Phone Mode (beta)" in t for t in texts)
+    assert any(isinstance(node, ft.PopupMenuButton) for node in nodes)
 
 
 def test_scan_finished_phone_noun():

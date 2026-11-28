@@ -247,11 +247,17 @@ class PhoneService:
 
     @property
     def is_available(self) -> bool:
+        """True only when the engine AND its validator catalog are usable.
+
+        On Android zipimport packaging, a top-level import can succeed while
+        the modules directory is invisible; never let that produce a fake
+        0/0 "successful" scan.
+        """
         try:
             import phonsint  # noqa: F401
 
-            return True
-        except ImportError:
+            return bool(load_catalog())
+        except Exception:
             return False
 
     @property
@@ -288,6 +294,11 @@ class PhoneService:
         identity = phone_info.e164 if phone_info.is_valid else (phone or "").strip()
 
         entries = list(await asyncio.to_thread(load_catalog))
+        if not entries:
+            raise RuntimeError(
+                "phonsint validator catalog is empty — on Android the package "
+                "must be listed in [tool.flet.android].extract_packages"
+            )
         wanted_cats = {c.lower() for c in (categories or []) if c}
         wanted_mods = {m.lower() for m in (modules or []) if m}
         if wanted_cats:
@@ -296,6 +307,13 @@ class PhoneService:
             from phonsint.core.helpers import get_site_name
 
             entries = [e for e in entries if get_site_name(e[1]).lower() in wanted_mods]
+        if not entries:
+            # Persisted filters can outlive a phonsint upgrade/rename. Never
+            # report a fake successful 0/0 scan when nothing matches them.
+            raise RuntimeError(
+                "No phone platforms match the saved category/module filters — "
+                "reset Checked Platforms in Settings"
+            )
 
         cancel_token = threading.Event()
         self._cancel_token = cancel_token

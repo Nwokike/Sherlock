@@ -41,7 +41,7 @@ def pill_dropdown(
                 controls=[
                     ft.Icon(icon, size=tokens.ICON_SM, color=AppColors.PRIMARY),
                     ft.Text(
-                        _text(value) if value else label,
+                        text_for.get(value, value or label),
                         size=tokens.FONT_XS,
                         weight=ft.FontWeight.W_600,
                         color=AppColors.PRIMARY,

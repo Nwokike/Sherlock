@@ -543,15 +543,15 @@ def HomeScreen(banner: Control | None = None) -> Control:
         state.progress_version += 1
         _persist(STORAGE_PHONE_REGION, state.phone_region)
 
-    def _set_phone_concurrency(value: str):
-        state.phone_concurrency = int(value)
+    def _cycle_phone_concurrency(e=None):
+        values = [5, 10, 15, 20, 30]
+        curr = getattr(state, "phone_concurrency", 15)
+        next_val = (
+            values[(values.index(curr) + 1) % len(values)] if curr in values else 15
+        )
+        state.phone_concurrency = next_val
         state.progress_version += 1
-        _persist(STORAGE_PHONE_CONCURRENCY, str(state.phone_concurrency))
-
-    def _set_timeout(value: str):
-        state.timeout = int(value)
-        state.progress_version += 1
-        _persist(STORAGE_TIMEOUT, str(state.timeout))
+        _persist(STORAGE_PHONE_CONCURRENCY, str(next_val))
 
     def _toggle_password_recovery(e):
         new_val = not state.no_password_recovery
@@ -805,19 +805,19 @@ def HomeScreen(banner: Control | None = None) -> Control:
                 _set_phone_region,
                 labels={"": "Auto"},
             ),
-            pill_dropdown(
-                "Concurrency",
-                ft.Icons.SPEED_ROUNDED,
-                [str(value) for value in range(5, 31)],
-                str(getattr(state, "phone_concurrency", 15)),
-                _set_phone_concurrency,
+            _category_chip(
+                icon=ft.Icons.SPEED_ROUNDED,
+                label=f"Concurrency: {getattr(state, 'phone_concurrency', 15)}",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_phone_concurrency,
             ),
-            pill_dropdown(
-                "Timeout",
-                ft.Icons.TIMER_OUTLINED,
-                [str(value) for value in range(5, 61)],
-                str(state.timeout),
-                _set_timeout,
+            _category_chip(
+                icon=ft.Icons.TIMER_OUTLINED,
+                label=f"{state.timeout}s Timeout",
+                color=AppColors.PRIMARY,
+                is_active=True,
+                on_click=_cycle_timeout,
             ),
         ]
     else:

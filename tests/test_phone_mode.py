@@ -284,12 +284,16 @@ def test_home_has_phone_pill_and_dropdowns():
     assert not any(t == "Search Networks" for t in texts)
     assert not any("No SMS sent" in t for t in texts)
     menus = [node for node in nodes if isinstance(node, ft.PopupMenuButton)]
-    assert len(menus) == 3, "Region/Concurrency/Timeout must be real popup menus"
+    assert len(menus) == 1, "only Region should be a popup dropdown"
+    assert any("Concurrency: 15" in t for t in texts)
+    assert any("15s Timeout" in t for t in texts)
+    assert any(t == "Auto" for t in texts), "Region pill must show the active Auto choice"
 
 
 def test_settings_has_phone_card():
     from screens.settings_screen import SettingsScreen
 
+    state.phone_concurrency = 17
     nodes = _nodes(lambda: SettingsScreen())
     texts = _texts(nodes)
     for row in (
@@ -301,6 +305,9 @@ def test_settings_has_phone_card():
         assert any(row in t for t in texts), f"missing settings row: {row}"
     assert not any("Phone Mode (beta)" in t for t in texts)
     assert any(isinstance(node, ft.PopupMenuButton) for node in nodes)
+    assert any(
+        isinstance(node, ft.Slider) and node.label == "17" for node in nodes
+    ), "phone concurrency must keep its original slider"
 
 
 def test_scan_finished_phone_noun():

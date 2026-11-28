@@ -515,8 +515,6 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
     def _apply_phone_concurrency(v: int):
         state.phone_concurrency = max(5, min(30, v))
-        state.progress_version += 1
-        spawn(_persist(STORAGE_PHONE_CONCURRENCY, str(state.phone_concurrency)))
 
     def _apply_phone_region(code: str):
         state.phone_region = (code or "").strip().upper()
@@ -1125,12 +1123,17 @@ def SettingsScreen(banner: Control | None = None) -> Control:
                 ft.Icons.SPEED_ROUNDED,
                 "Phone Concurrency",
                 "Parallel platform checks — lower is stealthier, higher is faster",
-                pill_dropdown(
-                    "Concurrency",
-                    ft.Icons.SPEED_ROUNDED,
-                    [str(value) for value in range(5, 31)],
-                    str(getattr(state, "phone_concurrency", 15) or 15),
-                    lambda value: _apply_phone_concurrency(int(value)),
+                ft.Slider(
+                    value=float(getattr(state, "phone_concurrency", 15) or 15),
+                    min=5,
+                    max=30,
+                    divisions=25,
+                    label=f"{getattr(state, 'phone_concurrency', 15)}",
+                    active_color=AppColors.PRIMARY,
+                    on_change=_slider_live("{}"),
+                    on_change_end=_slider_commit(
+                        STORAGE_PHONE_CONCURRENCY, _apply_phone_concurrency
+                    ),
                 ),
                 stacked=narrow,
             ),

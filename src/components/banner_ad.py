@@ -119,16 +119,8 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
             unit_id=AD_BANNER_UNIT_ID,
             width=320,
             height=50,
-            on_load=lambda e: logger.info("BannerAd loaded"),
             on_error=lambda e: logger.warning(
                 "BannerAd load error: %s", getattr(e, "data", e)
-            ),
-            # Revenue telemetry (measurement only — never gates serving):
-            # impressions and paid events land in the in-app terminal so the
-            # owner can see what each slot actually earns.
-            on_impression=lambda e: logger.info("BannerAd impression"),
-            on_paid=lambda e: logger.info(
-                "BannerAd paid: %s", getattr(e, "data", None)
             ),
         )
     except Exception as e:

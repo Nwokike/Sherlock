@@ -225,6 +225,8 @@ def test_live_flusher_publishes_latest_snapshot_to_both_surfaces():
         state.search_targets = ["alice"]
         state.search_progress = None
         state.is_searching = True
+        changes: list[str | None] = []
+        dispose = state.subscribe(lambda _sender, field: changes.append(field))
 
         async def scenario():
             c._start_render_flusher()
@@ -249,7 +251,12 @@ def test_live_flusher_publishes_latest_snapshot_to_both_surfaces():
         assert state.search_progress is not None
         assert state.search_progress.checked_sites == 2
         assert notifier.calls == [(2, 100)]
+        assert changes.count("search_progress") == 1
+        assert changes.count("progress_version") == 0, (
+            "fresh snapshots must not trigger a second full-tree render"
+        )
     finally:
+        dispose()
         (
             state.search_mode,
             state.current_username,

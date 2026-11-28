@@ -49,7 +49,23 @@ def test_zipimport_reproduces_the_empty_catalog(tmp_path):
 
 def test_service_reports_unavailable_when_catalog_is_empty(monkeypatch):
     monkeypatch.setattr(ps, "load_catalog", lambda: [])
-    assert ps.PhoneService().is_available is False
+    service = ps.PhoneService()
+    available, reason = service.check_available()
+    assert available is False
+    assert "catalog is empty" in reason
+    assert "extract_packages" in reason
+    assert service.is_available is False
+
+
+def test_service_reports_catalog_exception(monkeypatch):
+    def broken_catalog():
+        raise OSError("modules directory missing")
+
+    monkeypatch.setattr(ps, "load_catalog", broken_catalog)
+    available, reason = ps.PhoneService().check_available()
+    assert available is False
+    assert "phonsint catalog failed" in reason
+    assert "modules directory missing" in reason
 
 
 def test_search_refuses_an_empty_catalog(monkeypatch):

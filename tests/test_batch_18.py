@@ -143,6 +143,29 @@ def test_email_regex_long_tail_intact():
     assert _is_rate_limited(None) is False
 
 
+def test_spawn_infers_coroutine_name_for_device_diagnostics(caplog):
+    """Unnamed callbacks must identify the failing function in device logs."""
+
+    async def scenario():
+        from core.tasks import spawn
+
+        async def frozen_control_callback():
+            raise RuntimeError("Frozen controls cannot be updated")
+
+        with caplog.at_level(logging.WARNING, logger="core.tasks"):
+            task = spawn(frozen_control_callback())
+            assert task.get_name().endswith("frozen_control_callback")
+            try:
+                await task
+            except RuntimeError as exc:
+                assert str(exc) == "Frozen controls cannot be updated"
+            await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert "frozen_control_callback" in caplog.text
+    assert "Frozen controls cannot be updated" in caplog.text
+
+
 def test_spawn_debounce_timer_cancel_safe():
     """spawn() tasks expose .done()/.cancel() like raw tasks (hook use)."""
 

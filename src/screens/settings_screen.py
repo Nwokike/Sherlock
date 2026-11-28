@@ -74,6 +74,15 @@ logger = logging.getLogger("SettingsScreen")
 _PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 
 
+def _set_button_disabled(button, disabled: bool) -> None:
+    """Never mutate a control Flet has already frozen/unmounted."""
+    if button is None or hasattr(button, "_frozen"):
+        return
+    with contextlib.suppress(Exception):
+        button.disabled = disabled
+        button.update()
+
+
 def _parse_proxy(value: str) -> str | None:
     """Validate a proxy URL. Returns error reason, or None if valid.
 
@@ -339,13 +348,26 @@ def SettingsScreen(banner: Control | None = None) -> Control:
     # one-line rows squeeze subtitles and overflow SegmentedButtons.
     # Re-evaluate on resize too: the window can shrink after this component
     # mounted, and without a rebuild the rows keep the wide layout and warp.
+    _mounted = ft.use_ref(True)
+    _resize_handler = ft.use_ref(None)
     _narrow_version, set_narrow_version = ft.use_state(0)
-    if page is not None:
 
-        def _on_resize(e):
+    def _on_resize(e):
+        if _mounted.current:
             set_narrow_version(_narrow_version + 1)
 
+    if page is not None:
+        _resize_handler.current = _on_resize
         page.on_resize = _on_resize
+
+    def _cleanup_page_handlers():
+        _mounted.current = False
+        if page is not None and getattr(page, "on_resize", None) is _resize_handler.current:
+            page.on_resize = None
+
+    # A screen must not leave a stale resize callback behind after unmount.
+    ft.use_effect(lambda: _cleanup_page_handlers, [])
+
     narrow = layout.is_narrow(page)
     # Platform-only (not width): these rows are desktop because their engine
     # path is unavailable on Android, so a narrow desktop window keeps them.
@@ -360,9 +382,12 @@ def SettingsScreen(banner: Control | None = None) -> Control:
 
     async def _refresh_notifications():
         try:
-            set_notif_ok(await controller.notifications_enabled())
+            enabled = await controller.notifications_enabled()
+            if _mounted.current:
+                set_notif_ok(enabled)
         except Exception:
-            set_notif_ok(None)
+            if _mounted.current:
+                set_notif_ok(None)
 
     ft.use_effect(_refresh_notifications, [])
 
@@ -605,10 +630,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             return
         _db_update_running = True
         btn = e.control if e is not None and hasattr(e, "control") else None
-        if btn is not None:
-            btn.disabled = True
-            with contextlib.suppress(Exception):
-                btn.update()
+        _set_button_disabled(btn, True)
         show_snack(page, "Site database: checking for updates…")
         try:
             updated = await asyncio.to_thread(force_update)
@@ -630,10 +652,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             show_snack(page, f"Site-DB update failed: {exc}", bgcolor=AppColors.ERROR)
         finally:
             _db_update_running = False
-            if btn is not None:
-                btn.disabled = False
-                with contextlib.suppress(Exception):
-                    btn.update()
+            _set_button_disabled(btn, False)
 
     async def _run_db_health_check(e=None):
         nonlocal _health_running
@@ -646,10 +665,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             return
         _health_running = True
         btn = e.control if e is not None and hasattr(e, "control") else None
-        if btn is not None:
-            btn.disabled = True
-            with contextlib.suppress(Exception):
-                btn.update()
+        _set_button_disabled(btn, True)
         show_snack(page, "DB health: probing 25 sites… (takes up to a minute)")
         try:
             await controller.run_db_health()
@@ -666,10 +682,7 @@ def SettingsScreen(banner: Control | None = None) -> Control:
             )
         finally:
             _health_running = False
-            if btn is not None:
-                btn.disabled = False
-                with contextlib.suppress(Exception):
-                    btn.update()
+            _set_button_disabled(btn, False)
 
     def _toggle_no_password_recovery(val: bool):
         state.no_password_recovery = val
@@ -1715,16 +1728,22 @@ def SettingsScreen(banner: Control | None = None) -> Control:
         )
 
         def _refresh_telemetry(e):
-            telemetry_text.value = get_telemetry_snapshot()
-            cur_logs = in_memory_log_handler.get_logs()[-_TERMINAL_DISPLAY_LINES:]
-            if cur_logs:
-                log_text.value = "\n".join(cur_logs)
-            page.update()
+            if hasattr(telemetry_text, "_frozen") or hasattr(log_text, "_frozen"):
+                return
+            with contextlib.suppress(Exception):
+                telemetry_text.value = get_telemetry_snapshot()
+                cur_logs = in_memory_log_handler.get_logs()[-_TERMINAL_DISPLAY_LINES:]
+                if cur_logs:
+                    log_text.value = "\n".join(cur_logs)
+                page.update()
 
         def _clear_logs(e):
+            if hasattr(log_text, "_frozen"):
+                return
             in_memory_log_handler.clear_logs()
-            log_text.value = "Logs cleared.\nNew activity will appear here."
-            page.update()
+            with contextlib.suppress(Exception):
+                log_text.value = "Logs cleared.\nNew activity will appear here."
+                page.update()
 
         def _dismiss(e):
             page.pop_dialog()

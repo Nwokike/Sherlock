@@ -3,20 +3,15 @@ date — works fully offline. One line per release; keep the entry for the
 current APP_VERSION in sync when bumping (guarded by tests)."""
 
 CHANGELOG: dict[str, str] = {
-    "2.4.0": (
-        "• New Phone mode (beta): check which major platforms a phone number is registered on\n"
-        "• Silent by design — pre-authentication endpoints only, no SMS or push is sent to the target\n"
-        "• Surfaces disclosed identity hints: masked email, display name, profile photo, regional datacenter\n"
-        "• Phone settings expose the real engine options: concurrency, any region, and platform/category filters\n"
-        "• Android packaging fix: phone validators are extracted from the Python ZIP so the catalog loads on-device\n"
-        "• Progress: one flusher updates Results and the shade notification from the same live snapshot\n"
-        "• Results, history, cached reopen, exports and the shade notification all support phone scans"
-    ),
     "2.3.0": (
         "• Scans now live in the notification shade: a foreground-service progress bar with a Cancel action, so you can leave the app and still watch or stop the hunt\n"
         "• Wake lock keeps the screen on while a scan runs; the service stops at 100% or when you cancel\n"
         "• Username and email scans show the SAME live counts in the app and the shade (email counts validator platforms, not networks)\n"
+        "• Progress uses one shared flusher, so Results and the shade update from the same live snapshot\n"
         '• A tiny tappable "Scanning…" pill sits below the header — tap it to jump back to Results\n'
+        "• New Phone mode (beta): silent account checks with masked email, display name, profile photo and regional datacenter hints\n"
+        "• Phone mode works on Android: validators are extracted from the Python ZIP so the catalog loads on-device\n"
+        "• Phone results, history, cached reopen, exports and the shade notification are fully wired\n"
         "• 11,000+ networks via Maigret 0.6.7, with a live count on every screen\n"
         "• Email checks retry through rate limits and render recovery details; TLS fingerprint bumped to chrome150\n"
         "• Settings: live notification status and privacy & ads verdict, with rows that stack under their label on small screens\n"

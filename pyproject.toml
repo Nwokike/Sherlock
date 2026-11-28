@@ -1,6 +1,6 @@
 [project]
 name = "sherlock"
-version = "2.4.0"
+version = "2.3.0"
 description = "Sherlock: Hunt down social media accounts by username across 11,000+ networks."
 readme = "README.md"
 requires-python = ">=3.14"

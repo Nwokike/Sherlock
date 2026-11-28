@@ -118,7 +118,7 @@ def test_phone_scan_completes_and_fills_state(fake_page):
     controller = _controller(fake_page)
     controller.storage = None
     fake_service = MagicMock()
-    fake_service.is_available = True
+    fake_service.check_available.return_value = (True, "")
 
     result = PhoneSearchProgress(
         phone="+14155552671",
@@ -145,6 +145,22 @@ def test_phone_scan_completes_and_fills_state(fake_page):
     assert state.phone_not_found_count == 1
     assert state.phone_total_modules == 2
     assert {r["name"] for r in state.phone_results} == {"Facebook", "Amazon"}
+
+
+def test_phone_unavailable_reports_concrete_reason(fake_page, caplog):
+    controller = _controller(fake_page)
+    fake_service = MagicMock()
+    reason = "phonsint validator catalog is empty — Android package extraction is missing"
+    fake_service.check_available.return_value = (False, reason)
+    controller.phone_service = fake_service
+    snacks: list[str] = []
+    controller._show_snack = lambda message, duration=0: snacks.append(message)
+
+    asyncio.run(controller.start_phone_search("+14155552671"))
+
+    assert snacks == [f"Phone lookup unavailable: {reason}"]
+    assert f"Phone engine unavailable: {reason}" in caplog.text
+    assert fake_service.search.call_count == 0
 
 
 def test_cached_phone_result_reopens(fake_page):

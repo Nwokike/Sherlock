@@ -337,18 +337,22 @@ class AppController:
         self._pending_enrichments = {}
         self._render_flush_task = spawn(self._render_flusher())
 
-    def _flush_pending_progress(self) -> None:
+    def _flush_pending_progress(self) -> bool:
         """Publish ONE latest snapshot to BOTH surfaces (animepahe pattern).
 
-        The UI observable and the shade queue are fed from the same snapshot,
-        in the same 0.5 s window. Email/phone progress objects are fresh
-        snapshots, so assigning them outside this window caused a full
-        observable re-render per tick IN ADDITION TO the flusher's render.
+        Returns True when an explicit progress_version bump is still needed
+        (the username engine mutates the SAME progress object, so assignment
+        is silent). Fresh email/phone snapshots already notify observers on
+        assignment; bumping again would re-render the whole tree twice per
+        tick and starve the Android UI.
         """
         progress, self._pending_progress = self._pending_progress, None
-        if progress is not None:
-            state.search_progress = progress
-            self._notify_scan_progress(progress)
+        if progress is None:
+            return False
+        previous = state.search_progress
+        state.search_progress = progress
+        self._notify_scan_progress(progress)
+        return previous is progress
 
     def _stop_render_flusher(self) -> None:
         """Stop the flusher on normal completion (no kill follows).
@@ -384,20 +388,22 @@ class AppController:
                 if not self._render_dirty:
                     continue
                 self._render_dirty = False
-                self._flush_pending_progress()
+                needs_bump = self._flush_pending_progress()
                 if self._pending_enrichments:
                     batch = self._pending_enrichments
                     self._pending_enrichments = {}
                     state.enrichments.update(batch)
+                    needs_bump = True
                     # Mirror set_enrichment's LRU cap after the batch write.
                     from core.state import _ENRICHMENT_CAP
 
                     while len(state.enrichments) > _ENRICHMENT_CAP:
                         oldest = next(iter(state.enrichments))
                         del state.enrichments[oldest]
-                # Dirty alone means render — the enrichment tail after a
-                # scan completes also lands here (is_searching already False).
-                state.progress_version += 1
+                # Fresh snapshots already notified on assignment; only a
+                # same-identity mutation or enrichment batch needs a bump.
+                if needs_bump:
+                    state.progress_version += 1
         except asyncio.CancelledError:
             pass
         except Exception as exc:
@@ -411,8 +417,8 @@ class AppController:
                     await asyncio.sleep(0.5)
                     if self._render_dirty:
                         self._render_dirty = False
-                        self._flush_pending_progress()
-                        state.progress_version += 1
+                        if self._flush_pending_progress():
+                            state.progress_version += 1
             except asyncio.CancelledError:
                 pass
 
@@ -1760,8 +1766,13 @@ class AppController:
         """Run a phonsint phone OSINT search (beta)."""
         from services.phone_service import normalize_phone, validate_phone
 
-        if not self.phone_service or not self.phone_service.is_available:
+        if not self.phone_service:
             self._show_snack("Phone search is not available.")
+            return
+        available, reason = self.phone_service.check_available()
+        if not available:
+            logger.error("Phone engine unavailable: %s", reason)
+            self._show_snack(f"Phone lookup unavailable: {reason}", duration=10000)
             return
 
         phone_clean = phone.strip()

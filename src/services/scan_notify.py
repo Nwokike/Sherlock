@@ -375,14 +375,19 @@ class ScanNotifier:
             return
         self._stopping = True
         try:
-            if (self._fgs_running or self._is_android()) and not self._stop_done:
+            was_running = self._fgs_running
+            if (was_running or self._is_android()) and not self._stop_done:
                 try:
                     await self._service.stop_foreground_service()
-                    logger.info("ScanNotifier: foreground service stopped")
+                    # Startup stale-service cleanup is routine; only a service
+                    # this process actually started is worth an INFO line.
+                    if was_running:
+                        logger.info("ScanNotifier: foreground service stopped")
                 except Exception as exc:
-                    # Loud on purpose: this is the "does the service actually
-                    # close at 100%?" signal to check on a device.
-                    logger.warning("ScanNotifier: stop service failed: %s", exc)
+                    # Session-expiry/VM-restart teardown is expected: no log.
+                    # Real stop failures stay visible for device diagnosis.
+                    if "session closed" not in str(exc).lower():
+                        logger.warning("ScanNotifier: stop service failed: %s", exc)
                 self._stop_done = True
             self._fgs_running = False
             try:

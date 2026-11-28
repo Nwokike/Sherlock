@@ -245,20 +245,29 @@ class PhoneService:
         self._worker_loop: asyncio.AbstractEventLoop | None = None
         self._progress: PhoneSearchProgress | None = None
 
-    @property
-    def is_available(self) -> bool:
-        """True only when the engine AND its validator catalog are usable.
+    def check_available(self) -> tuple[bool, str]:
+        """Return availability AND the concrete reason when unavailable.
 
-        On Android zipimport packaging, a top-level import can succeed while
-        the modules directory is invisible; never let that produce a fake
-        0/0 "successful" scan.
+        Never swallow this to a bare False: on Android a missing extracted
+        catalog is a packaging error, and the UI/log must say so.
         """
         try:
             import phonsint  # noqa: F401
+        except Exception as exc:
+            return False, f"phonsint import failed: {exc}"
+        try:
+            if load_catalog():
+                return True, ""
+        except Exception as exc:
+            return False, f"phonsint catalog failed: {exc}"
+        return False, (
+            "phonsint validator catalog is empty — Android package extraction "
+            "is missing ([tool.flet.android].extract_packages)"
+        )
 
-            return bool(load_catalog())
-        except Exception:
-            return False
+    @property
+    def is_available(self) -> bool:
+        return self.check_available()[0]
 
     @property
     def total_modules(self) -> int:
